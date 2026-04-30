@@ -54,6 +54,15 @@ def test_status_phase_enum():
     assert e.phase == "executing"
 
 
+def test_task_frame_event_roundtrip():
+    from somna_events import TaskFrameEvent
+
+    e = TaskFrameEvent(session_id=_sid(), run_id="r1", summary="定调摘要", detail="a\nb")
+    data = e.model_dump(mode="json")
+    assert data["type"] == "task.frame"
+    assert data["summary"] == "定调摘要"
+
+
 def test_unknown_type_rejected():
     adapter: TypeAdapter[AgentEvent] = TypeAdapter(AgentEvent)
     with pytest.raises(ValidationError):

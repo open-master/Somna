@@ -183,6 +183,8 @@ function summarize(e: AgentEvent): string {
       return `${e.name} (${e.mime})`;
     case "plan.update":
       return `${e.todos.length} todos`;
+    case "task.frame":
+      return e.summary.slice(0, 120);
     case "status":
       return `${e.phase}${e.message ? ": " + e.message : ""}`;
     case "token.usage":

@@ -12,6 +12,7 @@ import { useChatStore } from "@/lib/store/chat";
 import { useLiveStore } from "@/lib/store/live";
 import { usePlanStore } from "@/lib/store/plan";
 import { useSessionStore } from "@/lib/store/session";
+import { useTaskFrameStore } from "@/lib/store/taskFrame";
 
 function statusFromPhase(phase: string): string {
   switch (phase) {
@@ -44,6 +45,7 @@ export default function ChatSessionPage() {
   const chatClear = useChatStore((s) => s.clear);
   const planClear = usePlanStore((s) => s.clear);
   const liveClear = useLiveStore((s) => s.clear);
+  const taskFrameClear = useTaskFrameStore((s) => s.clear);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -51,6 +53,7 @@ export default function ChatSessionPage() {
     chatClear();
     planClear();
     liveClear();
+    taskFrameClear();
     void getSession(sessionId).then((s) =>
       upsert({
         id: s.id,
@@ -66,13 +69,14 @@ export default function ChatSessionPage() {
       setPhase("idle");
       setRunId(null);
     };
-  }, [sessionId, setCurrent, chatClear, planClear, liveClear, upsert, setPhase, setRunId]);
+  }, [sessionId, setCurrent, chatClear, planClear, liveClear, taskFrameClear, upsert, setPhase, setRunId]);
 
   const handlers = useMemo<HandlerMap>(() => {
     const chat = useChatStore.getState();
     const plan = usePlanStore.getState();
     const live = useLiveStore.getState();
     const session = useSessionStore.getState();
+    const taskFrame = useTaskFrameStore.getState();
     return {
       "message.delta": (e) => { chat.onMessageDelta(e); live.track(e); },
       "thinking.delta": (e) => { chat.onThinkingDelta(e); live.track(e); },
@@ -80,6 +84,10 @@ export default function ChatSessionPage() {
       "tool.result": (e) => { chat.onToolResult(e); live.onToolResult(e); live.track(e); },
       artifact: (e) => { chat.onArtifact(e); live.onArtifact(e); live.track(e); },
       "plan.update": (e) => { plan.onPlanUpdate(e); live.track(e); },
+      "task.frame": (e) => {
+        taskFrame.fromEvent(e);
+        live.track(e);
+      },
       screenshot: (e) => { live.onScreenshot(e); live.track(e); },
       "token.usage": (e) => { live.onUsage(e); live.track(e); },
       status: (e) => {

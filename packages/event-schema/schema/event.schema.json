@@ -469,6 +469,8 @@
         "executing",
         "compacting",
         "waiting_user",
+        "interrupted",
+        "stopped",
         "done",
         "error"
       ],
@@ -546,6 +548,76 @@
         "phase"
       ],
       "title": "StatusEvent",
+      "type": "object"
+    },
+    "TaskFrameEvent": {
+      "description": "阶段 A 任务定调结果，供前端在「任务计划」上方展示。",
+      "properties": {
+        "type": {
+          "const": "task.frame",
+          "default": "task.frame",
+          "title": "Type",
+          "type": "string"
+        },
+        "v": {
+          "default": "1",
+          "description": "schema version",
+          "title": "V",
+          "type": "string"
+        },
+        "session_id": {
+          "format": "uuid",
+          "title": "Session Id",
+          "type": "string"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Agent run identifier",
+          "title": "Run Id"
+        },
+        "seq": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "monotonic seq per session",
+          "title": "Seq"
+        },
+        "ts": {
+          "format": "date-time",
+          "title": "Ts",
+          "type": "string"
+        },
+        "summary": {
+          "description": "一行中文结论",
+          "title": "Summary",
+          "type": "string"
+        },
+        "detail": {
+          "default": "",
+          "description": "定调要点（多行），可折叠展示",
+          "title": "Detail",
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id",
+        "summary"
+      ],
+      "title": "TaskFrameEvent",
       "type": "object"
     },
     "ThinkingDeltaEvent": {
@@ -911,6 +983,7 @@
       "plan.update": "#/$defs/PlanUpdateEvent",
       "screenshot": "#/$defs/ScreenshotEvent",
       "status": "#/$defs/StatusEvent",
+      "task.frame": "#/$defs/TaskFrameEvent",
       "thinking.delta": "#/$defs/ThinkingDeltaEvent",
       "token.usage": "#/$defs/TokenUsageEvent",
       "tool.call": "#/$defs/ToolCallEvent",
@@ -939,6 +1012,9 @@
     },
     {
       "$ref": "#/$defs/PlanUpdateEvent"
+    },
+    {
+      "$ref": "#/$defs/TaskFrameEvent"
     },
     {
       "$ref": "#/$defs/StatusEvent"

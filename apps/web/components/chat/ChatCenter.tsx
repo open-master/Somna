@@ -9,6 +9,7 @@ import { Composer } from "./Composer";
 import { DeliverablesHub } from "./DeliverablesHub";
 import { MessageList } from "./MessageList";
 import { PlannerTimeline } from "./PlannerTimeline";
+import { TaskFrameBanner } from "./TaskFrameBanner";
 
 export function ChatCenter({ sessionId }: { sessionId: string }) {
   const messages = useChatStore((s) => s.messages);
@@ -18,6 +19,7 @@ export function ChatCenter({ sessionId }: { sessionId: string }) {
       {/* 固定在中间栏顶部：与 Manus 类似，任务计划 + 交付物总览不随下方聊天滚动消失 */}
       <div className="relative z-20 shrink-0 border-b border-border/70 bg-background/95 backdrop-blur-md supports-[backdrop-filter]:bg-background/80">
         <div className="mx-auto w-full max-w-3xl space-y-2 px-4 py-2">
+          <TaskFrameBanner />
           <PlannerTimeline />
           <DeliverablesHub sessionId={sessionId} />
         </div>

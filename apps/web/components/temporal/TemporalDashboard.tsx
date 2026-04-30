@@ -768,6 +768,8 @@ function summarizeAgentEvent(event: SessionEvent): string {
       return `收到中断确认: ${event.reason}`;
     case "plan.update":
       return `${event.todos.filter((todo) => todo.status === "done").length}/${event.todos.length} 项计划已完成`;
+    case "task.frame":
+      return `任务定调 · ${event.summary}`;
     case "tool.call":
       return `调用工具 ${event.name}`;
     case "tool.result":
@@ -852,6 +854,8 @@ function agentToneDotClass(type: SessionEvent["type"]) {
       return "bg-emerald-500";
     case "plan.update":
       return "bg-violet-500";
+    case "task.frame":
+      return "bg-cyan-500";
     default:
       return "bg-muted-foreground/40";
   }

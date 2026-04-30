@@ -129,6 +129,14 @@ class PlanUpdateEvent(BaseEvent):
     todos: List[TodoItem]
 
 
+class TaskFrameEvent(BaseEvent):
+    """阶段 A 任务定调结果，供前端在「任务计划」上方展示。"""
+
+    type: Literal["task.frame"] = "task.frame"
+    summary: str = Field(..., description="一行中文结论")
+    detail: str = Field(default="", description="定调要点（多行），可折叠展示")
+
+
 class StatusEvent(BaseEvent):
     type: Literal["status"] = "status"
     phase: SessionPhase
@@ -167,6 +175,7 @@ AgentEvent = Annotated[
         ScreenshotEvent,
         ArtifactEvent,
         PlanUpdateEvent,
+        TaskFrameEvent,
         StatusEvent,
         TokenUsageEvent,
         InterruptAckEvent,

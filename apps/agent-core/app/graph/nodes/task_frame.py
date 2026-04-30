@@ -6,7 +6,7 @@ import json
 import re
 from typing import Any
 
-from somna_events import SessionPhase, StatusEvent
+from somna_events import SessionPhase, StatusEvent, TaskFrameEvent
 
 from app.config import get_settings
 from app.events.emitter import emit
@@ -18,6 +18,17 @@ from app.prompts.loader import load_template, render
 log = get_logger(__name__)
 
 _JSON_BLOCK_RE = re.compile(r"\{[\s\S]*\}", re.MULTILINE)
+
+# 用户明确要求检索/时效/产出时，不要用启发式压低 planner。
+_RESEARCH_INTENT_RE = re.compile(
+    r"(搜索|检索|联网|查找|查一下|最新|近况|实时|新闻|今天|引用|来源|链接|论文|"
+    r"资料整理|调研|报告|摘要|汇总|对比|统计数据|verify|文献)",
+    re.IGNORECASE,
+)
+
+_SIMPLE_DEF_Q_RE = re.compile(
+    r"(是谁|是什么|什么意思|是哪个|指什么|在哪出生|干什么的|干嘛的)[？?！!…。\s]*$",
+)
 
 DEFAULT_TASK_FRAME: dict[str, Any] = {
     "needs_clarification": False,
@@ -104,6 +115,28 @@ def normalize_task_frame(parsed: dict[str, Any] | None) -> dict[str, Any]:
     return out
 
 
+def _maybe_coerce_simple_definitional_qa(user_message: str, frame: dict[str, Any]) -> None:
+    """若模型误判常识短问为需规划/检索，则压低为直接回答（仅作兜底，不改变需澄清分支）。"""
+    if frame.get("needs_clarification"):
+        return
+    msg = (user_message or "").strip()
+    if not msg or len(msg) > 48:
+        return
+    if _RESEARCH_INTENT_RE.search(msg):
+        return
+    if not _SIMPLE_DEF_Q_RE.search(msg):
+        return
+    if not frame.get("should_invoke_planner"):
+        return
+    frame["should_invoke_planner"] = False
+    frame["task_mode"] = "direct_answer"
+    frame["deliverable_type"] = "chat_answer"
+    frame["allowed_action_scope"] = []
+    rs = str(frame.get("reasoning_summary") or "").strip()
+    suffix = "coerced_simple_definitional_QA"
+    frame["reasoning_summary"] = f"{rs}；{suffix}" if rs else suffix
+
+
 def format_task_frame_block(frame: dict[str, Any] | None) -> str:
     if not frame:
         return "(无)"
@@ -127,6 +160,33 @@ def format_task_frame_block(frame: dict[str, Any] | None) -> str:
     return "\n".join(lines)
 
 
+def format_task_frame_ui_summary(frame: dict[str, Any] | None) -> str:
+    """一行中文，用于 Web 顶栏「任务定调」摘要。"""
+    if not frame:
+        return "任务定调：无法解析，已使用默认策略。"
+    rs = str(frame.get("reasoning_summary") or "")
+    if rs == _BLANK_USER_REASON:
+        return "任务定调：未识别到有效描述，将向您追问。"
+    if "skip_planner" in rs:
+        return "任务定调：未启用规划模型配置，跳过大模型定调，将直接走规划与执行。"
+    if frame.get("needs_clarification"):
+        return "任务定调：需要先确认若干信息后再继续。"
+    if not frame.get("should_invoke_planner", True):
+        return "任务定调：轻量直接回答，不进入多步规划与工具编排。"
+    return "任务定调：将进入任务规划与工具执行。"
+
+
+async def _emit_task_frame_ui(session_id, run_id: str | None, frame: dict[str, Any]) -> None:
+    await emit(
+        TaskFrameEvent(
+            session_id=session_id,
+            run_id=run_id,
+            summary=format_task_frame_ui_summary(frame),
+            detail=format_task_frame_block(frame),
+        )
+    )
+
+
 def deliverable_type_implies_artifact(deliverable_type: str) -> bool:
     dt = (deliverable_type or "").strip().lower()
     if dt in ("", "unspecified", "chat_answer", "direct_answer"):
@@ -141,12 +201,15 @@ async def task_frame_node(state: SessionState) -> SessionState:
 
     if not str(user_message).strip():
         log.info("graph.task_frame.blank_user", session_id=str(session_id))
-        return {"task_frame": frame_for_blank_user_message()}
+        frame_b = frame_for_blank_user_message()
+        await _emit_task_frame_ui(session_id, run_id, frame_b)
+        return {"task_frame": frame_b}
 
     if state.get("skip_planner"):
         tf = dict(DEFAULT_TASK_FRAME)
         tf["reasoning_summary"] = "skip_planner（API 未指定 planner，沿用全链路执行）"
         log.info("graph.task_frame.skipped", session_id=str(session_id), reason="skip_planner")
+        await _emit_task_frame_ui(session_id, run_id, tf)
         return {"task_frame": tf}
 
     settings = get_settings()
@@ -155,7 +218,10 @@ async def task_frame_node(state: SessionState) -> SessionState:
 
     if not template:
         log.warning("graph.task_frame.template_missing")
-        return {"task_frame": normalize_task_frame(None)}
+        frame = normalize_task_frame(None)
+        _maybe_coerce_simple_definitional_qa(user_message, frame)
+        await _emit_task_frame_ui(session_id, run_id, frame)
+        return {"task_frame": frame}
 
     prompt = render(template, user_message=user_message)
     await emit(
@@ -184,6 +250,7 @@ async def task_frame_node(state: SessionState) -> SessionState:
         frame = normalize_task_frame(None)
         frame["reasoning_summary"] = f"framing_llm_error: {exc}"
 
+    _maybe_coerce_simple_definitional_qa(user_message, frame)
     log.info(
         "graph.task_frame.ready",
         session_id=str(session_id),
@@ -191,4 +258,5 @@ async def task_frame_node(state: SessionState) -> SessionState:
         planner=frame.get("should_invoke_planner"),
         clarify=frame.get("needs_clarification"),
     )
+    await _emit_task_frame_ui(session_id, run_id, frame)
     return {"task_frame": frame}

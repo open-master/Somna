@@ -128,6 +128,15 @@ export const planUpdateSchema = z
   })
   .passthrough();
 
+export const taskFrameSchema = z
+  .object({
+    type: z.literal("task.frame"),
+    summary: z.string(),
+    detail: z.string().default(""),
+    ...baseFields,
+  })
+  .passthrough();
+
 export const statusSchema = z
   .object({
     type: z.literal("status"),
@@ -177,6 +186,7 @@ export const agentEventSchema = z.discriminatedUnion("type", [
   screenshotSchema,
   artifactSchema,
   planUpdateSchema,
+  taskFrameSchema,
   statusSchema,
   tokenUsageSchema,
   interruptAckSchema,
@@ -191,6 +201,7 @@ export type ToolResultEvent = z.infer<typeof toolResultSchema>;
 export type ScreenshotEvent = z.infer<typeof screenshotSchema>;
 export type ArtifactEvent = z.infer<typeof artifactSchema>;
 export type PlanUpdateEvent = z.infer<typeof planUpdateSchema>;
+export type TaskFrameEvent = z.infer<typeof taskFrameSchema>;
 export type StatusEvent = z.infer<typeof statusSchema>;
 export type TokenUsageEvent = z.infer<typeof tokenUsageSchema>;
 export type InterruptAckEvent = z.infer<typeof interruptAckSchema>;
@@ -205,6 +216,7 @@ export type AgentEventMap = {
   screenshot: ScreenshotEvent;
   artifact: ArtifactEvent;
   "plan.update": PlanUpdateEvent;
+  "task.frame": TaskFrameEvent;
   status: StatusEvent;
   "token.usage": TokenUsageEvent;
   "interrupt.ack": InterruptAckEvent;

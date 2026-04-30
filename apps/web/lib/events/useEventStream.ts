@@ -64,6 +64,7 @@ export function useEventStream(sessionId: string | null, handlers: HandlerMap) {
       "screenshot",
       "artifact",
       "plan.update",
+      "task.frame",
       "status",
       "token.usage",
       "interrupt.ack",

@@ -112,3 +112,21 @@ async def test_skip_planner_runs_after_blank_would_not_apply():
     frame = out["task_frame"]
     assert frame["needs_clarification"] is True
     assert frame["reasoning_summary"] == tf_mod._BLANK_USER_REASON
+
+
+def test_coerce_simple_who_question_to_direct():
+    frame = tf_mod.normalize_task_frame(
+        {"needs_clarification": False, "should_invoke_planner": True, "reasoning_summary": "误判"}
+    )
+    tf_mod._maybe_coerce_simple_definitional_qa("乔布斯是谁？", frame)
+    assert frame["should_invoke_planner"] is False
+    assert frame["task_mode"] == "direct_answer"
+    assert "coerced_simple_definitional_QA" in frame["reasoning_summary"]
+
+
+def test_coerce_skips_when_research_keywords():
+    frame = tf_mod.normalize_task_frame(
+        {"needs_clarification": False, "should_invoke_planner": True, "reasoning_summary": "x"}
+    )
+    tf_mod._maybe_coerce_simple_definitional_qa("搜索一下乔布斯是谁？", frame)
+    assert frame["should_invoke_planner"] is True
