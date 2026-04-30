@@ -644,6 +644,44 @@ def test_proof_from_filesystem_write_records_written_path():
     assert proof.verified_paths == set()
 
 
+def test_proof_from_media_tools_record_written_paths():
+    img = exe._proof_from_tool_result(
+        tool_name="wan_text2image",
+        args={"prompt": "x"},
+        result=ToolResult(
+            ok=True,
+            preview="",
+            output={"paths": ["artifacts/wan_t2i_test_ab12cd34_0.png"], "task_id": "t1"},
+        ),
+        manifest=SimpleNamespace(mutates=True),
+    )
+    assert "artifacts/wan_t2i_test_ab12cd34_0.png" in img.written_paths
+
+    vid = exe._proof_from_tool_result(
+        tool_name="wan_text2video",
+        args={"prompt": "x"},
+        result=ToolResult(
+            ok=True,
+            preview="video → artifacts/wan_t2v_x.mp4",
+            output={"path": "artifacts/wan_t2v_x.mp4", "task_id": "t2"},
+        ),
+        manifest=SimpleNamespace(mutates=True),
+    )
+    assert "artifacts/wan_t2v_x.mp4" in vid.written_paths
+
+    tts = exe._proof_from_tool_result(
+        tool_name="minimax_tts",
+        args={"text": "hi"},
+        result=ToolResult(
+            ok=True,
+            preview="",
+            output={"path": "artifacts/minimax_tts_hi_ab12cd34.mp3"},
+        ),
+        manifest=SimpleNamespace(mutates=True),
+    )
+    assert "artifacts/minimax_tts_hi_ab12cd34.mp3" in tts.written_paths
+
+
 def test_proof_from_shell_command_tracks_written_and_verified_paths():
     write_proof = exe._proof_from_tool_result(
         tool_name="shell",

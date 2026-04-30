@@ -1081,6 +1081,10 @@ _DELIVERABLE_EXTS_FOR_STAT = frozenset({
     ".txt",
     ".pptx",
     ".ppt",
+    ".mp4",
+    ".mp3",
+    ".webm",
+    ".wav",
 })
 
 
@@ -1150,4 +1154,20 @@ def _proof_from_tool_result(
         proof.written_paths.update(
             _guess_shell_artifact_paths(cmd=cmd, stdout=stdout, preview=preview_txt)
         )
+    elif tool_name in {"wan_text2image", "wan_text2video", "minimax_tts"} and isinstance(output, dict):
+        raw_paths: list[str] = []
+        paths_val = output.get("paths")
+        if isinstance(paths_val, list):
+            for item in paths_val:
+                if isinstance(item, str) and item.strip():
+                    raw_paths.append(item)
+        p1 = output.get("path")
+        if isinstance(p1, str) and p1.strip():
+            raw_paths.append(p1)
+        for raw in raw_paths:
+            rel = _workspace_relative_from_guess(raw)
+            if not rel:
+                rel = raw.strip().lstrip("./")
+            if rel and ".." not in Path(rel).parts:
+                proof.written_paths.add(rel)
     return proof

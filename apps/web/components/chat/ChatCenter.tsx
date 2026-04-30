@@ -16,7 +16,7 @@ export function ChatCenter({ sessionId }: { sessionId: string }) {
   return (
     <div className="flex flex-1 min-h-0 flex-col bg-[linear-gradient(180deg,transparent,hsl(var(--muted)/0.28))]">
       {/* 固定在中间栏顶部：与 Manus 类似，任务计划 + 交付物总览不随下方聊天滚动消失 */}
-      <div className="shrink-0 border-b border-border/70 bg-background/95 backdrop-blur-md supports-[backdrop-filter]:bg-background/80">
+      <div className="relative z-20 shrink-0 border-b border-border/70 bg-background/95 backdrop-blur-md supports-[backdrop-filter]:bg-background/80">
         <div className="mx-auto w-full max-w-3xl space-y-2 px-4 py-2">
           <PlannerTimeline />
           <DeliverablesHub sessionId={sessionId} />

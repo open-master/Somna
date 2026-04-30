@@ -8,6 +8,8 @@ import type {
   ToolResultEvent,
 } from "@somna/event-schema";
 
+import { normalizeWorkspacePath } from "@/lib/utils/workspace-path";
+
 interface Shot {
   ts: number;
   url: string;
@@ -84,18 +86,20 @@ export const useLiveStore = create<LiveState>((set) => ({
     }),
   onArtifact: (e) =>
     set((s) => {
+      const descNorm = e.description?.trim()
+        ? normalizeWorkspacePath(e.description.trim())
+        : undefined;
       const artifact: ArtifactItem = {
         id: `${e.name}-${Date.now()}`,
         name: e.name,
         mime: e.mime,
         url: e.url,
-        description: e.description ?? undefined,
+        description: descNorm,
         ts: new Date(e.ts ?? Date.now()).getTime(),
       };
-      const filePath = e.description?.trim();
-      const nextFiles = filePath
+      const nextFiles = descNorm
         ? upsertFileItem(s.fileItems, {
-            path: filePath,
+            path: descNorm,
             source: "artifact",
             ts: artifact.ts,
           })
@@ -193,8 +197,10 @@ function summarize(e: AgentEvent): string {
 }
 
 function upsertFileItem(items: FileItem[], next: FileItem): FileItem[] {
-  const filtered = items.filter((item) => item.path !== next.path);
-  return [next, ...filtered].slice(0, 200);
+  const norm = normalizeWorkspacePath(next.path);
+  const nextNorm: FileItem = { ...next, path: norm };
+  const filtered = items.filter((item) => normalizeWorkspacePath(item.path) !== norm);
+  return [nextNorm, ...filtered].slice(0, 200);
 }
 
 function collectToolFileItems(items: FileItem[], e: ToolCallEvent): FileItem[] {
@@ -209,7 +215,8 @@ function collectToolFileItems(items: FileItem[], e: ToolCallEvent): FileItem[] {
   const cmd = typeof args.cmd === "string" ? args.cmd : "";
   const matches = Array.from(cmd.matchAll(/(?:^|\s)(\.\/?[^\s;|&]+|\/[^\s;|&]+\.[^\s;|&]+)/g));
   return matches.reduce<FileItem[]>(
-    (acc, match) => (match[1] ? upsertFileItem(acc, { path: match[1], source: "tool", ts }) : acc),
+    (acc, match) =>
+      match[1] ? upsertFileItem(acc, { path: match[1], source: "tool", ts }) : acc,
     items,
   );
 }

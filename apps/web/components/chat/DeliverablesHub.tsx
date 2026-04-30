@@ -14,10 +14,11 @@ import {
   Package,
 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useChatStore } from "@/lib/store/chat";
 import { useLiveStore } from "@/lib/store/live";
+import { cn } from "@/lib/utils/cn";
 import {
   artifactDownloadUrl,
   artifactPreviewUrl,
@@ -179,7 +180,7 @@ export function DeliverablesHub({ sessionId }: { sessionId: string }) {
   const hasMore = rows.length > PREVIEW_LIMIT;
 
   return (
-    <Card className="border-primary/20 bg-card/95 shadow-sm animate-fade-in">
+    <Card className="relative z-10 border-primary/20 bg-card/95 shadow-sm animate-fade-in">
       <CardContent className="p-3 sm:p-4">
         <div className="mb-2 flex flex-wrap items-center gap-2">
           <Package className="size-4 text-primary" />
@@ -226,7 +227,7 @@ export function DeliverablesHub({ sessionId }: { sessionId: string }) {
                         target="_blank"
                         rel="noopener noreferrer"
                         title="点击预览"
-                        className="group flex max-w-full items-center gap-2 rounded-md px-1 py-1 -mx-1 text-left no-underline outline-none ring-offset-background transition-colors hover:bg-accent/70 focus-visible:ring-2 focus-visible:ring-ring"
+                        className="group flex max-w-full cursor-pointer items-center gap-2 rounded-md px-1 py-1 -mx-1 text-left no-underline outline-none ring-offset-background transition-colors hover:bg-accent/70 focus-visible:ring-2 focus-visible:ring-ring"
                       >
                         <RowIcon mime={r.mime} name={r.name} />
                         <span className="font-mono text-xs font-medium break-all text-foreground underline-offset-2 group-hover:text-primary group-hover:underline">
@@ -246,7 +247,7 @@ export function DeliverablesHub({ sessionId }: { sessionId: string }) {
                         target="_blank"
                         rel="noopener noreferrer"
                         title="点击预览"
-                        className="block rounded-md px-1 py-1 -mx-1 text-muted-foreground no-underline outline-none ring-offset-background transition-colors hover:bg-accent/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                        className="block cursor-pointer rounded-md px-1 py-1 -mx-1 text-muted-foreground no-underline outline-none ring-offset-background transition-colors hover:bg-accent/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
                       >
                         {isFeatured ? (
                           <span className="font-medium text-foreground">✅ 最终成片 / 主推交付 · </span>
@@ -256,16 +257,22 @@ export function DeliverablesHub({ sessionId }: { sessionId: string }) {
                     </td>
                     <td className="whitespace-nowrap px-3 py-2 text-right align-middle">
                       <div className="inline-flex flex-wrap justify-end gap-1">
-                        <Button asChild size="sm" variant="outline" className="h-7 gap-1 px-2 text-xs">
-                          <a href={preview} target="_blank" rel="noopener noreferrer">
-                            <ExternalLink className="size-3" />
-                            预览
-                          </a>
-                        </Button>
+                        <a
+                          href={preview}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className={cn(
+                            buttonVariants({ variant: "outline", size: "sm" }),
+                            "h-7 cursor-pointer gap-1 px-2 text-xs no-underline",
+                          )}
+                        >
+                          <ExternalLink className="size-3 shrink-0" />
+                          预览
+                        </a>
                         <a
                           href={download}
                           download={r.name}
-                          className="inline-flex h-7 items-center justify-center gap-1 whitespace-nowrap rounded-md px-2 text-xs font-medium text-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          className="inline-flex h-7 cursor-pointer items-center justify-center gap-1 whitespace-nowrap rounded-md px-2 text-xs font-medium text-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           title="下载到本地"
                         >
                           <Download className="size-3" />

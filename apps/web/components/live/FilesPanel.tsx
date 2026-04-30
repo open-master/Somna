@@ -1,11 +1,13 @@
 "use client";
-import { FileText, FolderTree } from "lucide-react";
+import { Download, ExternalLink, FileText, FolderTree } from "lucide-react";
 
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useLiveStore } from "@/lib/store/live";
-import { artifactPreviewUrl } from "@/lib/utils/artifact-links";
+import { artifactDownloadUrl, artifactPreviewUrl } from "@/lib/utils/artifact-links";
+import { sessionArtifactContentUrl } from "@/lib/utils/deliverable-resolve";
+import { isSessionArtifactRelativePath } from "@/lib/utils/workspace-path";
 
-export function FilesPanel() {
+export function FilesPanel({ sessionId }: { sessionId: string }) {
   const artifacts = useLiveStore((s) => s.artifacts);
   const fileItems = useLiveStore((s) => s.fileItems);
 
@@ -36,15 +38,41 @@ export function FilesPanel() {
                   文件轨迹
                 </div>
                 <div className="space-y-1">
-                  {fileItems.map((item) => (
-                    <div
-                      key={`${item.source}-${item.path}`}
-                      className="rounded-md border px-2 py-1.5 text-xs"
-                    >
-                      <div className="truncate font-mono">{item.path}</div>
-                      <div className="text-[11px] text-muted-foreground">{item.source}</div>
-                    </div>
-                  ))}
+                  {fileItems.map((item) => {
+                    const canOpen = Boolean(sessionId) && isSessionArtifactRelativePath(item.path);
+                    const fetchUrl = canOpen ? sessionArtifactContentUrl(sessionId, item.path) : null;
+                    return (
+                      <div
+                        key={`${item.source}-${item.path}`}
+                        className="rounded-md border px-2 py-1.5 text-xs"
+                      >
+                        <div className="truncate font-mono">{item.path}</div>
+                        <div className="mt-1 flex flex-wrap items-center gap-2">
+                          <span className="text-[11px] text-muted-foreground">{item.source}</span>
+                          {fetchUrl ? (
+                            <>
+                              <a
+                                href={artifactPreviewUrl(fetchUrl)}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-0.5 text-[11px] text-primary hover:underline"
+                              >
+                                <ExternalLink className="size-3" />
+                                预览
+                              </a>
+                              <a
+                                href={artifactDownloadUrl(fetchUrl)}
+                                className="inline-flex items-center gap-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:underline"
+                              >
+                                <Download className="size-3" />
+                                下载
+                              </a>
+                            </>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             ) : null}

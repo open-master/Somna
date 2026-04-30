@@ -8,7 +8,7 @@ import { ScreenPanel } from "./ScreenPanel";
 import { TerminalPanel } from "./TerminalPanel";
 import { TracePanel } from "./TracePanel";
 
-export function LiveComputerPanel() {
+export function LiveComputerPanel({ sessionId }: { sessionId: string }) {
   return (
     <div className="flex flex-col h-full">
       <div className="flex h-16 shrink-0 items-center justify-between border-b px-4">
@@ -43,7 +43,7 @@ export function LiveComputerPanel() {
           <TerminalPanel />
         </TabsContent>
         <TabsContent value="files" className="flex-1 min-h-0 mt-2">
-          <FilesPanel />
+          <FilesPanel sessionId={sessionId} />
         </TabsContent>
         <TabsContent value="trace" className="flex-1 min-h-0 mt-2">
           <TracePanel />

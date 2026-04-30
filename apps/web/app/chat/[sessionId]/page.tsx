@@ -139,7 +139,7 @@ export default function ChatSessionPage() {
       title={title}
       subtitle="Agent Workspace"
       center={sessionId ? <ChatCenter sessionId={sessionId} /> : null}
-      right={<LiveComputerPanel />}
+      right={<LiveComputerPanel sessionId={sessionId ?? ""} />}
     />
   );
 }
