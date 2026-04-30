@@ -3,10 +3,11 @@
 #  Somna AI — Web (Next.js 14)
 # ============================================================
 FROM node:20-slim AS base
-ENV NODE_ENV=production
 WORKDIR /app
 
 # ---------- deps ----------
+# 安装阶段勿设 NODE_ENV=production，否则 npm 会省略 devDependencies；
+# next build 需要 tailwindcss / postcss 等（见 package.json devDependencies）。
 FROM base AS deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates python3 build-essential \
