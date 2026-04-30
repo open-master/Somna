@@ -1,7 +1,4 @@
 "use client";
-import { Sparkles, Workflow } from "lucide-react";
-
-import { Card, CardContent } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useChatStore } from "@/lib/store/chat";
 
@@ -13,54 +10,22 @@ import { TaskFrameBanner } from "./TaskFrameBanner";
 
 export function ChatCenter({ sessionId }: { sessionId: string }) {
   const messages = useChatStore((s) => s.messages);
+  const hasConversation = messages.length > 0;
 
   return (
     <div className="flex flex-1 min-h-0 flex-col bg-[linear-gradient(180deg,transparent,hsl(var(--muted)/0.28))]">
-      {/* 固定在中间栏顶部：与 Manus 类似，任务计划 + 交付物总览不随下方聊天滚动消失 */}
-      <div className="relative z-20 shrink-0 border-b border-border/70 bg-background/95 backdrop-blur-md supports-[backdrop-filter]:bg-background/80">
-        <div className="mx-auto w-full max-w-3xl space-y-2 px-4 py-2">
-          <TaskFrameBanner />
-          <PlannerTimeline />
-          <DeliverablesHub sessionId={sessionId} />
+      {/* 有对话后再显示定调/计划/交付物，新会话保持顶栏简洁 */}
+      {hasConversation ? (
+        <div className="relative z-20 shrink-0 border-b border-border/70 bg-background/95 backdrop-blur-md supports-[backdrop-filter]:bg-background/80">
+          <div className="mx-auto w-full max-w-3xl space-y-2 px-4 py-2">
+            <TaskFrameBanner />
+            <PlannerTimeline />
+            <DeliverablesHub sessionId={sessionId} />
+          </div>
         </div>
-      </div>
+      ) : null}
 
       <ScrollArea className="flex-1 min-h-0">
-        <div className="mx-auto w-full max-w-4xl px-4 pt-4">
-          {messages.length === 0 ? (
-            <Card className="mb-4 overflow-hidden rounded-[28px] border-primary/10 bg-background/85 shadow-sm">
-              <CardContent className="p-0">
-                <div className="border-b bg-muted/40 px-6 py-4">
-                  <div className="inline-flex items-center gap-2 rounded-full border bg-background px-3 py-1 text-xs text-muted-foreground">
-                    <Sparkles className="size-3.5 text-primary" />
-                    Somna Workspace
-                  </div>
-                </div>
-                <div className="grid gap-6 px-6 py-6 lg:grid-cols-[minmax(0,1.6fr)_minmax(280px,1fr)]">
-                  <div className="space-y-3">
-                    <h2 className="text-2xl font-semibold tracking-tight">
-                      给出一个目标，Somna 会自己规划、执行、反思并交付结果。
-                    </h2>
-                    <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
-                      上方为任务定调、计划与交付物汇总（随执行更新）；你的提问与 Agent 回复、工具调用按时间顺序出现在下方。右侧可观察沙盒与轨迹。
-                    </p>
-                  </div>
-                  <div className="rounded-3xl border bg-muted/35 p-4 text-sm">
-                    <div className="flex items-center gap-2 font-medium">
-                      <Workflow className="size-4 text-primary" />
-                      当前工作方式
-                    </div>
-                    <ul className="mt-3 space-y-2 text-muted-foreground">
-                      <li>1. 输入目标或任务。</li>
-                      <li>2. Agent 自动生成计划并开始执行。</li>
-                      <li>3. 在右侧观察执行过程，并在需要时打断或停止。</li>
-                    </ul>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ) : null}
-        </div>
         <MessageList sessionId={sessionId} />
       </ScrollArea>
       <Composer sessionId={sessionId} />
