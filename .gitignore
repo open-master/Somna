@@ -1,0 +1,51 @@
+# ===== env / secrets =====
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# ===== python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# ===== node / next =====
+node_modules/
+.next/
+.turbo/
+.vercel/
+out/
+pnpm-debug.log*
+yarn-error.log*
+.pnp.*
+
+# ===== docker volumes (local) =====
+volumes/
+data/
+*.sqlite
+*.db
+
+# ===== editor =====
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ===== logs =====
+*.log
+logs/
+
+# ===== build artifacts =====
+tmp/
+tsconfig.tsbuildinfo

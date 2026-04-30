@@ -1,0 +1,97 @@
+"""LangGraph session state machine.
+
+M2 minimal version:  ingest → execute → finalize
+Future M2 full:      ingest → plan → execute ↔ compact → reflect → finalize
+
+Checkpoints are persisted to Postgres via `langgraph-checkpoint-postgres`
+so a session can be resumed after crashes or client disconnects.
+"""
+
+from __future__ import annotations
+
+from functools import lru_cache
+
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from langgraph.graph import END, START, StateGraph
+
+from app.config import get_settings
+from app.graph.nodes.execute import execute_node
+from app.graph.nodes.finalize import finalize_node
+from app.graph.nodes.ingest import ingest_node
+from app.graph.nodes.plan import plan_node
+from app.graph.nodes.reflect import reflect_node
+from app.graph.state import SessionState
+
+_graph = None
+_saver_ctx = None
+
+
+def _route_after_execute(state: SessionState) -> str:
+    return "finalize" if state.get("error") else "reflect"
+
+
+def _route_after_reflect(state: SessionState) -> str:
+    nxt = state.get("next_node")
+    if nxt in {"execute", "plan", "finalize"}:
+        return nxt
+    return "finalize"
+
+
+def build_graph() -> StateGraph:
+    g: StateGraph = StateGraph(SessionState)
+    g.add_node("ingest", ingest_node)
+    g.add_node("plan", plan_node)
+    g.add_node("execute", execute_node)
+    g.add_node("reflect", reflect_node)
+    g.add_node("finalize", finalize_node)
+    g.add_edge(START, "ingest")
+    g.add_edge("ingest", "plan")
+    g.add_edge("plan", "execute")
+    g.add_conditional_edges(
+        "execute",
+        _route_after_execute,
+        {"reflect": "reflect", "finalize": "finalize"},
+    )
+    g.add_conditional_edges(
+        "reflect",
+        _route_after_reflect,
+        {"execute": "execute", "plan": "plan", "finalize": "finalize"},
+    )
+    g.add_edge("finalize", END)
+    return g
+
+
+@lru_cache
+def _postgres_conn_string() -> str:
+    """LangGraph Postgres checkpoint wants a libpq-style URL (not asyncpg-specific)."""
+    url = get_settings().postgres_url
+    # Accept either 'postgresql://', 'postgresql+asyncpg://', 'postgres://' and normalise
+    return (
+        url.replace("postgresql+asyncpg://", "postgresql://")
+        .replace("postgres://", "postgresql://")
+    )
+
+
+async def get_compiled_graph():
+    """Return a compiled graph with Postgres checkpointer.
+
+    We keep a single long-lived saver for the process. `AsyncPostgresSaver.from_conn_string`
+    returns a context manager; we enter it once at startup.
+    """
+    global _graph, _saver_ctx
+    if _graph is not None:
+        return _graph
+
+    _saver_ctx = AsyncPostgresSaver.from_conn_string(_postgres_conn_string())
+    saver = await _saver_ctx.__aenter__()
+    await saver.setup()
+    _graph = build_graph().compile(checkpointer=saver)
+    return _graph
+
+
+async def close_graph() -> None:
+    global _graph, _saver_ctx
+    if _saver_ctx is not None:
+        await _saver_ctx.__aexit__(None, None, None)
+    _graph = None
+    _saver_ctx = None

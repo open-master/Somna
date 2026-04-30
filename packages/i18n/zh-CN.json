@@ -1,0 +1,108 @@
+{
+  "app": {
+    "name": "Somna",
+    "tagline": "你的 AI 同事"
+  },
+  "auth": {
+    "login": "登录",
+    "logout": "退出",
+    "email": "邮箱",
+    "password": "密码",
+    "register": "注册"
+  },
+  "nav": {
+    "new_session": "新建会话",
+    "search_placeholder": "搜索会话... (Cmd+K)",
+    "settings": "设置",
+    "group": {
+      "today": "今天",
+      "yesterday": "昨天",
+      "this_week": "本周",
+      "earlier": "更早"
+    }
+  },
+  "topbar": {
+    "phase": {
+      "idle": "空闲",
+      "planning": "规划中",
+      "executing": "执行中",
+      "compacting": "压缩上下文",
+      "waiting_user": "等待用户",
+      "done": "已完成",
+      "error": "出错"
+    },
+    "tokens": "Tokens",
+    "cost": "成本",
+    "duration": "耗时",
+    "interrupt": "打断",
+    "stop": "停止",
+    "stop_confirm_title": "确认停止任务？",
+    "stop_confirm_desc": "停止后沙盒将保留，产物不会丢失；但正在进行的步骤会终止。",
+    "stop_confirm_ok": "确认停止",
+    "stop_confirm_cancel": "取消"
+  },
+  "chat": {
+    "planner_timeline_title": "任务计划（{{done}}/{{total}} 已完成）",
+    "composer": {
+      "placeholder": "问点什么，或交给我一个任务...",
+      "send": "发送",
+      "attach": "附件",
+      "model": "模型",
+      "hint": "Cmd/Ctrl + Enter 发送"
+    },
+    "thinking": "思考中...",
+    "tool_call": "调用工具",
+    "tool_result": {
+      "ok": "完成",
+      "failed": "失败",
+      "preview": "预览",
+      "raw": "原始",
+      "screenshot": "截图"
+    },
+    "artifact": {
+      "preview": "预览",
+      "download": "下载",
+      "copy_link": "复制链接"
+    }
+  },
+  "live": {
+    "tabs": {
+      "browser": "浏览器",
+      "shell": "终端",
+      "files": "文件",
+      "code": "代码",
+      "tasks": "任务",
+      "logs": "日志"
+    },
+    "timeline": {
+      "live": "实时",
+      "playback": "回放中"
+    },
+    "empty": "沙盒尚未启动"
+  },
+  "settings": {
+    "title": "设置",
+    "theme": {
+      "label": "主题",
+      "system": "跟随系统",
+      "light": "浅色",
+      "dark": "深色"
+    },
+    "models": {
+      "label": "默认模型",
+      "planner": "规划者",
+      "executor": "执行者",
+      "coder": "编码者"
+    },
+    "instructions": {
+      "label": "自定义指令",
+      "placeholder": "告诉 Somna 你的偏好..."
+    }
+  },
+  "errors": {
+    "generic": "出了点问题，请稍后重试",
+    "network": "网络连接失败",
+    "rate_limit": "请求过于频繁，请稍后再试",
+    "model_unavailable": "当前模型不可用，已自动切换备用"
+  }
+}

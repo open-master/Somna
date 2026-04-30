@@ -1,0 +1,956 @@
+{
+  "$defs": {
+    "ArtifactEvent": {
+      "properties": {
+        "type": {
+          "const": "artifact",
+          "default": "artifact",
+          "title": "Type",
+          "type": "string"
+        },
+        "v": {
+          "default": "1",
+          "description": "schema version",
+          "title": "V",
+          "type": "string"
+        },
+        "session_id": {
+          "format": "uuid",
+          "title": "Session Id",
+          "type": "string"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Agent run identifier",
+          "title": "Run Id"
+        },
+        "seq": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "monotonic seq per session",
+          "title": "Seq"
+        },
+        "ts": {
+          "format": "date-time",
+          "title": "Ts",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "mime": {
+          "title": "Mime",
+          "type": "string"
+        },
+        "url": {
+          "title": "Url",
+          "type": "string"
+        },
+        "size_bytes": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Size Bytes"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        }
+      },
+      "required": [
+        "session_id",
+        "name",
+        "mime",
+        "url"
+      ],
+      "title": "ArtifactEvent",
+      "type": "object"
+    },
+    "ErrorEvent": {
+      "properties": {
+        "type": {
+          "const": "error",
+          "default": "error",
+          "title": "Type",
+          "type": "string"
+        },
+        "v": {
+          "default": "1",
+          "description": "schema version",
+          "title": "V",
+          "type": "string"
+        },
+        "session_id": {
+          "format": "uuid",
+          "title": "Session Id",
+          "type": "string"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Agent run identifier",
+          "title": "Run Id"
+        },
+        "seq": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "monotonic seq per session",
+          "title": "Seq"
+        },
+        "ts": {
+          "format": "date-time",
+          "title": "Ts",
+          "type": "string"
+        },
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "retryable": {
+          "default": false,
+          "title": "Retryable",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "session_id",
+        "code",
+        "message"
+      ],
+      "title": "ErrorEvent",
+      "type": "object"
+    },
+    "InterruptAckEvent": {
+      "properties": {
+        "type": {
+          "const": "interrupt.ack",
+          "default": "interrupt.ack",
+          "title": "Type",
+          "type": "string"
+        },
+        "v": {
+          "default": "1",
+          "description": "schema version",
+          "title": "V",
+          "type": "string"
+        },
+        "session_id": {
+          "format": "uuid",
+          "title": "Session Id",
+          "type": "string"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Agent run identifier",
+          "title": "Run Id"
+        },
+        "seq": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "monotonic seq per session",
+          "title": "Seq"
+        },
+        "ts": {
+          "format": "date-time",
+          "title": "Ts",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id",
+        "reason"
+      ],
+      "title": "InterruptAckEvent",
+      "type": "object"
+    },
+    "MessageDeltaEvent": {
+      "properties": {
+        "type": {
+          "const": "message.delta",
+          "default": "message.delta",
+          "title": "Type",
+          "type": "string"
+        },
+        "v": {
+          "default": "1",
+          "description": "schema version",
+          "title": "V",
+          "type": "string"
+        },
+        "session_id": {
+          "format": "uuid",
+          "title": "Session Id",
+          "type": "string"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Agent run identifier",
+          "title": "Run Id"
+        },
+        "seq": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "monotonic seq per session",
+          "title": "Seq"
+        },
+        "ts": {
+          "format": "date-time",
+          "title": "Ts",
+          "type": "string"
+        },
+        "role": {
+          "const": "assistant",
+          "default": "assistant",
+          "title": "Role",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id",
+        "text"
+      ],
+      "title": "MessageDeltaEvent",
+      "type": "object"
+    },
+    "PlanUpdateEvent": {
+      "properties": {
+        "type": {
+          "const": "plan.update",
+          "default": "plan.update",
+          "title": "Type",
+          "type": "string"
+        },
+        "v": {
+          "default": "1",
+          "description": "schema version",
+          "title": "V",
+          "type": "string"
+        },
+        "session_id": {
+          "format": "uuid",
+          "title": "Session Id",
+          "type": "string"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Agent run identifier",
+          "title": "Run Id"
+        },
+        "seq": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "monotonic seq per session",
+          "title": "Seq"
+        },
+        "ts": {
+          "format": "date-time",
+          "title": "Ts",
+          "type": "string"
+        },
+        "todos": {
+          "items": {
+            "$ref": "#/$defs/TodoItem"
+          },
+          "title": "Todos",
+          "type": "array"
+        }
+      },
+      "required": [
+        "session_id",
+        "todos"
+      ],
+      "title": "PlanUpdateEvent",
+      "type": "object"
+    },
+    "ScreenshotEvent": {
+      "properties": {
+        "type": {
+          "const": "screenshot",
+          "default": "screenshot",
+          "title": "Type",
+          "type": "string"
+        },
+        "v": {
+          "default": "1",
+          "description": "schema version",
+          "title": "V",
+          "type": "string"
+        },
+        "session_id": {
+          "format": "uuid",
+          "title": "Session Id",
+          "type": "string"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Agent run identifier",
+          "title": "Run Id"
+        },
+        "seq": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "monotonic seq per session",
+          "title": "Seq"
+        },
+        "ts": {
+          "format": "date-time",
+          "title": "Ts",
+          "type": "string"
+        },
+        "url": {
+          "title": "Url",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/ScreenshotSource",
+          "default": "browser"
+        },
+        "width": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Width"
+        },
+        "height": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Height"
+        }
+      },
+      "required": [
+        "session_id",
+        "url"
+      ],
+      "title": "ScreenshotEvent",
+      "type": "object"
+    },
+    "ScreenshotSource": {
+      "enum": [
+        "browser",
+        "desktop",
+        "custom"
+      ],
+      "title": "ScreenshotSource",
+      "type": "string"
+    },
+    "SessionPhase": {
+      "enum": [
+        "idle",
+        "planning",
+        "executing",
+        "compacting",
+        "waiting_user",
+        "done",
+        "error"
+      ],
+      "title": "SessionPhase",
+      "type": "string"
+    },
+    "StatusEvent": {
+      "properties": {
+        "type": {
+          "const": "status",
+          "default": "status",
+          "title": "Type",
+          "type": "string"
+        },
+        "v": {
+          "default": "1",
+          "description": "schema version",
+          "title": "V",
+          "type": "string"
+        },
+        "session_id": {
+          "format": "uuid",
+          "title": "Session Id",
+          "type": "string"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Agent run identifier",
+          "title": "Run Id"
+        },
+        "seq": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "monotonic seq per session",
+          "title": "Seq"
+        },
+        "ts": {
+          "format": "date-time",
+          "title": "Ts",
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/SessionPhase"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Message"
+        }
+      },
+      "required": [
+        "session_id",
+        "phase"
+      ],
+      "title": "StatusEvent",
+      "type": "object"
+    },
+    "ThinkingDeltaEvent": {
+      "properties": {
+        "type": {
+          "const": "thinking.delta",
+          "default": "thinking.delta",
+          "title": "Type",
+          "type": "string"
+        },
+        "v": {
+          "default": "1",
+          "description": "schema version",
+          "title": "V",
+          "type": "string"
+        },
+        "session_id": {
+          "format": "uuid",
+          "title": "Session Id",
+          "type": "string"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Agent run identifier",
+          "title": "Run Id"
+        },
+        "seq": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "monotonic seq per session",
+          "title": "Seq"
+        },
+        "ts": {
+          "format": "date-time",
+          "title": "Ts",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id",
+        "text"
+      ],
+      "title": "ThinkingDeltaEvent",
+      "type": "object"
+    },
+    "TodoItem": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/TodoStatus"
+        },
+        "parent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Id"
+        }
+      },
+      "required": [
+        "id",
+        "text",
+        "status"
+      ],
+      "title": "TodoItem",
+      "type": "object"
+    },
+    "TodoStatus": {
+      "enum": [
+        "pending",
+        "in_progress",
+        "done",
+        "failed",
+        "skipped"
+      ],
+      "title": "TodoStatus",
+      "type": "string"
+    },
+    "TokenUsageEvent": {
+      "properties": {
+        "type": {
+          "const": "token.usage",
+          "default": "token.usage",
+          "title": "Type",
+          "type": "string"
+        },
+        "v": {
+          "default": "1",
+          "description": "schema version",
+          "title": "V",
+          "type": "string"
+        },
+        "session_id": {
+          "format": "uuid",
+          "title": "Session Id",
+          "type": "string"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Agent run identifier",
+          "title": "Run Id"
+        },
+        "seq": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "monotonic seq per session",
+          "title": "Seq"
+        },
+        "ts": {
+          "format": "date-time",
+          "title": "Ts",
+          "type": "string"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "input": {
+          "title": "Input",
+          "type": "integer"
+        },
+        "output": {
+          "title": "Output",
+          "type": "integer"
+        },
+        "cost_usd": {
+          "default": 0.0,
+          "title": "Cost Usd",
+          "type": "number"
+        }
+      },
+      "required": [
+        "session_id",
+        "model",
+        "input",
+        "output"
+      ],
+      "title": "TokenUsageEvent",
+      "type": "object"
+    },
+    "ToolCallEvent": {
+      "properties": {
+        "type": {
+          "const": "tool.call",
+          "default": "tool.call",
+          "title": "Type",
+          "type": "string"
+        },
+        "v": {
+          "default": "1",
+          "description": "schema version",
+          "title": "V",
+          "type": "string"
+        },
+        "session_id": {
+          "format": "uuid",
+          "title": "Session Id",
+          "type": "string"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Agent run identifier",
+          "title": "Run Id"
+        },
+        "seq": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "monotonic seq per session",
+          "title": "Seq"
+        },
+        "ts": {
+          "format": "date-time",
+          "title": "Ts",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "args": {
+          "title": "Args"
+        }
+      },
+      "required": [
+        "session_id",
+        "id",
+        "name",
+        "args"
+      ],
+      "title": "ToolCallEvent",
+      "type": "object"
+    },
+    "ToolResultEvent": {
+      "properties": {
+        "type": {
+          "const": "tool.result",
+          "default": "tool.result",
+          "title": "Type",
+          "type": "string"
+        },
+        "v": {
+          "default": "1",
+          "description": "schema version",
+          "title": "V",
+          "type": "string"
+        },
+        "session_id": {
+          "format": "uuid",
+          "title": "Session Id",
+          "type": "string"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Agent run identifier",
+          "title": "Run Id"
+        },
+        "seq": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "monotonic seq per session",
+          "title": "Seq"
+        },
+        "ts": {
+          "format": "date-time",
+          "title": "Ts",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "ok": {
+          "title": "Ok",
+          "type": "boolean"
+        },
+        "preview": {
+          "default": "",
+          "description": "short human-readable preview",
+          "title": "Preview",
+          "type": "string"
+        },
+        "full_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "S3 key or URL for full content",
+          "title": "Full Ref"
+        },
+        "duration_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration Ms"
+        }
+      },
+      "required": [
+        "session_id",
+        "id",
+        "ok"
+      ],
+      "title": "ToolResultEvent",
+      "type": "object"
+    }
+  },
+  "discriminator": {
+    "mapping": {
+      "artifact": "#/$defs/ArtifactEvent",
+      "error": "#/$defs/ErrorEvent",
+      "interrupt.ack": "#/$defs/InterruptAckEvent",
+      "message.delta": "#/$defs/MessageDeltaEvent",
+      "plan.update": "#/$defs/PlanUpdateEvent",
+      "screenshot": "#/$defs/ScreenshotEvent",
+      "status": "#/$defs/StatusEvent",
+      "thinking.delta": "#/$defs/ThinkingDeltaEvent",
+      "token.usage": "#/$defs/TokenUsageEvent",
+      "tool.call": "#/$defs/ToolCallEvent",
+      "tool.result": "#/$defs/ToolResultEvent"
+    },
+    "propertyName": "type"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/MessageDeltaEvent"
+    },
+    {
+      "$ref": "#/$defs/ThinkingDeltaEvent"
+    },
+    {
+      "$ref": "#/$defs/ToolCallEvent"
+    },
+    {
+      "$ref": "#/$defs/ToolResultEvent"
+    },
+    {
+      "$ref": "#/$defs/ScreenshotEvent"
+    },
+    {
+      "$ref": "#/$defs/ArtifactEvent"
+    },
+    {
+      "$ref": "#/$defs/PlanUpdateEvent"
+    },
+    {
+      "$ref": "#/$defs/StatusEvent"
+    },
+    {
+      "$ref": "#/$defs/TokenUsageEvent"
+    },
+    {
+      "$ref": "#/$defs/InterruptAckEvent"
+    },
+    {
+      "$ref": "#/$defs/ErrorEvent"
+    }
+  ]
+}

@@ -1,0 +1,178 @@
+# ============================================================
+#  LiteLLM Proxy Config — Somna AI
+#  暴露:
+#    - OpenAI 兼容:     http://litellm:4000/v1/*
+#    - Anthropic Messages（别名路由）:  SDK base_url = http://litellm:4000 → POST /v1/messages
+#    - /anthropic/v1/messages 为直通 api.anthropic.com，不用业务别名
+#  业务代码统一用 model_group_alias 里的别名，随时切底层模型。
+# ============================================================
+
+model_list:
+  # ======================== Kimi (Moonshot) ========================
+  - model_name: kimi-k2-0905
+    litellm_params:
+      model: openai/kimi-k2-0905-preview
+      api_base: https://api.moonshot.cn/v1
+      api_key: os.environ/MOONSHOT_API_KEY
+    model_info:
+      description: "Kimi K2 0905 preview - 256K ctx, strong agent/tool use"
+      max_tokens: 262144
+
+  - model_name: kimi-k2-turbo
+    litellm_params:
+      model: openai/kimi-k2-turbo-preview
+      api_base: https://api.moonshot.cn/v1
+      api_key: os.environ/MOONSHOT_API_KEY
+    model_info:
+      description: "Kimi K2 Turbo - faster variant"
+      max_tokens: 262144
+
+  - model_name: moonshot-v1-128k
+    litellm_params:
+      model: openai/moonshot-v1-128k
+      api_base: https://api.moonshot.cn/v1
+      api_key: os.environ/MOONSHOT_API_KEY
+    model_info:
+      max_tokens: 131072
+
+  # ======================== Qwen (DashScope) ========================
+  - model_name: qwen3-max
+    litellm_params:
+      model: openai/qwen3-max
+      api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+      api_key: os.environ/DASHSCOPE_API_KEY
+    model_info:
+      description: "Qwen3 Max (flagship)"
+
+  - model_name: qwen-plus
+    litellm_params:
+      model: openai/qwen-plus-latest
+      api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+      api_key: os.environ/DASHSCOPE_API_KEY
+
+  - model_name: qwen-turbo
+    litellm_params:
+      model: openai/qwen-turbo-latest
+      api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+      api_key: os.environ/DASHSCOPE_API_KEY
+
+  # ======================== DeepSeek ========================
+  - model_name: deepseek-chat
+    litellm_params:
+      model: openai/deepseek-chat
+      api_base: https://api.deepseek.com/v1
+      api_key: os.environ/DEEPSEEK_API_KEY
+    model_info:
+      description: "DeepSeek V3 - cheap + strong coding/tool"
+
+  - model_name: deepseek-reasoner
+    litellm_params:
+      model: openai/deepseek-reasoner
+      api_base: https://api.deepseek.com/v1
+      api_key: os.environ/DEEPSEEK_API_KEY
+    model_info:
+      description: "DeepSeek R1 - strong reasoning"
+
+  - model_name: deepseek-v4-flash
+    litellm_params:
+      model: openai/deepseek-v4-flash
+      api_base: https://api.deepseek.com/v1
+      api_key: os.environ/DEEPSEEK_API_KEY
+    model_info:
+      description: "DeepSeek V4 Flash — 文档 https://api-docs.deepseek.com/zh-cn/"
+
+  - model_name: deepseek-v4-pro
+    litellm_params:
+      model: openai/deepseek-v4-pro
+      api_base: https://api.deepseek.com/v1
+      api_key: os.environ/DEEPSEEK_API_KEY
+    model_info:
+      description: "DeepSeek V4 Pro — 文档 https://api-docs.deepseek.com/zh-cn/"
+
+  # ======================== Embeddings ========================
+  - model_name: qwen3-embedding
+    litellm_params:
+      model: openai/text-embedding-v3
+      api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+      api_key: os.environ/DASHSCOPE_API_KEY
+
+  - model_name: bge-m3
+    litellm_params:
+      model: openai/BAAI/bge-m3
+      api_base: https://api.siliconflow.cn/v1
+      api_key: os.environ/SILICONFLOW_API_KEY
+
+  # ======================== Reranker ========================
+  - model_name: bge-reranker-v2-m3
+    litellm_params:
+      model: openai/BAAI/bge-reranker-v2-m3
+      api_base: https://api.siliconflow.cn/v1
+      api_key: os.environ/SILICONFLOW_API_KEY
+
+  # ======================== (Optional) 真 Claude 兜底 ========================
+  # 如果填了 ANTHROPIC_API_KEY，才会生效
+  - model_name: claude-sonnet-4-5
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+# ------------------------------------------------------------
+# Router: 业务语义别名 + fallback 链 + 负载策略
+# ------------------------------------------------------------
+router_settings:
+  routing_strategy: simple-shuffle
+  num_retries: 2
+  timeout: 120
+  redis_host: os.environ/REDIS_HOST
+  redis_port: 6379
+
+  # 业务代码只用这些别名，底层模型随时替换
+  model_group_alias:
+    agent-planner:   kimi-k2-0905        # 规划
+    agent-executor:  kimi-k2-0905        # Agent loop 执行
+    agent-coder:     deepseek-chat       # 写代码 / 调试
+    agent-reasoner:  deepseek-reasoner   # 强推理
+    agent-longctx:   kimi-k2-0905        # 长文档 (256K)
+    agent-cheap:     qwen-turbo          # 摘要 / 分类 / compact
+    agent-embed:     qwen3-embedding     # 主 embedding
+    agent-rerank:    bge-reranker-v2-m3  # 重排
+
+  fallbacks:
+    # 别名在部分错误路径下会被当作 model_group；显式兜底到真实模型，避免 “No fallback for agent-executor”
+    - agent-executor:    [kimi-k2-0905]
+    - agent-planner:     [kimi-k2-0905]
+    - kimi-k2-0905:      [kimi-k2-turbo, qwen3-max, deepseek-chat]
+    - kimi-k2-turbo:     [kimi-k2-0905, qwen-plus]
+    - qwen3-max:         [qwen-plus, kimi-k2-0905]
+    - qwen-plus:         [qwen-turbo, deepseek-chat]
+    - qwen-turbo:        [qwen-plus]
+    - deepseek-chat:     [deepseek-v4-flash, kimi-k2-0905, qwen-plus]
+    - deepseek-reasoner: [deepseek-v4-pro, kimi-k2-0905]
+    - deepseek-v4-flash: [deepseek-chat, kimi-k2-turbo, qwen-plus]
+    - deepseek-v4-pro:   [deepseek-v4-flash, deepseek-reasoner, kimi-k2-0905]
+    - qwen3-embedding:   [bge-m3]
+    - bge-m3:            [qwen3-embedding]
+
+# ------------------------------------------------------------
+# 全局设置
+# ------------------------------------------------------------
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/LITELLM_DATABASE_URL
+  store_model_in_db: true
+  alerting: []
+  budget_duration: "30d"
+  max_budget: 500
+
+litellm_settings:
+  drop_params: true            # 国产模型不认的字段自动丢弃，保证兼容
+  request_timeout: 120
+  set_verbose: false
+  success_callback: ["langfuse"]
+  failure_callback: ["langfuse"]
+  cache: true
+  cache_params:
+    type: redis
+    host: os.environ/REDIS_HOST
+    port: 6379
+    namespace: "litellm"

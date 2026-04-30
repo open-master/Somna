@@ -1,0 +1,46 @@
+"use client";
+import { useEffect, useRef } from "react";
+
+import { ArtifactCard } from "./ArtifactCard";
+import { AssistantMessage } from "./AssistantMessage";
+import { ToolCallCard } from "./ToolCallCard";
+import { UserMessage } from "./UserMessage";
+import { useChatStore } from "@/lib/store/chat";
+
+export function MessageList() {
+  const messages = useChatStore((s) => s.messages);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages.length]);
+
+  return (
+    <div className="mx-auto w-full max-w-3xl px-4 space-y-4 py-4">
+      {messages.map((m) => {
+        switch (m.kind) {
+          case "user":
+            return <UserMessage key={m.id} text={m.text} />;
+          case "assistant":
+            return <AssistantMessage key={m.id} text={m.text} thinking={m.thinking} />;
+          case "tool":
+            return (
+              <ToolCallCard
+                key={m.id}
+                name={m.name}
+                args={m.args}
+                status={m.status}
+                preview={m.preview}
+                durationMs={m.durationMs}
+              />
+            );
+          case "artifact":
+            return <ArtifactCard key={m.id} name={m.name} mime={m.mime} url={m.url} />;
+          default:
+            return null;
+        }
+      })}
+      <div ref={bottomRef} />
+    </div>
+  );
+}
