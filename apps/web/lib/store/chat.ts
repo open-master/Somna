@@ -18,6 +18,8 @@ interface ChatState {
   messages: ChatMessage[];
   activeAssistantId: string | null;
   pushUser: (text: string) => void;
+  /** postMessage 失败时撤销最后一条乐观插入的用户消息 */
+  rollbackLastUserMessage: () => void;
   onMessageDelta: (e: MessageDeltaEvent) => void;
   onThinkingDelta: (e: ThinkingDeltaEvent) => void;
   onToolCall: (e: ToolCallEvent) => void;
@@ -36,6 +38,14 @@ export const useChatStore = create<ChatState>((set) => ({
         { kind: "user", id: `u_${Date.now()}`, text, createdAt: Date.now() },
       ],
     })),
+  rollbackLastUserMessage: () =>
+    set((s) => {
+      const m = s.messages;
+      if (m.length === 0) return s;
+      const last = m[m.length - 1];
+      if (last?.kind !== "user") return s;
+      return { messages: m.slice(0, -1) };
+    }),
   onMessageDelta: (e) =>
     set((s) => {
       const id = s.activeAssistantId ?? `a_${Date.now()}`;

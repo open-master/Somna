@@ -68,6 +68,21 @@ def test_blank_frame_is_clarify_only():
     assert frame["clarification_questions"]
 
 
+def test_framing_context_excludes_current_human_turn():
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    msgs = [
+        HumanMessage(content="为乔布斯和盖茨做词云"),
+        AIMessage(content="需要确认：1. 素材 2. 风格 3. 用途"),
+        HumanMessage(content="你来决定"),
+    ]
+    prior = tf_mod._prior_messages_for_framing(msgs)
+    assert len(prior) == 2
+    ctx = tf_mod.format_conversation_context_for_framing(prior)
+    assert "词云" in ctx
+    assert "你来决定" not in ctx
+
+
 @pytest.mark.asyncio
 async def test_task_frame_blank_user_skips_llm():
     sid = uuid4()

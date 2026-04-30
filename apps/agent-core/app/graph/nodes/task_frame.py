@@ -6,6 +6,7 @@ import json
 import re
 from typing import Any
 
+from langchain_core.messages import AIMessage, HumanMessage
 from somna_events import SessionPhase, StatusEvent, TaskFrameEvent
 
 from app.config import get_settings
@@ -57,6 +58,54 @@ def frame_for_blank_user_message() -> dict[str, Any]:
     out["effort_level"] = "low"
     out["reasoning_summary"] = _BLANK_USER_REASON
     return out
+
+
+def _lc_message_text(m: Any) -> str:
+    c = getattr(m, "content", "")
+    if isinstance(c, str):
+        return c.strip()
+    if isinstance(c, list):
+        parts: list[str] = []
+        for p in c:
+            if isinstance(p, dict) and p.get("type") == "text":
+                parts.append(str(p.get("text", "")))
+            else:
+                parts.append(str(p))
+        return "\n".join(parts).strip()
+    return str(c).strip()
+
+
+def _prior_messages_for_framing(messages: list[Any]) -> list[Any]:
+    """本轮用户输入在 `user_message` 与 messages 末条 Human 重复；定调上文不含末条 Human。"""
+    if not messages:
+        return []
+    last = messages[-1]
+    if isinstance(last, HumanMessage):
+        return list(messages[:-1])
+    return list(messages)
+
+
+def format_conversation_context_for_framing(messages: list[Any], *, max_chars: int = 8000) -> str:
+    """供任务定调模型阅读的简体对话摘录。"""
+    lines: list[str] = []
+    for m in messages:
+        if isinstance(m, HumanMessage):
+            t = _lc_message_text(m)
+            if t:
+                lines.append(f"用户：{t}")
+        elif isinstance(m, AIMessage):
+            t = _lc_message_text(m)
+            if t:
+                cap = 2800
+                if len(t) > cap:
+                    t = t[:cap] + "…"
+                lines.append(f"助手：{t}")
+    if not lines:
+        return "（尚无更早对话；本轮为首次输入。）"
+    blob = "\n".join(lines)
+    if len(blob) > max_chars:
+        blob = "…\n" + blob[-max_chars:]
+    return blob
 
 
 def _coerce_str_list(raw: Any) -> list[str]:
@@ -223,7 +272,9 @@ async def task_frame_node(state: SessionState) -> SessionState:
         await _emit_task_frame_ui(session_id, run_id, frame)
         return {"task_frame": frame}
 
-    prompt = render(template, user_message=user_message)
+    prior = _prior_messages_for_framing(list(state.get("messages") or []))
+    conv_ctx = format_conversation_context_for_framing(prior)
+    prompt = render(template, user_message=user_message, conversation_context=conv_ctx)
     await emit(
         StatusEvent(
             session_id=session_id,

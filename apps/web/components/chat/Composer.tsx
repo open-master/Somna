@@ -14,9 +14,12 @@ export function Composer({ sessionId }: { sessionId: string }) {
   const [sending, setSending] = useState(false);
   const phase = useSessionStore((s) => s.phase);
   const pushUser = useChatStore((s) => s.pushUser);
+  const rollbackLastUserMessage = useChatStore((s) => s.rollbackLastUserMessage);
   const setPhase = useSessionStore((s) => s.setPhase);
   const setRunId = useSessionStore((s) => s.setRunId);
   const upsertSession = useSessionStore((s) => s.upsertSession);
+
+  const [sendError, setSendError] = useState<string | null>(null);
 
   const isBusy =
     sending ||
@@ -28,6 +31,7 @@ export function Composer({ sessionId }: { sessionId: string }) {
   const send = useCallback(async () => {
     const value = text.trim();
     if (!value || isBusy) return;
+    setSendError(null);
     setSending(true);
     pushUser(value);
     setText("");
@@ -45,10 +49,14 @@ export function Composer({ sessionId }: { sessionId: string }) {
         runId: resp.run_id,
         updatedAt: new Date().toISOString(),
       });
+    } catch (e) {
+      rollbackLastUserMessage();
+      setText(value);
+      setSendError(e instanceof Error ? e.message : "发送失败");
     } finally {
       setSending(false);
     }
-  }, [text, isBusy, sessionId, pushUser, setPhase, setRunId, upsertSession]);
+  }, [text, isBusy, sessionId, pushUser, rollbackLastUserMessage, setPhase, setRunId, upsertSession]);
 
   const onKey = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -72,13 +80,16 @@ export function Composer({ sessionId }: { sessionId: string }) {
           className="border-0 shadow-none min-h-[60px] px-4 py-3 text-sm focus-visible:ring-0 resize-none"
         />
         <div className="flex items-center justify-between px-3 pb-2">
-          <div className="flex items-center gap-1">
-            <Button size="icon" variant="ghost" aria-label="attach">
-              <Paperclip className="size-4" />
-            </Button>
-            <span className="text-xs text-muted-foreground">
-              Enter 发送 · Shift + Enter 换行
-            </span>
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <div className="flex items-center gap-1">
+              <Button size="icon" variant="ghost" aria-label="attach">
+                <Paperclip className="size-4" />
+              </Button>
+              <span className="text-xs text-muted-foreground">
+                Enter 发送 · Shift + Enter 换行
+              </span>
+            </div>
+            {sendError ? <p className="pl-1 text-xs text-destructive">{sendError}</p> : null}
           </div>
           <Button size="sm" onClick={() => void send()} disabled={isBusy || !text.trim()} className="gap-1">
             <Send className="size-3.5" /> 发送
