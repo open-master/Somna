@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 
 import { ArtifactCard } from "./ArtifactCard";
 import { AssistantMessage } from "./AssistantMessage";
@@ -7,28 +7,17 @@ import { ToolCallCard } from "./ToolCallCard";
 import { UserMessage } from "./UserMessage";
 import { useChatStore } from "@/lib/store/chat";
 
-export function MessageList({
-  sessionId,
-  omitMessageId = null,
-}: {
-  sessionId: string;
-  omitMessageId?: string | null;
-}) {
+export function MessageList({ sessionId }: { sessionId: string }) {
   const messages = useChatStore((s) => s.messages);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  const visible = useMemo(() => {
-    if (omitMessageId === null) return messages;
-    return messages.filter((m) => m.id !== omitMessageId);
-  }, [messages, omitMessageId]);
-
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [visible.length]);
+  }, [messages.length]);
 
   return (
     <div className="mx-auto w-full max-w-3xl px-4 space-y-4 py-4">
-      {visible.map((m) => {
+      {messages.map((m) => {
         switch (m.kind) {
           case "user":
             return <UserMessage key={m.id} text={m.text} />;

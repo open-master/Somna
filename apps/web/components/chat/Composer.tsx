@@ -52,10 +52,10 @@ export function Composer({ sessionId }: { sessionId: string }) {
 
   const onKey = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault();
-        void send();
-      }
+      if (e.key !== "Enter" || e.shiftKey) return;
+      if (e.nativeEvent.isComposing) return;
+      e.preventDefault();
+      void send();
     },
     [send],
   );
@@ -77,7 +77,7 @@ export function Composer({ sessionId }: { sessionId: string }) {
               <Paperclip className="size-4" />
             </Button>
             <span className="text-xs text-muted-foreground">
-              Cmd/Ctrl + Enter 发送
+              Enter 发送 · Shift + Enter 换行
             </span>
           </div>
           <Button size="sm" onClick={() => void send()} disabled={isBusy || !text.trim()} className="gap-1">
