@@ -20,6 +20,8 @@ function statusFromPhase(phase: string): string {
     case "executing":
     case "compacting":
       return "running";
+    case "waiting_user":
+      return "active";
     case "done":
       return "done";
     case "error":

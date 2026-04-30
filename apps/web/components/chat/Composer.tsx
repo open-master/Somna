@@ -18,7 +18,12 @@ export function Composer({ sessionId }: { sessionId: string }) {
   const setRunId = useSessionStore((s) => s.setRunId);
   const upsertSession = useSessionStore((s) => s.upsertSession);
 
-  const isBusy = sending || (phase !== "idle" && phase !== "done" && phase !== "error");
+  const isBusy =
+    sending ||
+    (phase !== "idle" &&
+      phase !== "done" &&
+      phase !== "error" &&
+      phase !== "waiting_user");
 
   const send = useCallback(async () => {
     const value = text.trim();

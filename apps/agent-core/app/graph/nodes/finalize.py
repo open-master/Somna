@@ -38,14 +38,26 @@ async def finalize_node(state: SessionState) -> SessionState:
         )
         final_status = "error"
     else:
-        await emit(
-            StatusEvent(
-                session_id=session_id,
-                run_id=run_id,
-                phase=SessionPhase.done,
-                message="完成",
+        frame = state.get("task_frame") or {}
+        if frame.get("needs_clarification"):
+            # 本轮已输出追问，会话仍在等待用户补充，不应标记为「整个任务已完成」。
+            await emit(
+                StatusEvent(
+                    session_id=session_id,
+                    run_id=run_id,
+                    phase=SessionPhase.waiting_user,
+                    message="等待您补充信息后再继续",
+                )
             )
-        )
+        else:
+            await emit(
+                StatusEvent(
+                    session_id=session_id,
+                    run_id=run_id,
+                    phase=SessionPhase.done,
+                    message="完成",
+                )
+            )
         final_status = "active"  # session remains active; run is done
 
     pool = get_pool()
