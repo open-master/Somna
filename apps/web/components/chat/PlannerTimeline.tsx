@@ -1,5 +1,5 @@
 "use client";
-import { Check, Circle, Loader2, XCircle, Minus } from "lucide-react";
+import { Check, ChevronDown, Circle, Loader2, Minus, XCircle } from "lucide-react";
 
 import { usePlanStore } from "@/lib/store/plan";
 import { cn } from "@/lib/utils/cn";
@@ -12,14 +12,20 @@ export function PlannerTimeline() {
 
   return (
     <details className="mx-auto w-full max-w-3xl rounded-lg border bg-card px-3 py-2 group">
-      <summary className="cursor-pointer flex items-center gap-2 text-sm font-medium list-none select-none">
-        <span className="inline-flex size-5 items-center justify-center rounded-md bg-primary/10 text-primary text-xs">
+      <summary
+        className={cn(
+          "flex cursor-pointer list-none flex-wrap items-center gap-2 text-sm font-medium select-none",
+          "[&::-webkit-details-marker]:hidden",
+        )}
+      >
+        <span className="inline-flex size-5 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary text-xs">
           {done}
         </span>
         <span>
-          任务计划（<span className="font-mono">{done}</span>/<span className="font-mono">{todos.length}</span> 已完成）
+          任务计划（<span className="font-mono">{done}</span>/<span className="font-mono">{todos.length}</span>{" "}
+          已完成）
         </span>
-        <span className="text-xs text-muted-foreground ml-auto">点击展开</span>
+        <ChevronDown className="ml-auto size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
       </summary>
       <ol className="mt-2 space-y-1 text-sm">
         {todos.map((t) => (
