@@ -15,7 +15,6 @@ import {
 } from "lucide-react";
 
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { useChatStore } from "@/lib/store/chat";
 import { useLiveStore } from "@/lib/store/live";
 import { cn } from "@/lib/utils/cn";
@@ -187,19 +186,23 @@ export function DeliverablesHub({ sessionId }: { sessionId: string }) {
   const hasMore = rows.length > PREVIEW_LIMIT;
 
   return (
-    <Card className="relative z-10 border-primary/20 bg-card/95 shadow-sm animate-fade-in">
-      <CardContent className="p-3 sm:p-4">
-        <div className="mb-2 flex flex-wrap items-center gap-2">
-          <Package className="size-4 text-primary" />
-          <h3 className="text-sm font-semibold">📁 生成的文件</h3>
-          <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary tabular-nums">
-            {rows.length} 项
-          </span>
-          <span className="text-[11px] text-muted-foreground">
-            本会话汇总 · 随 artifact 与消息同步 · 不依赖模型手写表格
-          </span>
-        </div>
+    <details className="relative z-10 mx-auto w-full max-w-3xl rounded-lg border border-primary/20 bg-card/95 px-3 py-2 shadow-sm animate-fade-in group">
+      <summary
+        className={cn(
+          "flex cursor-pointer list-none flex-wrap items-center gap-2 text-sm font-medium select-none",
+          "[&::-webkit-details-marker]:hidden",
+        )}
+      >
+        <Package className="size-4 shrink-0 text-primary" />
+        <span>📁 生成的文件</span>
+        <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary tabular-nums">
+          {rows.length} 项
+        </span>
+        <span className="text-xs text-muted-foreground max-sm:hidden">点击展开 · 收起可留出聊天/执行过程</span>
+        <ChevronDown className="ml-auto size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
+      </summary>
 
+      <div className="mt-2 space-y-2">
         {rows.length === 0 ? (
           <p className="rounded-md border border-dashed bg-muted/20 px-3 py-4 text-xs leading-relaxed text-muted-foreground">
             暂无已索引的交付物（或事件回放尚未到达）。右侧「文件」里若有
@@ -207,10 +210,10 @@ export function DeliverablesHub({ sessionId }: { sessionId: string }) {
           </p>
         ) : (
           <>
-            <div className="mb-1 text-[11px] text-muted-foreground">
-              点击<strong className="font-medium text-foreground">文件名</strong>或
-              <strong className="font-medium text-foreground">说明</strong>在新标签页打开预览；「下载」保存到本地。
-            </div>
+            <p className="text-[11px] text-muted-foreground">
+              本会话汇总 · 随 artifact 与消息同步。点击<strong className="font-medium text-foreground">文件名</strong>
+              或<strong className="font-medium text-foreground">说明</strong>预览；「下载」保存到本地。
+            </p>
 
             <div className="overflow-x-auto rounded-md border border-border/80">
               <table className="w-full min-w-[32rem] border-collapse text-sm">
@@ -306,13 +309,13 @@ export function DeliverablesHub({ sessionId }: { sessionId: string }) {
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="mt-2 h-8 w-full gap-1 text-xs text-muted-foreground"
+                className="h-8 w-full gap-1 text-xs text-muted-foreground"
                 onClick={() => setExpanded((e) => !e)}
               >
                 {expanded ? (
                   <>
                     <ChevronUp className="size-3.5" />
-                    收起
+                    收起列表
                   </>
                 ) : (
                   <>
@@ -324,7 +327,7 @@ export function DeliverablesHub({ sessionId }: { sessionId: string }) {
             ) : null}
           </>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </details>
   );
 }
