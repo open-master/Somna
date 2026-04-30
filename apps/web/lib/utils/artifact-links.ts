@@ -22,3 +22,13 @@ export function artifactDownloadUrl(url: string): string {
   u.searchParams.delete("inline");
   return `${u.pathname}${u.search}`;
 }
+
+/** 从 `/artifacts/content?path=` 解析沙盒相对路径（用于去重与合并）。 */
+export function parseArtifactPathFromUrl(url: string): string | null {
+  try {
+    const p = parsed(url).searchParams.get("path");
+    return p ? decodeURIComponent(p) : null;
+  } catch {
+    return null;
+  }
+}

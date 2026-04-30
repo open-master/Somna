@@ -15,8 +15,16 @@ export function ChatCenter({ sessionId }: { sessionId: string }) {
 
   return (
     <div className="flex flex-1 min-h-0 flex-col bg-[linear-gradient(180deg,transparent,hsl(var(--muted)/0.28))]">
+      {/* 固定在中间栏顶部：与 Manus 类似，任务计划 + 交付物总览不随下方聊天滚动消失 */}
+      <div className="shrink-0 border-b border-border/70 bg-background/95 backdrop-blur-md supports-[backdrop-filter]:bg-background/80">
+        <div className="mx-auto w-full max-w-3xl space-y-2 px-4 py-2">
+          <PlannerTimeline />
+          <DeliverablesHub sessionId={sessionId} />
+        </div>
+      </div>
+
       <ScrollArea className="flex-1 min-h-0">
-        <div className="mx-auto w-full max-w-4xl px-4 pt-5">
+        <div className="mx-auto w-full max-w-4xl px-4 pt-4">
           {messages.length === 0 ? (
             <Card className="mb-4 overflow-hidden rounded-[28px] border-primary/10 bg-background/85 shadow-sm">
               <CardContent className="p-0">
@@ -32,7 +40,7 @@ export function ChatCenter({ sessionId }: { sessionId: string }) {
                       给出一个目标，Somna 会自己规划、执行、反思并交付结果。
                     </h2>
                     <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
-                      现在这页已经不只是聊天窗口，而是一个 Agent 工作区。左边管理会话与任务，右边实时观察屏幕、文件与轨迹，中间负责交互与交付。
+                      上方为「当前交付物」汇总（随执行更新）；右侧可观察沙盒与轨迹。开始后消息在下方滚动显示。
                     </p>
                   </div>
                   <div className="rounded-3xl border bg-muted/35 p-4 text-sm">
@@ -50,10 +58,6 @@ export function ChatCenter({ sessionId }: { sessionId: string }) {
               </CardContent>
             </Card>
           ) : null}
-          <PlannerTimeline />
-        </div>
-        <div className="mx-auto w-full max-w-3xl px-4">
-          <DeliverablesHub sessionId={sessionId} />
         </div>
         <MessageList sessionId={sessionId} />
       </ScrollArea>

@@ -8,8 +8,9 @@ import remarkGfm from "remark-gfm";
 import { Download, ExternalLink, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils/cn";
 import { useLiveStore } from "@/lib/store/live";
-import { artifactDownloadUrl, artifactPreviewUrl } from "@/lib/utils/artifact-links";
+import { artifactDownloadUrl, artifactPreviewUrl, parseArtifactPathFromUrl } from "@/lib/utils/artifact-links";
 import {
   resolveDeliverableUrl,
   tableHeaderLooksLikeFileManifest,
@@ -86,10 +87,52 @@ function DeliverablesDataRow({
     () => resolveDeliverableUrl(sessionId, firstPlain, artifacts, fileItems),
     [sessionId, firstPlain, artifacts, fileItems],
   );
+  const downloadName =
+    parseArtifactPathFromUrl(url ?? "")?.split("/").pop() ||
+    firstPlain.match(/[\w.*-]+\.(?:mp4|webm|png|jpe?g|gif|webp|md|pdf|html?|pptx?|mp3|wav)/i)?.[0] ||
+    "download";
 
   return (
     <tr>
-      {children}
+      {cells.map((cell, i) => {
+        if (i === 0 && url && React.isValidElement(cell)) {
+          const props = cell.props as React.TdHTMLAttributes<HTMLTableCellElement> & {
+            children?: React.ReactNode;
+          };
+          return (
+            <td key={cell.key ?? "c0"} {...props} className={cn(props.className)}>
+              <a
+                href={artifactPreviewUrl(url)}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="点击预览"
+                className="block rounded-sm px-1 py-0.5 -mx-1 text-inherit no-underline outline-none ring-offset-background hover:bg-accent/70 hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {props.children}
+              </a>
+            </td>
+          );
+        }
+        if (i === 1 && url && React.isValidElement(cell)) {
+          const props = cell.props as React.TdHTMLAttributes<HTMLTableCellElement> & {
+            children?: React.ReactNode;
+          };
+          return (
+            <td key={cell.key ?? "c1"} {...props} className={cn(props.className)}>
+              <a
+                href={artifactPreviewUrl(url)}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="点击预览"
+                className="block rounded-sm px-1 py-0.5 -mx-1 text-inherit no-underline outline-none ring-offset-background hover:bg-accent/70 hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {props.children}
+              </a>
+            </td>
+          );
+        }
+        return cell;
+      })}
       <td className="align-middle whitespace-nowrap text-right not-prose border-l border-border/70">
         {url ? (
           <span className="inline-flex flex-wrap items-center justify-end gap-1 px-1">
@@ -99,12 +142,15 @@ function DeliverablesDataRow({
                 预览
               </a>
             </Button>
-            <Button asChild size="sm" variant="ghost" className="h-7 gap-1 px-2 text-xs">
-              <a href={artifactDownloadUrl(url)} download>
-                <Download className="size-3" />
-                下载
-              </a>
-            </Button>
+            <a
+              href={artifactDownloadUrl(url)}
+              download={downloadName}
+              className="inline-flex h-7 items-center justify-center gap-1 whitespace-nowrap rounded-md px-2 text-xs font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              title="下载"
+            >
+              <Download className="size-3" />
+              下载
+            </a>
           </span>
         ) : (
           <span className="pr-2 text-xs text-muted-foreground">—</span>
