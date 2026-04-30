@@ -1,11 +1,25 @@
 import { Download, FileText, ExternalLink } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { artifactDownloadUrl, artifactPreviewUrl } from "@/lib/utils/artifact-links";
+import { artifactDownloadUrl, artifactPreviewUrl, parseArtifactPathFromUrl } from "@/lib/utils/artifact-links";
+import { sessionArtifactContentUrl } from "@/lib/utils/deliverable-resolve";
 
-export function ArtifactCard({ name, mime, url }: { name: string; mime: string; url: string }) {
-  const preview = artifactPreviewUrl(url);
-  const download = artifactDownloadUrl(url);
+export function ArtifactCard({
+  sessionId,
+  name,
+  mime,
+  url,
+}: {
+  sessionId: string;
+  name: string;
+  mime: string;
+  url: string;
+}) {
+  const fromQuery = parseArtifactPathFromUrl(url);
+  const rel = (fromQuery && fromQuery.trim()) || name.replace(/^\.\//, "");
+  const fetchUrl = sessionArtifactContentUrl(sessionId, rel);
+  const preview = artifactPreviewUrl(fetchUrl);
+  const download = artifactDownloadUrl(fetchUrl);
   return (
     <div className="flex items-center gap-3 rounded-lg border bg-card px-3 py-2 animate-fade-in">
       <a

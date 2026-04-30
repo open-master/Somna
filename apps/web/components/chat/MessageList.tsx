@@ -35,7 +35,7 @@ export function MessageList({ sessionId }: { sessionId: string }) {
               />
             );
           case "artifact":
-            return <ArtifactCard key={m.id} name={m.name} mime={m.mime} url={m.url} />;
+            return <ArtifactCard key={m.id} sessionId={sessionId} name={m.name} mime={m.mime} url={m.url} />;
           default:
             return null;
         }

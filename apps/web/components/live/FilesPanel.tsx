@@ -3,9 +3,20 @@ import { Download, ExternalLink, FileText, FolderTree } from "lucide-react";
 
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useLiveStore } from "@/lib/store/live";
-import { artifactDownloadUrl, artifactPreviewUrl } from "@/lib/utils/artifact-links";
+import { artifactDownloadUrl, artifactPreviewUrl, parseArtifactPathFromUrl } from "@/lib/utils/artifact-links";
 import { sessionArtifactContentUrl } from "@/lib/utils/deliverable-resolve";
 import { isSessionArtifactRelativePath } from "@/lib/utils/workspace-path";
+
+function artifactItemFetchUrl(
+  sessionId: string,
+  f: { name: string; description?: string; url: string },
+): string {
+  const d = (f.description ?? "").trim().replace(/^\.\//, "");
+  if (d) return sessionArtifactContentUrl(sessionId, d);
+  const fromUrl = parseArtifactPathFromUrl(f.url);
+  if (fromUrl) return sessionArtifactContentUrl(sessionId, fromUrl);
+  return sessionArtifactContentUrl(sessionId, f.name.replace(/^\.\//, ""));
+}
 
 export function FilesPanel({ sessionId }: { sessionId: string }) {
   const artifacts = useLiveStore((s) => s.artifacts);
@@ -18,10 +29,12 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
           <p className="text-xs text-muted-foreground">暂无产出或文件轨迹。</p>
         ) : (
           <>
-            {artifacts.map((f) => (
+            {artifacts.map((f) => {
+              const fetchUrl = artifactItemFetchUrl(sessionId, f);
+              return (
               <a
                 key={f.id}
-                href={artifactPreviewUrl(f.url)}
+                href={artifactPreviewUrl(fetchUrl)}
                 target="_blank"
                 rel="noreferrer"
                 className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-accent text-sm"
@@ -30,7 +43,8 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
                 <span className="flex-1 truncate">{f.name}</span>
                 <span className="text-xs text-muted-foreground">{f.mime}</span>
               </a>
-            ))}
+            );
+            })}
             {fileItems.length > 0 ? (
               <div className="pt-2">
                 <div className="mb-2 flex items-center gap-2 text-[11px] uppercase tracking-wide text-muted-foreground">

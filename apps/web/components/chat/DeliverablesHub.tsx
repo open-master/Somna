@@ -69,14 +69,23 @@ function RowIcon({ mime, name }: { mime: string; name: string }) {
   return <FileText className="size-4 shrink-0 text-muted-foreground" />;
 }
 
-/** live 列表已新→旧；同一路径只保留第一条（最新）。 */
+/** 与后端 _artifact_path_candidates 对齐：优先 description，其次 URL 的 path=，最后 basename。 */
+function artifactRelPath(a: { name: string; description?: string; url: string }): string {
+  const d = normalizePath(a.description ?? "");
+  if (d) return d;
+  const fromUrl = parseArtifactPathFromUrl(a.url);
+  if (fromUrl) return normalizePath(fromUrl);
+  return normalizePath(a.name);
+}
+
+/** live 列表已新→旧；同一沙盒相对路径只保留一条。 */
 function dedupeLiveArtifacts(
   artifacts: { name: string; description?: string; mime: string; url: string; ts: number }[],
 ) {
   const seen = new Set<string>();
   const out: typeof artifacts = [];
   for (const a of artifacts) {
-    const key = normalizePath(a.description ?? "") || a.name;
+    const key = artifactRelPath(a);
     if (!key || seen.has(key)) continue;
     seen.add(key);
     out.push(a);
@@ -121,15 +130,15 @@ export function DeliverablesHub({ sessionId }: { sessionId: string }) {
     const covered = new Set<string>();
 
     for (const a of dedupedLive) {
-      const key = normalizePath(a.description ?? "") || normalizePath(a.name);
+      const key = artifactRelPath(a);
       if (!key) continue;
       covered.add(key);
       put(key, {
         key,
-        name: a.name,
+        name: a.name?.includes("/") ? (key.split("/").pop() ?? a.name) : a.name,
         desc: friendlyDesc(a.mime, a.name, "artifact"),
         mime: a.mime,
-        url: a.url,
+        url: sessionArtifactContentUrl(sessionId, key),
         ts: a.ts,
         kind: "artifact",
       });
@@ -137,16 +146,16 @@ export function DeliverablesHub({ sessionId }: { sessionId: string }) {
 
     for (const m of messages) {
       if (m.kind !== "artifact") continue;
-      const path = parseArtifactPathFromUrl(m.url);
-      const key = path ? normalizePath(path) : normalizePath(m.name);
+      const pathFromUrl = parseArtifactPathFromUrl(m.url);
+      const key = (pathFromUrl ? normalizePath(pathFromUrl) : "") || normalizePath(m.name);
       if (!key) continue;
       covered.add(key);
       put(key, {
         key,
-        name: m.name,
+        name: key.includes("/") ? (key.split("/").pop() ?? m.name) : m.name,
         desc: friendlyDesc(m.mime, m.name, "artifact"),
         mime: m.mime,
-        url: m.url,
+        url: sessionArtifactContentUrl(sessionId, key),
         ts: m.createdAt,
         kind: "artifact",
       });
@@ -173,8 +182,6 @@ export function DeliverablesHub({ sessionId }: { sessionId: string }) {
     return list;
   }, [artifacts, fileItems, messages, sessionId]);
 
-  if (rows.length === 0) return null;
-
   const featured = pickFeaturedKey(rows);
   const shown = expanded ? rows : rows.slice(0, PREVIEW_LIMIT);
   const hasMore = rows.length > PREVIEW_LIMIT;
@@ -193,121 +200,130 @@ export function DeliverablesHub({ sessionId }: { sessionId: string }) {
           </span>
         </div>
 
-        <div className="mb-1 text-[11px] text-muted-foreground">
-          点击<strong className="font-medium text-foreground">文件名</strong>或
-          <strong className="font-medium text-foreground">说明</strong>在新标签页打开预览；「下载」保存到本地。
-        </div>
+        {rows.length === 0 ? (
+          <p className="rounded-md border border-dashed bg-muted/20 px-3 py-4 text-xs leading-relaxed text-muted-foreground">
+            暂无已索引的交付物（或事件回放尚未到达）。右侧「文件」里若有
+            artifact/轨迹，任务结束后一般会列出；若长时间仍为空，请刷新页面以重放事件。
+          </p>
+        ) : (
+          <>
+            <div className="mb-1 text-[11px] text-muted-foreground">
+              点击<strong className="font-medium text-foreground">文件名</strong>或
+              <strong className="font-medium text-foreground">说明</strong>在新标签页打开预览；「下载」保存到本地。
+            </div>
 
-        <div className="overflow-x-auto rounded-md border border-border/80">
-          <table className="w-full min-w-[32rem] border-collapse text-sm">
-            <thead>
-              <tr className="border-b border-border bg-muted/40 text-left text-xs font-medium text-muted-foreground">
-                <th className="px-3 py-2">文件</th>
-                <th className="px-3 py-2">说明</th>
-                <th className="w-[1%] whitespace-nowrap px-3 py-2 text-right">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {shown.map((r) => {
-                const preview = artifactPreviewUrl(r.url);
-                const download = artifactDownloadUrl(r.url);
-                const isFeatured = featured === r.key;
-                return (
-                  <tr
-                    key={r.key}
-                    className={
-                      isFeatured
-                        ? "border-b border-border/60 bg-emerald-500/5"
-                        : "border-b border-border/60"
-                    }
-                  >
-                    <td className="px-3 py-2 align-middle">
-                      <a
-                        href={preview}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        title="点击预览"
-                        className="group flex max-w-full cursor-pointer items-center gap-2 rounded-md px-1 py-1 -mx-1 text-left no-underline outline-none ring-offset-background transition-colors hover:bg-accent/70 focus-visible:ring-2 focus-visible:ring-ring"
-                      >
-                        <RowIcon mime={r.mime} name={r.name} />
-                        <span className="font-mono text-xs font-medium break-all text-foreground underline-offset-2 group-hover:text-primary group-hover:underline">
-                          {r.name}
-                        </span>
-                        {isFeatured ? (
-                          <CheckCircle2
-                            className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400"
-                            aria-label="主推交付"
-                          />
-                        ) : null}
-                      </a>
-                    </td>
-                    <td className="max-w-[14rem] px-3 py-2 align-middle text-xs">
-                      <a
-                        href={preview}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        title="点击预览"
-                        className="block cursor-pointer rounded-md px-1 py-1 -mx-1 text-muted-foreground no-underline outline-none ring-offset-background transition-colors hover:bg-accent/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                      >
-                        {isFeatured ? (
-                          <span className="font-medium text-foreground">✅ 最终成片 / 主推交付 · </span>
-                        ) : null}
-                        <span className="underline-offset-2 hover:underline">{r.desc}</span>
-                      </a>
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-2 text-right align-middle">
-                      <div className="inline-flex flex-wrap justify-end gap-1">
-                        <a
-                          href={preview}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className={cn(
-                            buttonVariants({ variant: "outline", size: "sm" }),
-                            "h-7 cursor-pointer gap-1 px-2 text-xs no-underline",
-                          )}
-                        >
-                          <ExternalLink className="size-3 shrink-0" />
-                          预览
-                        </a>
-                        <a
-                          href={download}
-                          download={r.name}
-                          className="inline-flex h-7 cursor-pointer items-center justify-center gap-1 whitespace-nowrap rounded-md px-2 text-xs font-medium text-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                          title="下载到本地"
-                        >
-                          <Download className="size-3" />
-                          下载
-                        </a>
-                      </div>
-                    </td>
+            <div className="overflow-x-auto rounded-md border border-border/80">
+              <table className="w-full min-w-[32rem] border-collapse text-sm">
+                <thead>
+                  <tr className="border-b border-border bg-muted/40 text-left text-xs font-medium text-muted-foreground">
+                    <th className="px-3 py-2">文件</th>
+                    <th className="px-3 py-2">说明</th>
+                    <th className="w-[1%] whitespace-nowrap px-3 py-2 text-right">操作</th>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                </thead>
+                <tbody>
+                  {shown.map((r) => {
+                    const preview = artifactPreviewUrl(r.url);
+                    const download = artifactDownloadUrl(r.url);
+                    const isFeatured = featured === r.key;
+                    return (
+                      <tr
+                        key={r.key}
+                        className={
+                          isFeatured
+                            ? "border-b border-border/60 bg-emerald-500/5"
+                            : "border-b border-border/60"
+                        }
+                      >
+                        <td className="px-3 py-2 align-middle">
+                          <a
+                            href={preview}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="点击预览"
+                            className="group flex max-w-full cursor-pointer items-center gap-2 rounded-md px-1 py-1 -mx-1 text-left no-underline outline-none ring-offset-background transition-colors hover:bg-accent/70 focus-visible:ring-2 focus-visible:ring-ring"
+                          >
+                            <RowIcon mime={r.mime} name={r.name} />
+                            <span className="font-mono text-xs font-medium break-all text-foreground underline-offset-2 group-hover:text-primary group-hover:underline">
+                              {r.name}
+                            </span>
+                            {isFeatured ? (
+                              <CheckCircle2
+                                className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400"
+                                aria-label="主推交付"
+                              />
+                            ) : null}
+                          </a>
+                        </td>
+                        <td className="max-w-[14rem] px-3 py-2 align-middle text-xs">
+                          <a
+                            href={preview}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="点击预览"
+                            className="block cursor-pointer rounded-md px-1 py-1 -mx-1 text-muted-foreground no-underline outline-none ring-offset-background transition-colors hover:bg-accent/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                          >
+                            {isFeatured ? (
+                              <span className="font-medium text-foreground">✅ 最终成片 / 主推交付 · </span>
+                            ) : null}
+                            <span className="underline-offset-2 hover:underline">{r.desc}</span>
+                          </a>
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-2 text-right align-middle">
+                          <div className="inline-flex flex-wrap justify-end gap-1">
+                            <a
+                              href={preview}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className={cn(
+                                buttonVariants({ variant: "outline", size: "sm" }),
+                                "h-7 cursor-pointer gap-1 px-2 text-xs no-underline",
+                              )}
+                            >
+                              <ExternalLink className="size-3 shrink-0" />
+                              预览
+                            </a>
+                            <a
+                              href={download}
+                              download={r.name}
+                              className="inline-flex h-7 cursor-pointer items-center justify-center gap-1 whitespace-nowrap rounded-md px-2 text-xs font-medium text-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                              title="下载到本地"
+                            >
+                              <Download className="size-3" />
+                              下载
+                            </a>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
 
-        {hasMore ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="mt-2 h-8 w-full gap-1 text-xs text-muted-foreground"
-            onClick={() => setExpanded((e) => !e)}
-          >
-            {expanded ? (
-              <>
-                <ChevronUp className="size-3.5" />
-                收起
-              </>
-            ) : (
-              <>
-                <ChevronDown className="size-3.5" />
-                查看全部（{rows.length}）
-              </>
-            )}
-          </Button>
-        ) : null}
+            {hasMore ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="mt-2 h-8 w-full gap-1 text-xs text-muted-foreground"
+                onClick={() => setExpanded((e) => !e)}
+              >
+                {expanded ? (
+                  <>
+                    <ChevronUp className="size-3.5" />
+                    收起
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown className="size-3.5" />
+                    查看全部（{rows.length}）
+                  </>
+                )}
+              </Button>
+            ) : null}
+          </>
+        )}
       </CardContent>
     </Card>
   );

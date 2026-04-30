@@ -15,10 +15,12 @@ from __future__ import annotations
 import base64
 import json
 import mimetypes
+import re
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Annotated, Any
 from urllib.parse import quote as url_quote
+from urllib.parse import unquote
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
@@ -256,6 +258,39 @@ async def interrupt_session(sid: uuid.UUID, reason: str = "user_interrupt") -> I
     return InterruptResp(interrupted=True, run_id=row["run_id"])
 
 
+def _artifact_path_candidates(raw: str) -> list[str]:
+    """沙盒内相对路径候选：兼容仅 basename、缺 artifacts/ 前缀、以及宿主机 sandbox 绝对路径。"""
+    s = unquote((raw or "").strip()).replace("\\", "/")
+    if not s:
+        return []
+    while s.startswith("./"):
+        s = s[2:]
+    m = re.search(r"/sandboxes/[0-9a-fA-F-]{8,}/", s)
+    if m:
+        s = s[m.end() :].lstrip("./")
+    s = s.lstrip("/")
+    if not s or ".." in PurePosixPath(s).parts:
+        return []
+
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def add(p: str) -> None:
+        p = p.strip().lstrip("./")
+        if not p or ".." in PurePosixPath(p).parts or p in seen:
+            return
+        seen.add(p)
+        out.append(p)
+
+    add(s)
+    name = PurePosixPath(s).name
+    if name:
+        if name != s:
+            add(name)
+        add(f"artifacts/{name}")
+    return out
+
+
 @router.get("/{sid}/artifacts/content")
 async def get_artifact_content(
     sid: uuid.UUID,
@@ -269,32 +304,40 @@ async def get_artifact_content(
     if row is None:
         raise HTTPException(404, "session not found")
 
-    command = (
-        "python - <<'PY'\n"
-        "import base64\n"
-        f"path = {path!r}\n"
-        "with open(path, 'rb') as f:\n"
-        "    print(base64.b64encode(f.read()).decode('ascii'))\n"
-        "PY"
-    )
+    candidates = _artifact_path_candidates(path)
+    if not candidates:
+        raise HTTPException(400, "invalid path")
+
     await get_client().ensure_sandbox(str(sid))
-    tool = await get_client().invoke(
-        "shell",
-        sandbox_id=str(sid),
-        args={"cmd": command},
-        session_id=str(sid),
-    )
-    payload = (tool.output or {}).get("stdout") if tool.output else None
-    if not tool.ok or not isinstance(payload, str) or not payload.strip():
+    chosen: str | None = None
+    body_b64: str | None = None
+    for cand in candidates:
+        tool = await get_client().invoke(
+            "filesystem",
+            sandbox_id=str(sid),
+            args={"action": "read", "path": cand, "encoding": "base64"},
+            session_id=str(sid),
+        )
+        if not tool.ok:
+            continue
+        out = tool.output if isinstance(tool.output, dict) else {}
+        content = out.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        chosen = cand
+        body_b64 = content.strip()
+        break
+
+    if not chosen or not body_b64:
         raise HTTPException(404, "artifact not found")
 
     try:
-        raw = base64.b64decode(payload.strip())
+        raw = base64.b64decode(body_b64)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(500, f"invalid artifact payload: {exc}") from exc
 
-    media_type = mimetypes.guess_type(path)[0] or "application/octet-stream"
-    filename = Path(path).name
+    media_type = mimetypes.guess_type(chosen)[0] or "application/octet-stream"
+    filename = Path(chosen).name
     disposition = _artifact_content_disposition(
         media_type,
         filename,
