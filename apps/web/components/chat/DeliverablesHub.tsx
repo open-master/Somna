@@ -215,10 +215,10 @@ export function DeliverablesHub({ sessionId }: { sessionId: string }) {
               或<strong className="font-medium text-foreground">说明</strong>预览；「下载」保存到本地。
             </p>
 
-            <div className="overflow-x-auto rounded-md border border-border/80">
+            <div className="max-h-[min(50vh,22rem)] overflow-auto rounded-md border border-border/80 overscroll-y-contain">
               <table className="w-full min-w-[32rem] border-collapse text-sm">
                 <thead>
-                  <tr className="border-b border-border bg-muted/40 text-left text-xs font-medium text-muted-foreground">
+                  <tr className="sticky top-0 z-[1] border-b border-border bg-muted/95 text-left text-xs font-medium text-muted-foreground backdrop-blur-sm supports-[backdrop-filter]:bg-muted/80">
                     <th className="px-3 py-2">文件</th>
                     <th className="px-3 py-2">说明</th>
                     <th className="w-[1%] whitespace-nowrap px-3 py-2 text-right">操作</th>
