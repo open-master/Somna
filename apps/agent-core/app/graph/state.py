@@ -38,6 +38,9 @@ class SessionState(TypedDict, total=False):
 
     # Task framing (phase A) — intent / mode before planner
     task_frame: dict[str, Any] | None
+    # Phase B: sandbox-relative paths to materialized JSON (under .somna/runs/<run_id>/)
+    task_frame_path: str | None
+    plan_path: str | None
 
     # Accumulated chat history (LangChain messages)
     messages: Annotated[list, add_messages]

@@ -18,6 +18,7 @@ from somna_events import PlanUpdateEvent, SessionPhase, StatusEvent, TodoItem, T
 from app.config import get_settings
 from app.events.emitter import emit
 from app.graph.nodes.task_frame import format_task_frame_block
+from app.graph.run_artifacts import persist_plan_pointer
 from app.graph.state import SessionState
 from app.llm.client import get_async_openai
 from app.logging_setup import get_logger
@@ -202,7 +203,9 @@ async def plan_node(state: SessionState) -> SessionState:
     new_messages = list(state.get("messages") or [])
     new_messages.append(nudge)
 
-    return {"plan": plan_obj, "messages": new_messages}
+    plan_path = await persist_plan_pointer(state, plan_obj)
+
+    return {"plan": plan_obj, "plan_path": plan_path, "messages": new_messages}
 
 
 # ------------------------------------------------------------------

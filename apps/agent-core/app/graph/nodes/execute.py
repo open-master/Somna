@@ -44,6 +44,7 @@ from app.graph.compact import maybe_compact
 from app.graph.model_policy import pick_executor_turn_model
 from app.graph.nodes.plan import advance_with_proof, mark_progress
 from app.graph.nodes.task_frame import deliverable_type_implies_artifact, format_task_frame_block
+from app.graph.run_artifacts import append_executor_progress_snapshot, sync_plan_artifact
 from app.graph.state import SessionState
 from app.llm.client import get_async_openai
 from app.logging_setup import get_logger
@@ -69,6 +70,29 @@ class _ExecutionProof:
 class _ShellRecoveryPlan:
     reason: str
     install_cmd: str
+
+
+async def _append_executor_progress(
+    state: SessionState,
+    *,
+    sandbox_id: str,
+    run_id: str | None,
+    tool_turns: int,
+    proof: _ExecutionProof,
+    note: str,
+) -> None:
+    if not run_id:
+        return
+    await append_executor_progress_snapshot(
+        state,
+        sandbox_id=sandbox_id,
+        run_id=run_id,
+        tool_turns=tool_turns,
+        ok_calls=proof.successful_tool_calls,
+        n_written=len(proof.written_paths),
+        n_verified=len(proof.verified_paths),
+        note=note,
+    )
 
 
 def _merge_proof(base: _ExecutionProof, delta: _ExecutionProof) -> _ExecutionProof:
@@ -428,6 +452,7 @@ async def execute_node(state: SessionState) -> SessionState:
     plan = await mark_progress(
         plan, session_id=session_id, run_id=run_id, start_next=True
     )
+    await sync_plan_artifact(state, plan)
 
     try:
         while tool_turns < max_turns:
@@ -498,6 +523,15 @@ async def execute_node(state: SessionState) -> SessionState:
                         plan = await mark_progress(
                             plan, session_id=session_id, run_id=run_id, fail_current=True
                         )
+                        await sync_plan_artifact(state, plan)
+                        await _append_executor_progress(
+                            state,
+                            sandbox_id=sandbox_id,
+                            run_id=run_id,
+                            tool_turns=tool_turns,
+                            proof=proof,
+                            note=f"delivery_validation_failed:{reason[:80]}",
+                        )
                         return {
                             "assistant_text": turn_text,
                             "messages": [m for m in working_messages if not isinstance(m, SystemMessage)],
@@ -515,6 +549,14 @@ async def execute_node(state: SessionState) -> SessionState:
                     continue
                 forced_tool_name = None
                 final_text = turn_text
+                await _append_executor_progress(
+                    state,
+                    sandbox_id=sandbox_id,
+                    run_id=run_id,
+                    tool_turns=tool_turns,
+                    proof=proof,
+                    note="model_stop",
+                )
                 break
 
             tool_turns += 1
@@ -535,6 +577,15 @@ async def execute_node(state: SessionState) -> SessionState:
                 run_id=run_id,
                 proof=turn_proof,
             )
+            await sync_plan_artifact(state, plan)
+            await _append_executor_progress(
+                state,
+                sandbox_id=sandbox_id,
+                run_id=run_id,
+                tool_turns=tool_turns,
+                proof=proof,
+                note="after_tools",
+            )
         else:
             log.warning("graph.execute.max_turns", session_id=str(session_id), turns=tool_turns)
             final_text = (
@@ -543,10 +594,28 @@ async def execute_node(state: SessionState) -> SessionState:
             plan = await mark_progress(
                 plan, session_id=session_id, run_id=run_id, fail_current=True
             )
+            await sync_plan_artifact(state, plan)
+            await _append_executor_progress(
+                state,
+                sandbox_id=sandbox_id,
+                run_id=run_id,
+                tool_turns=tool_turns,
+                proof=proof,
+                note="max_tool_turns",
+            )
     except Exception as exc:  # noqa: BLE001
         log.exception("graph.execute.failed", error=str(exc))
         plan = await mark_progress(
             plan, session_id=session_id, run_id=run_id, fail_current=True
+        )
+        await sync_plan_artifact(state, plan)
+        await _append_executor_progress(
+            state,
+            sandbox_id=sandbox_id,
+            run_id=run_id,
+            tool_turns=tool_turns,
+            proof=proof,
+            note=f"exception:{str(exc)[:120]}",
         )
         return {
             "error": str(exc),
@@ -562,6 +631,15 @@ async def execute_node(state: SessionState) -> SessionState:
         chars=len(final_text),
         in_tokens=prompt_tokens_total,
         out_tokens=completion_tokens_total,
+    )
+
+    await _append_executor_progress(
+        state,
+        sandbox_id=sandbox_id,
+        run_id=run_id,
+        tool_turns=tool_turns,
+        proof=proof,
+        note="execute_done",
     )
 
     # Drop the injected SystemMessage if we added one (it's rebuilt each run).

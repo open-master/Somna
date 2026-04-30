@@ -11,6 +11,7 @@ from somna_events import SessionPhase, StatusEvent, TaskFrameEvent
 
 from app.config import get_settings
 from app.events.emitter import emit
+from app.graph.run_artifacts import persist_task_frame_pointer
 from app.graph.state import SessionState
 from app.llm.client import get_async_openai
 from app.logging_setup import get_logger
@@ -252,14 +253,16 @@ async def task_frame_node(state: SessionState) -> SessionState:
         log.info("graph.task_frame.blank_user", session_id=str(session_id))
         frame_b = frame_for_blank_user_message()
         await _emit_task_frame_ui(session_id, run_id, frame_b)
-        return {"task_frame": frame_b}
+        path = await persist_task_frame_pointer(state, frame_b)
+        return {"task_frame": frame_b, "task_frame_path": path}
 
     if state.get("skip_planner"):
         tf = dict(DEFAULT_TASK_FRAME)
         tf["reasoning_summary"] = "skip_planner（API 未指定 planner，沿用全链路执行）"
         log.info("graph.task_frame.skipped", session_id=str(session_id), reason="skip_planner")
         await _emit_task_frame_ui(session_id, run_id, tf)
-        return {"task_frame": tf}
+        path = await persist_task_frame_pointer(state, tf)
+        return {"task_frame": tf, "task_frame_path": path}
 
     settings = get_settings()
     model = (state.get("planner_model") or settings.agent_default_planner).strip()
@@ -270,7 +273,8 @@ async def task_frame_node(state: SessionState) -> SessionState:
         frame = normalize_task_frame(None)
         _maybe_coerce_simple_definitional_qa(user_message, frame)
         await _emit_task_frame_ui(session_id, run_id, frame)
-        return {"task_frame": frame}
+        path = await persist_task_frame_pointer(state, frame)
+        return {"task_frame": frame, "task_frame_path": path}
 
     prior = _prior_messages_for_framing(list(state.get("messages") or []))
     conv_ctx = format_conversation_context_for_framing(prior)
@@ -310,4 +314,5 @@ async def task_frame_node(state: SessionState) -> SessionState:
         clarify=frame.get("needs_clarification"),
     )
     await _emit_task_frame_ui(session_id, run_id, frame)
-    return {"task_frame": frame}
+    path = await persist_task_frame_pointer(state, frame)
+    return {"task_frame": frame, "task_frame_path": path}

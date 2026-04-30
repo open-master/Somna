@@ -33,6 +33,7 @@ from app.events.emitter import emit
 from app.graph.compact import maybe_compact
 from app.graph.model_policy import pick_executor_turn_model
 from app.graph.nodes.plan import advance_with_proof, mark_progress
+from app.graph.run_artifacts import append_executor_progress_snapshot, sync_plan_artifact
 from app.graph.state import SessionState
 from app.llm.client import anthropic_subprocess_env
 from app.logging_setup import get_logger
@@ -74,9 +75,12 @@ class _SomnaBridge:
     manifest_by_name: dict[str, ToolManifest]
     proof: _ExecutionProof
     plan: dict[str, Any] | None
+    artifact_state: dict[str, Any]
+    tool_round: int = 0
 
     async def run_tool(self, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
         """MCP 工具 handler：桥接 MCP Hub + 事件 + proof/plan（与模式一同一套）。"""
+        self.tool_round += 1
         pc = _PendingToolCall()
         pc.id = f"call_{uuid4().hex[:12]}"
         pc.name = tool_name
@@ -137,6 +141,17 @@ class _SomnaBridge:
             session_id=self.session_id,
             run_id=self.run_id,
             proof=proof_acc,
+        )
+        await sync_plan_artifact(self.artifact_state, self.plan)
+        await append_executor_progress_snapshot(
+            self.artifact_state,
+            sandbox_id=self.sandbox_id,
+            run_id=self.run_id,
+            tool_turns=self.tool_round,
+            ok_calls=self.proof.successful_tool_calls,
+            n_written=len(self.proof.written_paths),
+            n_verified=len(self.proof.verified_paths),
+            note="after_tools",
         )
         out: dict[str, Any] = {
             "content": [{"type": "text", "text": _render_tool_content(result)}],
@@ -291,6 +306,11 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
         working_messages = [SystemMessage(content=system_prompt)] + working_messages
 
     proof = _proof_from_execution_summary(state.get("execution_summary"))
+    artifact_state: dict[str, Any] = {
+        "session_id": session_id,
+        "sandbox_id": sandbox_id,
+        "run_id": run_id,
+    }
     bridge = _SomnaBridge(
         sandbox_id=sandbox_id,
         session_id=session_id,
@@ -299,6 +319,7 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
         manifest_by_name=manifest_by_name,
         proof=proof,
         plan=state.get("plan"),
+        artifact_state=artifact_state,
     )
     somna = create_sdk_mcp_server(
         name=_SOMNA_MCP_SERVER_NAME,
@@ -309,6 +330,7 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
     plan = bridge.plan
     plan = await mark_progress(plan, session_id=session_id, run_id=run_id, start_next=True)
     bridge.plan = plan
+    await sync_plan_artifact(artifact_state, plan)
 
     log.info(
         "graph.execute_agent_sdk.start",
@@ -447,6 +469,17 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
             )
             if finish_validation_failures >= _SDK_DELIVERY_MAX_ROUNDS:
                 plan = await mark_progress(plan, session_id=session_id, run_id=run_id, fail_current=True)
+                await sync_plan_artifact(artifact_state, plan)
+                await append_executor_progress_snapshot(
+                    artifact_state,
+                    sandbox_id=sandbox_id,
+                    run_id=run_id,
+                    tool_turns=bridge.tool_round,
+                    ok_calls=proof.successful_tool_calls,
+                    n_written=len(proof.written_paths),
+                    n_verified=len(proof.verified_paths),
+                    note=f"delivery_validation_failed:{delivery_reason[:80]}",
+                )
                 new_messages = [m for m in working_messages if not isinstance(m, SystemMessage)]
                 return {
                     "assistant_text": final_text,
@@ -474,6 +507,17 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
         plan = await mark_progress(
             bridge.plan, session_id=session_id, run_id=run_id, fail_current=True
         )
+        await sync_plan_artifact(artifact_state, plan)
+        await append_executor_progress_snapshot(
+            artifact_state,
+            sandbox_id=sandbox_id,
+            run_id=run_id,
+            tool_turns=bridge.tool_round,
+            ok_calls=bridge.proof.successful_tool_calls,
+            n_written=len(bridge.proof.written_paths),
+            n_verified=len(bridge.proof.verified_paths),
+            note=f"exception:{str(exc)[:120]}",
+        )
         return {
             "error": str(exc),
             "finished": True,
@@ -489,6 +533,17 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
         in_tokens=prompt_tokens_total,
         out_tokens=completion_tokens_total,
         elapsed_s=round(time.perf_counter() - t_start, 3),
+    )
+
+    await append_executor_progress_snapshot(
+        artifact_state,
+        sandbox_id=sandbox_id,
+        run_id=run_id,
+        tool_turns=bridge.tool_round,
+        ok_calls=bridge.proof.successful_tool_calls,
+        n_written=len(bridge.proof.written_paths),
+        n_verified=len(bridge.proof.verified_paths),
+        note="execute_done",
     )
 
     new_messages = [m for m in working_messages if not isinstance(m, SystemMessage)]

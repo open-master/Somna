@@ -56,6 +56,8 @@ async def run_session_graph(
                 "skip_planner": planner_model is None,
                 "sandbox_id": str(session_id),
                 "task_frame": None,
+                "task_frame_path": None,
+                "plan_path": None,
                 "messages": [],
                 "tool_turns": 0,
                 "plan": None,
