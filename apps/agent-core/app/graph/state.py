@@ -36,6 +36,9 @@ class SessionState(TypedDict, total=False):
     # Sandbox (one per session for M2)
     sandbox_id: str
 
+    # Task framing (phase A) — intent / mode before planner
+    task_frame: dict[str, Any] | None
+
     # Accumulated chat history (LangChain messages)
     messages: Annotated[list, add_messages]
 

@@ -19,7 +19,16 @@ def test_build_graph_has_expected_nodes():
     compiled = g.compile()
     nodes = set(compiled.get_graph().nodes.keys())
     # LangGraph adds __start__ / __end__ internally
-    assert {"ingest", "plan", "execute", "reflect", "finalize"} <= nodes
+    assert {
+        "ingest",
+        "task_frame",
+        "clarify",
+        "direct_answer",
+        "plan",
+        "execute",
+        "reflect",
+        "finalize",
+    } <= nodes
 
 
 def test_session_state_typing_accepts_minimum_fields():

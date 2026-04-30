@@ -18,8 +18,10 @@ from app.config import get_settings
 from app.graph.nodes.execute import execute_node
 from app.graph.nodes.finalize import finalize_node
 from app.graph.nodes.ingest import ingest_node
+from app.graph.nodes.light_reply import clarify_node, direct_answer_node
 from app.graph.nodes.plan import plan_node
 from app.graph.nodes.reflect import reflect_node
+from app.graph.nodes.task_frame import task_frame_node
 from app.graph.state import SessionState
 
 _graph = None
@@ -28,6 +30,17 @@ _saver_ctx = None
 
 def _route_after_execute(state: SessionState) -> str:
     return "finalize" if state.get("error") else "reflect"
+
+
+def _route_after_task_frame(state: SessionState) -> str:
+    if state.get("error"):
+        return "finalize"
+    frame = state.get("task_frame") or {}
+    if frame.get("needs_clarification"):
+        return "clarify"
+    if not frame.get("should_invoke_planner", True):
+        return "direct_answer"
+    return "plan"
 
 
 def _route_after_reflect(state: SessionState) -> str:
@@ -40,12 +53,27 @@ def _route_after_reflect(state: SessionState) -> str:
 def build_graph() -> StateGraph:
     g: StateGraph = StateGraph(SessionState)
     g.add_node("ingest", ingest_node)
+    g.add_node("task_frame", task_frame_node)
+    g.add_node("clarify", clarify_node)
+    g.add_node("direct_answer", direct_answer_node)
     g.add_node("plan", plan_node)
     g.add_node("execute", execute_node)
     g.add_node("reflect", reflect_node)
     g.add_node("finalize", finalize_node)
     g.add_edge(START, "ingest")
-    g.add_edge("ingest", "plan")
+    g.add_edge("ingest", "task_frame")
+    g.add_conditional_edges(
+        "task_frame",
+        _route_after_task_frame,
+        {
+            "clarify": "clarify",
+            "direct_answer": "direct_answer",
+            "plan": "plan",
+            "finalize": "finalize",
+        },
+    )
+    g.add_edge("clarify", "finalize")
+    g.add_edge("direct_answer", "finalize")
     g.add_edge("plan", "execute")
     g.add_conditional_edges(
         "execute",

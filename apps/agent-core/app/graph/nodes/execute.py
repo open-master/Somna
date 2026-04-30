@@ -43,6 +43,7 @@ from app.events.emitter import emit
 from app.graph.compact import maybe_compact
 from app.graph.model_policy import pick_executor_turn_model
 from app.graph.nodes.plan import advance_with_proof, mark_progress
+from app.graph.nodes.task_frame import deliverable_type_implies_artifact, format_task_frame_block
 from app.graph.state import SessionState
 from app.llm.client import get_async_openai
 from app.logging_setup import get_logger
@@ -80,7 +81,27 @@ def _merge_proof(base: _ExecutionProof, delta: _ExecutionProof) -> _ExecutionPro
     return base
 
 
-def _goal_requires_real_artifact(user_message: str, plan: dict[str, Any] | None) -> bool:
+def _compose_executor_extra_context(
+    memory_block: str | None,
+    task_frame: dict[str, Any] | None,
+) -> str | None:
+    parts: list[str] = []
+    if memory_block and str(memory_block).strip():
+        parts.append(f"### 用户长期记忆（来自 mem0）\n{memory_block.strip()}")
+    block = format_task_frame_block(task_frame).strip()
+    if block and block != "(无)":
+        parts.append(f"### 任务定调（phase A framing，供对齐范围与交付）\n{block}")
+    return "\n\n".join(parts) if parts else None
+
+
+def _goal_requires_real_artifact(
+    user_message: str,
+    plan: dict[str, Any] | None,
+    task_frame: dict[str, Any] | None = None,
+) -> bool:
+    if task_frame and isinstance(task_frame, dict):
+        if deliverable_type_implies_artifact(str(task_frame.get("deliverable_type") or "")):
+            return True
     text = f"{user_message}\n" + "\n".join(
         str(t.get("text") or "") for t in (plan or {}).get("todos", []) if isinstance(t, dict)
     )
@@ -114,9 +135,10 @@ def _missing_delivery_reason(
     user_message: str,
     plan: dict[str, Any] | None,
     proof: _ExecutionProof,
+    task_frame: dict[str, Any] | None = None,
 ) -> str | None:
     plan_todos = (plan or {}).get("todos", []) if isinstance(plan, dict) else []
-    requires_artifact = _goal_requires_real_artifact(user_message, plan)
+    requires_artifact = _goal_requires_real_artifact(user_message, plan, task_frame)
 
     if proof.mock_search_calls and proof.successful_tool_calls == proof.mock_search_calls:
         return "当前只有 mock 搜索结果，没有真实外部信息或产物"
@@ -369,9 +391,7 @@ async def execute_node(state: SessionState) -> SessionState:
         user_id=state.get("user_id"),
     )
     memory_block = format_memories(memories)
-    extra_context = (
-        f"### 用户长期记忆（来自 mem0）\n{memory_block}" if memory_block else None
-    )
+    extra_context = _compose_executor_extra_context(memory_block, state.get("task_frame"))
 
     system_prompt = build_system_prompt(
         session_id=str(session_id),
@@ -463,6 +483,7 @@ async def execute_node(state: SessionState) -> SessionState:
                     user_message=user_message,
                     plan=plan,
                     proof=proof,
+                    task_frame=state.get("task_frame"),
                 )
                 if reason:
                     finish_validation_failures += 1

@@ -17,6 +17,7 @@ from somna_events import PlanUpdateEvent, SessionPhase, StatusEvent, TodoItem, T
 
 from app.config import get_settings
 from app.events.emitter import emit
+from app.graph.nodes.task_frame import format_task_frame_block
 from app.graph.state import SessionState
 from app.llm.client import get_async_openai
 from app.logging_setup import get_logger
@@ -111,6 +112,7 @@ async def plan_node(state: SessionState) -> SessionState:
 
     prompt = render(
         template,
+        task_frame_block=format_task_frame_block(state.get("task_frame")),
         user_message=user_message,
         compact_memory=state.get("compact_memory") or "(无)",
         retrieved_memories=memory_block,

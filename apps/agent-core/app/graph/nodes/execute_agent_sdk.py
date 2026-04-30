@@ -44,6 +44,7 @@ from app.tools.schema import tool_manifest_cache
 from app.graph.nodes.execute import (
     _ExecutionProof,
     _PendingToolCall,
+    _compose_executor_extra_context,
     _completion_retry_message,
     _content_str,
     _delivery_recovery_tool_name,
@@ -276,7 +277,7 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
         user_id=state.get("user_id"),
     )
     memory_block = format_memories(memories)
-    extra_context = f"### 用户长期记忆（来自 mem0）\n{memory_block}" if memory_block else None
+    extra_context = _compose_executor_extra_context(memory_block, state.get("task_frame"))
 
     system_prompt = build_system_prompt(
         session_id=str(session_id),
@@ -427,6 +428,7 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
                 user_message=user_message,
                 plan=plan,
                 proof=proof,
+                task_frame=state.get("task_frame"),
             )
             if not delivery_reason:
                 break

@@ -608,6 +608,25 @@ def test_goal_requires_real_artifact_ignores_run_script_requests():
     )
 
 
+def test_goal_requires_real_artifact_from_task_frame_deliverable_type():
+    assert (
+        exe._goal_requires_real_artifact(
+            "解释一下 REST 是什么",
+            None,
+            {"deliverable_type": "web_app"},
+        )
+        is True
+    )
+    assert (
+        exe._goal_requires_real_artifact(
+            "解释一下 REST 是什么",
+            None,
+            {"deliverable_type": "direct_answer"},
+        )
+        is False
+    )
+
+
 def test_goal_requires_real_artifact_for_create_script_requests():
     assert (
         exe._goal_requires_real_artifact(
@@ -721,6 +740,18 @@ def test_missing_delivery_reason_rejects_mutation_without_artifact_paths():
     )
     assert reason is not None
     assert "真实产物" in reason
+
+
+def test_missing_delivery_reason_task_frame_implies_artifact_without_keywords():
+    proof = exe._ExecutionProof(successful_tool_calls=0)
+    reason = exe._missing_delivery_reason(
+        user_message="按惯例处理",
+        plan=None,
+        proof=proof,
+        task_frame={"deliverable_type": "spreadsheet"},
+    )
+    assert reason is not None
+    assert "工具" in reason
 
 
 @pytest.mark.asyncio

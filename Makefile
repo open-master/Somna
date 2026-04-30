@@ -1,4 +1,4 @@
-.PHONY: help up down restart logs ps health clean reset seed bootstrap env
+.PHONY: help up down restart logs ps health clean reset seed bootstrap env test-agent-core-docker
 
 SHELL := /bin/bash
 COMPOSE := docker compose
@@ -56,3 +56,9 @@ reset: ## 危险：清空所有数据卷和容器
 
 seed: ## 初始化种子数据
 	$(COMPOSE) exec agent-core python -m app.scripts.seed
+
+test-agent-core-docker: ## 在 agent-core 容器内跑 tests/（挂载本机 apps/agent-core/tests，需 --user root 供 uv 写锁）
+	@$(COMPOSE) run --rm --no-deps --user root \
+		-v "$$(pwd)/apps/agent-core/tests:/app/tests:ro" \
+		agent-core \
+		sh -lc 'uv pip install --system --no-cache-dir pytest pytest-asyncio respx >/dev/null && cd /app && python -m pytest tests/ -q --tb=short'

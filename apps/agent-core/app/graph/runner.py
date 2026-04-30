@@ -55,6 +55,7 @@ async def run_session_graph(
                 "executor_engine": (executor_engine or "native").lower(),
                 "skip_planner": planner_model is None,
                 "sandbox_id": str(session_id),
+                "task_frame": None,
                 "messages": [],
                 "tool_turns": 0,
                 "plan": None,
