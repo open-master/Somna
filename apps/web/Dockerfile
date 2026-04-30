@@ -34,6 +34,11 @@ ENV NODE_ENV=production
 ARG AGENT_CORE_URL=http://agent-core:8000
 ENV AGENT_CORE_URL=${AGENT_CORE_URL}
 COPY apps/web /app
+# 构建上下文或检出不完整时，应在本地失败并提示，而不是表现为「@/ 无法解析」
+RUN test -f /app/tsconfig.json \
+    && test -f /app/components/layout/AppShell.tsx \
+    && test -f /app/lib/api/sessions.ts \
+    && test -f /app/lib/events/useEventStream.ts
 RUN npm run build
 
 # ---------- runtime ----------
