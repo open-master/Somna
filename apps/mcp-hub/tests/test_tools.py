@@ -93,3 +93,46 @@ async def test_search_mock_when_provider_forced(ctx):
     assert res.ok is True
     assert len(res.output["results"]) == 3
     assert res.output["provider"] == "mock"
+
+
+async def test_media_tools_registered():
+    assert registry.get("wan_text2image") is not None
+    assert registry.get("wan_text2video") is not None
+    assert registry.get("minimax_tts") is not None
+
+
+async def test_wan_text2image_requires_key(ctx):
+    tool = registry.get("wan_text2image")
+    assert tool is not None
+    settings = get_settings()
+    old = settings.dashscope_api_key
+    settings.dashscope_api_key = ""
+    try:
+        res = await tool.invoke(ctx, {"prompt": "a cat"})
+        assert res.ok is False
+        assert "DASHSCOPE_API_KEY" in (res.error or "")
+    finally:
+        settings.dashscope_api_key = old
+
+
+async def test_wan_text2video_empty_prompt(ctx):
+    tool = registry.get("wan_text2video")
+    assert tool is not None
+    res = await tool.invoke(ctx, {"prompt": ""})
+    assert res.ok is False
+    assert "prompt" in (res.error or "").lower()
+
+
+async def test_minimax_tts_requires_key(ctx):
+    tool = registry.get("minimax_tts")
+    assert tool is not None
+    settings = get_settings()
+    old = settings.minimax_api_key
+    settings.minimax_api_key = ""
+    try:
+        res = await tool.invoke(ctx, {"text": "hello"})
+        assert res.ok is False
+        assert "MINIMAX_API_KEY" in (res.error or "")
+    finally:
+        settings.minimax_api_key = old
+

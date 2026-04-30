@@ -47,6 +47,28 @@ class Settings(BaseSettings):
     brave_request_timeout_sec: float = Field(default=60.0, alias="MCP_BRAVE_TIMEOUT_SEC")
     jina_api_key: str = Field(default="", alias="JINA_API_KEY")
 
+    # ---- DashScope / 万相（与 Qwen 共用百炼 DASHSCOPE_API_KEY；HTTP 前缀须与 Key 地域一致）----
+    dashscope_api_key: str = Field(default="", alias="DASHSCOPE_API_KEY")
+    dashscope_http_base: str = Field(
+        default="https://dashscope.aliyuncs.com/api/v1",
+        alias="MCP_DASHSCOPE_HTTP_BASE",
+    )
+    wan_t2i_model: str = Field(default="wan2.2-t2i-flash", alias="MCP_WAN_T2I_MODEL")
+    wan_t2v_model: str = Field(default="wan2.2-t2v-plus", alias="MCP_WAN_T2V_MODEL")
+    wan_poll_interval_sec: float = Field(default=3.0, alias="MCP_WAN_POLL_INTERVAL_SEC")
+    wan_poll_timeout_sec: float = Field(default=600.0, alias="MCP_WAN_POLL_TIMEOUT_SEC")
+    wan_request_timeout_sec: float = Field(default=120.0, alias="MCP_WAN_REQUEST_TIMEOUT_SEC")
+
+    # ---- MiniMax TTS（国内常用 https://api.minimaxi.com；国际为 https://api.minimax.io）----
+    minimax_api_key: str = Field(default="", alias="MINIMAX_API_KEY")
+    minimax_http_base: str = Field(
+        default="https://api.minimaxi.com",
+        alias="MCP_MINIMAX_BASE_URL",
+    )
+    minimax_tts_model: str = Field(default="speech-2.6-hd", alias="MCP_MINIMAX_TTS_MODEL")
+    minimax_tts_voice_id: str = Field(default="male-qn-qingse", alias="MCP_MINIMAX_TTS_VOICE_ID")
+    minimax_request_timeout_sec: float = Field(default=120.0, alias="MCP_MINIMAX_REQUEST_TIMEOUT_SEC")
+
 
 @lru_cache
 def get_settings() -> Settings:
