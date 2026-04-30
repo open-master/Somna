@@ -62,6 +62,24 @@ def _artifact_content_disposition(
     return f"attachment; filename*=UTF-8''{fq}"
 
 
+def _guess_media_type_for_artifact(path: str) -> str:
+    """mimetypes 在部分环境对 Office 扩展映射不全；按扩展名补全。"""
+    name = Path(path).name
+    mt, _ = mimetypes.guess_type(name)
+    if mt:
+        return mt
+    ext = Path(path).suffix.lower()
+    mapping = {
+        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".ppt": "application/vnd.ms-powerpoint",
+        ".doc": "application/msword",
+        ".xls": "application/vnd.ms-excel",
+    }
+    return mapping.get(ext, "application/octet-stream")
+
+
 # ----- Schemas -----
 class CreateSessionReq(BaseModel):
     user_id: uuid.UUID | None = None
@@ -336,7 +354,7 @@ async def get_artifact_content(
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(500, f"invalid artifact payload: {exc}") from exc
 
-    media_type = mimetypes.guess_type(chosen)[0] or "application/octet-stream"
+    media_type = _guess_media_type_for_artifact(chosen)
     filename = Path(chosen).name
     disposition = _artifact_content_disposition(
         media_type,

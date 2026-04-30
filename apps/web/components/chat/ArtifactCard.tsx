@@ -1,6 +1,6 @@
 import { Download, FileText, ExternalLink } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { PptxAwareLink, PptxAwarePreviewButton } from "@/components/chat/PptxAwarePreview";
 import { artifactDownloadUrl, artifactPreviewUrl, parseArtifactPathFromUrl } from "@/lib/utils/artifact-links";
 import { sessionArtifactContentUrl } from "@/lib/utils/deliverable-resolve";
 
@@ -22,12 +22,12 @@ export function ArtifactCard({
   const download = artifactDownloadUrl(fetchUrl);
   return (
     <div className="flex items-center gap-3 rounded-lg border bg-card px-3 py-2 animate-fade-in">
-      <a
-        href={preview}
-        target="_blank"
-        rel="noopener noreferrer"
+      <PptxAwareLink
+        previewHref={preview}
+        fileName={name}
+        mime={mime}
         title="点击预览"
-        className="flex min-w-0 flex-1 items-center gap-3 rounded-md no-underline outline-none ring-offset-background transition-colors hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring -m-1 p-1"
+        className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-md text-left no-underline outline-none ring-offset-background transition-colors hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring -m-1 bg-transparent p-1"
       >
         <div className="size-9 shrink-0 rounded-md bg-muted grid place-items-center">
           <FileText className="size-4" />
@@ -38,13 +38,11 @@ export function ArtifactCard({
           </div>
           <div className="truncate text-xs text-muted-foreground">{mime}</div>
         </div>
-      </a>
+      </PptxAwareLink>
       <div className="flex shrink-0 items-center gap-1">
-        <Button asChild size="sm" variant="outline">
-          <a href={preview} target="_blank" rel="noopener noreferrer">
-            <ExternalLink className="size-3.5" /> 预览
-          </a>
-        </Button>
+        <PptxAwarePreviewButton previewHref={preview} fileName={name} mime={mime}>
+          <ExternalLink className="size-3.5" /> 预览
+        </PptxAwarePreviewButton>
         <a
           href={download}
           download={name}

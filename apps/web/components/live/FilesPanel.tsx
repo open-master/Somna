@@ -1,6 +1,7 @@
 "use client";
 import { Download, ExternalLink, FileText, FolderTree } from "lucide-react";
 
+import { PptxAwareLink } from "@/components/chat/PptxAwarePreview";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useLiveStore } from "@/lib/store/live";
 import { artifactDownloadUrl, artifactPreviewUrl, parseArtifactPathFromUrl } from "@/lib/utils/artifact-links";
@@ -32,17 +33,18 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
             {artifacts.map((f) => {
               const fetchUrl = artifactItemFetchUrl(sessionId, f);
               return (
-              <a
+              <PptxAwareLink
                 key={f.id}
-                href={artifactPreviewUrl(fetchUrl)}
-                target="_blank"
-                rel="noreferrer"
-                className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-accent text-sm"
+                previewHref={artifactPreviewUrl(fetchUrl)}
+                fileName={f.name}
+                mime={f.mime}
+                title="预览"
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent"
               >
                 <FileText className="size-4 text-muted-foreground" />
                 <span className="flex-1 truncate">{f.name}</span>
                 <span className="text-xs text-muted-foreground">{f.mime}</span>
-              </a>
+              </PptxAwareLink>
             );
             })}
             {fileItems.length > 0 ? (
@@ -65,15 +67,16 @@ export function FilesPanel({ sessionId }: { sessionId: string }) {
                           <span className="text-[11px] text-muted-foreground">{item.source}</span>
                           {fetchUrl ? (
                             <>
-                              <a
-                                href={artifactPreviewUrl(fetchUrl)}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="inline-flex items-center gap-0.5 text-[11px] text-primary hover:underline"
+                              <PptxAwareLink
+                                previewHref={artifactPreviewUrl(fetchUrl)}
+                                fileName={item.path.split("/").pop() ?? item.path}
+                                mime=""
+                                title="预览"
+                                className="inline-flex cursor-pointer items-center gap-0.5 border-0 bg-transparent p-0 text-[11px] text-primary hover:underline"
                               >
                                 <ExternalLink className="size-3" />
                                 预览
-                              </a>
+                              </PptxAwareLink>
                               <a
                                 href={artifactDownloadUrl(fetchUrl)}
                                 className="inline-flex items-center gap-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:underline"

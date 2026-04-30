@@ -7,7 +7,7 @@ import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { Download, ExternalLink, Sparkles } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { PptxAwareLink, PptxAwarePreviewButton } from "@/components/chat/PptxAwarePreview";
 import { cn } from "@/lib/utils/cn";
 import { useLiveStore } from "@/lib/store/live";
 import { artifactDownloadUrl, artifactPreviewUrl, parseArtifactPathFromUrl } from "@/lib/utils/artifact-links";
@@ -91,6 +91,7 @@ function DeliverablesDataRow({
     parseArtifactPathFromUrl(url ?? "")?.split("/").pop() ||
     firstPlain.match(/[\w.*-]+\.(?:mp4|webm|png|jpe?g|gif|webp|md|pdf|html?|pptx?|mp3|wav)/i)?.[0] ||
     "download";
+  const previewUrl = url ? artifactPreviewUrl(url) : "";
 
   return (
     <tr>
@@ -101,15 +102,15 @@ function DeliverablesDataRow({
           };
           return (
             <td key={cell.key ?? "c0"} {...props} className={cn(props.className)}>
-              <a
-                href={artifactPreviewUrl(url)}
-                target="_blank"
-                rel="noopener noreferrer"
+              <PptxAwareLink
+                previewHref={previewUrl}
+                fileName={downloadName}
+                mime=""
                 title="点击预览"
-                className="block rounded-sm px-1 py-0.5 -mx-1 text-inherit no-underline outline-none ring-offset-background hover:bg-accent/70 hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+                className="block w-full cursor-pointer rounded-sm px-1 py-0.5 -mx-1 text-left text-inherit no-underline outline-none ring-offset-background hover:bg-accent/70 hover:underline focus-visible:ring-2 focus-visible:ring-ring"
               >
                 {props.children}
-              </a>
+              </PptxAwareLink>
             </td>
           );
         }
@@ -119,15 +120,15 @@ function DeliverablesDataRow({
           };
           return (
             <td key={cell.key ?? "c1"} {...props} className={cn(props.className)}>
-              <a
-                href={artifactPreviewUrl(url)}
-                target="_blank"
-                rel="noopener noreferrer"
+              <PptxAwareLink
+                previewHref={previewUrl}
+                fileName={downloadName}
+                mime=""
                 title="点击预览"
-                className="block rounded-sm px-1 py-0.5 -mx-1 text-inherit no-underline outline-none ring-offset-background hover:bg-accent/70 hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+                className="block w-full cursor-pointer rounded-sm px-1 py-0.5 -mx-1 text-left text-inherit no-underline outline-none ring-offset-background hover:bg-accent/70 hover:underline focus-visible:ring-2 focus-visible:ring-ring"
               >
                 {props.children}
-              </a>
+              </PptxAwareLink>
             </td>
           );
         }
@@ -136,12 +137,15 @@ function DeliverablesDataRow({
       <td className="align-middle whitespace-nowrap text-right not-prose border-l border-border/70">
         {url ? (
           <span className="inline-flex flex-wrap items-center justify-end gap-1 px-1">
-            <Button asChild size="sm" variant="outline" className="h-7 gap-1 px-2 text-xs">
-              <a href={artifactPreviewUrl(url)} target="_blank" rel="noopener noreferrer">
-                <ExternalLink className="size-3" />
-                预览
-              </a>
-            </Button>
+            <PptxAwarePreviewButton
+              previewHref={previewUrl}
+              fileName={downloadName}
+              mime=""
+              className="h-7 gap-1 px-2 text-xs"
+            >
+              <ExternalLink className="size-3" />
+              预览
+            </PptxAwarePreviewButton>
             <a
               href={artifactDownloadUrl(url)}
               download={downloadName}
