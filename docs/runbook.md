@@ -23,7 +23,7 @@
 | Temporal UI | 8233 | |
 | Langfuse | 3001 | |
 | Postgres | 5432 | |
-| MySQL | 3306 | |
+| MySQL | 默认 3306，可用 `MYSQL_HOST_PORT` 改 | 云主机常与系统 MySQL 冲突，见 `.env` |
 | Milvus gRPC | 19530 | |
 | Milvus HTTP | 9091 | 健康检查 |
 | Redis | 6379 | |

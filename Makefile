@@ -26,7 +26,7 @@ up: env ## 启动全栈
 	@echo "  Langfuse           http://localhost:3001"
 	@echo "  MinIO Console      http://localhost:9001"
 	@echo "  Postgres           localhost:5432"
-	@echo "  MySQL              localhost:3306"
+	@echo "  MySQL              localhost:(MYSQL_HOST_PORT，默认 3306)"
 	@echo "  Milvus             localhost:19530"
 	@echo "  Redis              localhost:6379"
 	@echo "  NATS               localhost:4222"
