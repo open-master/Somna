@@ -997,7 +997,7 @@ def _guess_shell_artifact_paths(*, cmd: str, stdout: str, preview: str) -> set[s
 
 _BARE_DELIVERABLE_NAME = re.compile(
     r"(?<![A-Za-z0-9_./-])([a-zA-Z0-9_./-]{1,220}"
-    r"\.(?:png|jpe?g|gif|webp|svg|pdf|markdown|md|html|csv|json|txt))\b",
+    r"\.(?:png|jpe?g|gif|webp|svg|pdf|markdown|md|html?|csv|json|txt|pptx?))\b",
     re.IGNORECASE,
 )
 
@@ -1075,9 +1075,12 @@ _DELIVERABLE_EXTS_FOR_STAT = frozenset({
     ".md",
     ".markdown",
     ".html",
+    ".htm",
     ".csv",
     ".json",
     ".txt",
+    ".pptx",
+    ".ppt",
 })
 
 

@@ -7,7 +7,7 @@ import { ToolCallCard } from "./ToolCallCard";
 import { UserMessage } from "./UserMessage";
 import { useChatStore } from "@/lib/store/chat";
 
-export function MessageList() {
+export function MessageList({ sessionId }: { sessionId: string }) {
   const messages = useChatStore((s) => s.messages);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -22,7 +22,7 @@ export function MessageList() {
           case "user":
             return <UserMessage key={m.id} text={m.text} />;
           case "assistant":
-            return <AssistantMessage key={m.id} text={m.text} thinking={m.thinking} />;
+            return <AssistantMessage key={m.id} text={m.text} thinking={m.thinking} sessionId={sessionId} />;
           case "tool":
             return (
               <ToolCallCard

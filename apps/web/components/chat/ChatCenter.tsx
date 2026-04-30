@@ -6,6 +6,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useChatStore } from "@/lib/store/chat";
 
 import { Composer } from "./Composer";
+import { DeliverablesHub } from "./DeliverablesHub";
 import { MessageList } from "./MessageList";
 import { PlannerTimeline } from "./PlannerTimeline";
 
@@ -51,7 +52,10 @@ export function ChatCenter({ sessionId }: { sessionId: string }) {
           ) : null}
           <PlannerTimeline />
         </div>
-        <MessageList />
+        <div className="mx-auto w-full max-w-3xl px-4">
+          <DeliverablesHub sessionId={sessionId} />
+        </div>
+        <MessageList sessionId={sessionId} />
       </ScrollArea>
       <Composer sessionId={sessionId} />
     </div>
