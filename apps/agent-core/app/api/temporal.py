@@ -178,6 +178,7 @@ async def retry_temporal_workflow(workflow_id: str) -> TemporalRetryResp:
                 executor_model=session_row["executor_model"] or settings.agent_default_executor,
                 executor_engine="native",
                 task_frame_model=session_row["task_frame_model"] or settings.agent_default_taskframe,
+                mcp_tool_models=None,
             ),
             id=new_workflow_id,
             task_queue=settings.temporal_task_queue,

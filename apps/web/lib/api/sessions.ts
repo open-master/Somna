@@ -1,6 +1,7 @@
 import { parseAgentEvent, type AgentEvent } from "@somna/event-schema";
 
 import { getResolvedAgentModels } from "@/lib/agent-models";
+import { getResolvedMcpToolModels } from "@/lib/mcp-tool-models";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE
   ? `${process.env.NEXT_PUBLIC_API_BASE}/v1/sessions`
@@ -63,6 +64,7 @@ export async function postMessage(
   executor_engine: "native" | "anthropic" = "native",
 ): Promise<{ run_id: string; queued: boolean }> {
   const m = getResolvedAgentModels();
+  const mcp = getResolvedMcpToolModels();
   const res = await fetch(`${API_BASE}/${id}/messages`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -77,6 +79,7 @@ export async function postMessage(
       coder_model: m.coder,
       reasoner_model: m.reasoner,
       longctx_model: m.longctx,
+      mcp_tool_models: mcp,
     }),
   });
   if (!res.ok) throw new Error(`postMessage: ${res.status}`);

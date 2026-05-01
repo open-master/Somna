@@ -108,6 +108,8 @@ class PostMessageReq(BaseModel):
     coder_model: str | None = None
     reasoner_model: str | None = None
     longctx_model: str | None = None
+    # 浏览器「MCP 工具」页：按工具名的默认 model（与 LiteLLM 角色分离）
+    mcp_tool_models: dict[str, str] | None = None
     task_frame_model: str | None = None
 
 
@@ -116,6 +118,16 @@ def _strip_model(s: str | None) -> str | None:
         return None
     t = s.strip()
     return t or None
+
+
+def _mcp_overrides_from_post_message(req: PostMessageReq) -> dict[str, str] | None:
+    out: dict[str, str] = {}
+    if req.mcp_tool_models:
+        for k, v in req.mcp_tool_models.items():
+            ks = str(k).strip() if k is not None else ""
+            if isinstance(v, str) and v.strip() and ks:
+                out[ks] = v.strip()
+    return out or None
 
 
 class PostMessageResp(BaseModel):
@@ -230,6 +242,7 @@ async def post_message(sid: uuid.UUID, req: PostMessageReq) -> PostMessageResp:
                 coder_model=_strip_model(req.coder_model),
                 reasoner_model=_strip_model(req.reasoner_model),
                 longctx_model=_strip_model(req.longctx_model),
+                mcp_tool_models=_mcp_overrides_from_post_message(req),
             ),
             id=workflow_id,
             task_queue=settings.temporal_task_queue,

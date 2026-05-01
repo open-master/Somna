@@ -30,6 +30,7 @@ class SessionState(TypedDict, total=False):
     coder_model: str
     reasoner_model: str
     longctx_model: str
+    mcp_tool_models: dict[str, str]
     skip_planner: bool
     # executor loop: native = OpenAI /v1; anthropic = LiteLLM /anthropic/v1 (same aliases)
     executor_engine: str

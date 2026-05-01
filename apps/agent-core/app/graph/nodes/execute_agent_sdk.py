@@ -57,6 +57,7 @@ from app.graph.nodes.execute import (
     _proof_from_execution_summary,
     _render_tool_content,
     _summarize_execution,
+    effective_mcp_tool_models_map,
 )
 
 log = get_logger(__name__)
@@ -74,6 +75,7 @@ class _SomnaBridge:
     proof: _ExecutionProof
     plan: dict[str, Any] | None
     artifact_state: dict[str, Any]
+    mcp_tool_models: dict[str, str] | None = None
     tool_round: int = 0
 
     async def run_tool(self, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -95,6 +97,7 @@ class _SomnaBridge:
             run_id=self.run_id,
             working_messages=self.working_messages,
             manifest=manifest,
+            mcp_tool_models=self.mcp_tool_models,
         )
         proof_acc = delta
 
@@ -117,6 +120,7 @@ class _SomnaBridge:
                 run_id=self.run_id,
                 working_messages=self.working_messages,
                 manifest=self.manifest_by_name.get("shell"),
+                mcp_tool_models=self.mcp_tool_models,
             )
             proof_acc = _merge_proof(proof_acc, install_proof)
             if install_result.ok:
@@ -130,6 +134,7 @@ class _SomnaBridge:
                     run_id=self.run_id,
                     working_messages=self.working_messages,
                     manifest=manifest,
+                    mcp_tool_models=self.mcp_tool_models,
                 )
                 proof_acc = _merge_proof(proof_acc, retry_proof)
 
@@ -307,6 +312,7 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
         working_messages = [SystemMessage(content=system_prompt)] + working_messages
 
     proof = _proof_from_execution_summary(state.get("execution_summary"))
+    mcp_maps = effective_mcp_tool_models_map(state)
     artifact_state: dict[str, Any] = {
         "session_id": session_id,
         "sandbox_id": sandbox_id,
@@ -321,6 +327,7 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
         proof=proof,
         plan=state.get("plan"),
         artifact_state=artifact_state,
+        mcp_tool_models=mcp_maps,
     )
     somna = create_sdk_mcp_server(
         name=_SOMNA_MCP_SERVER_NAME,

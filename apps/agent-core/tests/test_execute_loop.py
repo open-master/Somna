@@ -769,3 +769,45 @@ async def test_emit_artifact_events_emits_artifact_and_screenshot():
     event_types = [call.args[0].type for call in mocked_emit.await_args_list]
     assert "artifact" in event_types
     assert "screenshot" in event_types
+
+
+@pytest.mark.asyncio
+async def test_invoke_tool_visual_critique_injects_default_model():
+    mcp = AsyncMock()
+    mcp.invoke = AsyncMock(return_value=ToolResult(ok=True, preview="ok"))
+    with patch.object(exe, "emit", AsyncMock()):
+        await exe._invoke_tool_with_events(
+            mcp=mcp,
+            tool_name="visual_critique",
+            args={"path": "x.png"},
+            event_id="e1",
+            sandbox_id="sb",
+            session_id=uuid4(),
+            run_id="r1",
+            working_messages=[],
+            manifest=None,
+            mcp_tool_models={"visual_critique": "qwen3-vl-flash"},
+        )
+    assert mcp.invoke.await_count == 1
+    kw = mcp.invoke.await_args.kwargs
+    assert kw["args"]["model"] == "qwen3-vl-flash"
+
+
+@pytest.mark.asyncio
+async def test_invoke_tool_visual_critique_respects_explicit_model():
+    mcp = AsyncMock()
+    mcp.invoke = AsyncMock(return_value=ToolResult(ok=True, preview="ok"))
+    with patch.object(exe, "emit", AsyncMock()):
+        await exe._invoke_tool_with_events(
+            mcp=mcp,
+            tool_name="visual_critique",
+            args={"path": "x.png", "model": "custom-vl"},
+            event_id="e1",
+            sandbox_id="sb",
+            session_id=uuid4(),
+            run_id="r1",
+            working_messages=[],
+            manifest=None,
+            mcp_tool_models={"visual_critique": "qwen3-vl-flash"},
+        )
+    assert mcp.invoke.await_args.kwargs["args"]["model"] == "custom-vl"

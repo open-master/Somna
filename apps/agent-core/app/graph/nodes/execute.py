@@ -56,6 +56,19 @@ from app.tools.schema import manifests_to_openai_tools, openai_tool_choice, tool
 
 log = get_logger(__name__)
 
+_MCP_TOOLS_OPTIONAL_MODEL = frozenset({"visual_critique", "wan_text2image", "wan_text2video", "minimax_tts"})
+
+
+def effective_mcp_tool_models_map(state: SessionState) -> dict[str, str]:
+    """Browser/workflow 合并后的 MCP 工具默认 model（用于补全 LLM 未传的 model）。"""
+    raw = state.get("mcp_tool_models")
+    m: dict[str, str] = {}
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            if isinstance(v, str) and v.strip():
+                m[str(k)] = v.strip()
+    return m
+
 
 @dataclass
 class _ExecutionProof:
@@ -401,6 +414,7 @@ async def execute_node(state: SessionState) -> SessionState:
     exec_alias = (state.get("executor_model") or settings.agent_default_executor).strip()
     coder_alias = (state.get("coder_model") or settings.agent_default_coder).strip()
     sandbox_id = state.get("sandbox_id") or str(session_id)
+    mcp_tool_models_map = effective_mcp_tool_models_map(state)
 
     client = get_async_openai()
     manifests = list(tool_manifest_cache().values())
@@ -573,6 +587,7 @@ async def execute_node(state: SessionState) -> SessionState:
                 run_id=run_id,
                 working_messages=working_messages,
                 manifests=manifests,
+                mcp_tool_models=mcp_tool_models_map,
             )
             proof = _merge_proof(proof, turn_proof)
             finish_validation_failures = 0
@@ -747,6 +762,7 @@ async def _run_tool_calls(
     run_id,
     working_messages: list,
     manifests: list,
+    mcp_tool_models: dict[str, str] | None = None,
 ) -> _ExecutionProof:
     """Invoke each tool via MCP Hub, emit events, append tool messages."""
     mcp = get_client()
@@ -764,6 +780,7 @@ async def _run_tool_calls(
             run_id=run_id,
             working_messages=working_messages,
             manifest=manifest_by_name.get(pc.name),
+            mcp_tool_models=mcp_tool_models,
         )
         proof = _merge_proof(proof, delta)
 
@@ -786,6 +803,7 @@ async def _run_tool_calls(
                 run_id=run_id,
                 working_messages=working_messages,
                 manifest=manifest_by_name.get("shell"),
+                mcp_tool_models=mcp_tool_models,
             )
             proof = _merge_proof(proof, install_proof)
             if install_result.ok:
@@ -799,6 +817,7 @@ async def _run_tool_calls(
                     run_id=run_id,
                     working_messages=working_messages,
                     manifest=manifest_by_name.get(pc.name),
+                    mcp_tool_models=mcp_tool_models,
                 )
                 proof = _merge_proof(proof, retry_proof)
     return proof
@@ -882,21 +901,31 @@ async def _invoke_tool_with_events(
     run_id,
     working_messages: list,
     manifest,
+    mcp_tool_models: dict[str, str] | None = None,
 ) -> tuple[Any, _ExecutionProof]:
+    eff_args = args
+    if (
+        tool_name in _MCP_TOOLS_OPTIONAL_MODEL
+        and mcp_tool_models
+        and not str(args.get("model") or "").strip()
+    ):
+        dm = (mcp_tool_models.get(tool_name) or "").strip()
+        if dm:
+            eff_args = {**args, "model": dm}
     await emit(
         ToolCallEvent(
             session_id=session_id,
             run_id=run_id,
             id=event_id,
             name=tool_name,
-            args=args,
+            args=eff_args,
         )
     )
     started = time.perf_counter()
     result = await mcp.invoke(
         tool_name,
         sandbox_id=sandbox_id,
-        args=args,
+        args=eff_args,
         session_id=str(session_id),
         run_id=run_id,
     )
@@ -921,7 +950,7 @@ async def _invoke_tool_with_events(
     )
     proof = _proof_from_tool_result(
         tool_name=tool_name,
-        args=args,
+        args=eff_args,
         result=result,
         manifest=manifest,
     )

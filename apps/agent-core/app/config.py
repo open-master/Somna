@@ -52,6 +52,13 @@ class Settings(BaseSettings):
     agent_default_coder: str = Field(default="agent-coder", alias="AGENT_DEFAULT_CODER")
     agent_default_reasoner: str = Field(default="agent-reasoner", alias="AGENT_DEFAULT_REASONER")
     agent_default_longctx: str = Field(default="agent-longctx", alias="AGENT_DEFAULT_LONGCTX")
+    agent_default_visual_critique: str = Field(
+        default="qwen3-vl-plus",
+        alias="AGENT_DEFAULT_VISUAL_CRITIQUE",
+    )
+    agent_default_mcp_wan_t2i: str = Field(default="wan2.2-t2i-flash", alias="AGENT_DEFAULT_MCP_WAN_T2I")
+    agent_default_mcp_wan_t2v: str = Field(default="wan2.2-t2v-plus", alias="AGENT_DEFAULT_MCP_WAN_T2V")
+    agent_default_mcp_minimax_tts: str = Field(default="speech-2.6-hd", alias="AGENT_DEFAULT_MCP_MINIMAX_TTS")
     agent_compact_model: str = Field(default="agent-cheap", alias="AGENT_COMPACT_MODEL")
     agent_embed_model: str = Field(default="agent-embed", alias="AGENT_EMBED_MODEL")
     agent_max_turns: int = Field(default=40, alias="AGENT_MAX_TURNS")

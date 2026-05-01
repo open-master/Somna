@@ -16,23 +16,34 @@ import {
   setAgentModelOverride,
 } from "@/lib/agent-models";
 import {
+  DEFAULT_MCP_TOOL_MODELS,
+  MCP_TOOL_MODEL_META,
+  choicesForMcpTool,
+  getResolvedMcpToolModels,
+  resetMcpToolModelsToDefaults,
+  setMcpToolModelOverride,
+  type McpToolModelKey,
+} from "@/lib/mcp-tool-models";
+import {
   type ExecutorEngine,
   executorEngineLabel,
   getExecutorEngine,
   setExecutorEngine,
 } from "@/lib/executor-engine";
 
-type SettingsSection = "mode" | "models";
+type SettingsSection = "mode" | "models" | "mcp_tools";
 
 export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const [section, setSection] = useState<SettingsSection>("mode");
   const [mode, setMode] = useState<ExecutorEngine>("native");
   const [models, setModels] = useState<Record<AgentModelRole, string>>(() => getResolvedAgentModels());
+  const [mcpModels, setMcpModels] = useState<Record<McpToolModelKey, string>>(() => getResolvedMcpToolModels());
 
   useEffect(() => {
     if (open) {
       setMode(getExecutorEngine());
       setModels(getResolvedAgentModels());
+      setMcpModels(getResolvedMcpToolModels());
       setSection("mode");
     }
   }, [open]);
@@ -52,7 +63,17 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
     setModels(getResolvedAgentModels());
   }
 
-  const groups = [...new Set(MODEL_CHOICES.map((c) => c.group))];
+  function onResetMcpModels() {
+    resetMcpToolModelsToDefaults();
+    setMcpModels(getResolvedMcpToolModels());
+  }
+
+  function onMcpModelChange(key: McpToolModelKey, value: string) {
+    setMcpToolModelOverride(key, value);
+    setMcpModels(getResolvedMcpToolModels());
+  }
+
+  const agentModelGroups = [...new Set(MODEL_CHOICES.map((c) => c.group))];
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -86,7 +107,17 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                     section === "models" ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:bg-muted/80",
                   )}
                 >
-                  模型
+                  模型（Agent）
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSection("mcp_tools")}
+                  className={cn(
+                    "w-full rounded-lg px-2 py-2 text-left text-sm transition",
+                    section === "mcp_tools" ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:bg-muted/80",
+                  )}
+                >
+                  MCP 工具
                 </button>
               </nav>
             </aside>
@@ -95,25 +126,34 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
               <div className="flex items-start justify-between gap-3 border-b px-5 py-4">
                 <div className="min-w-0 pr-2">
                   <Dialog.Title className="text-base font-semibold">
-                    {section === "mode" ? "Agent 模式" : "模型"}
+                    {section === "mode"
+                      ? "Agent 模式"
+                      : section === "models"
+                        ? "模型（LiteLLM）"
+                        : "MCP 工具默认模型"}
                   </Dialog.Title>
                   <Dialog.Description className="mt-1 text-sm text-muted-foreground">
                     {section === "mode" ? (
                       <>选择执行引擎（经 LiteLLM；<span className="whitespace-nowrap">agent-*</span> 为网关别名）。</>
-                    ) : (
+                    ) : section === "models" ? (
                       <>
-                        与网关{" "}
-                        <code className="rounded bg-muted px-1 text-xs">model_group_alias</code> 对齐；可覆盖默认。
-                        DeepSeek 模型见{" "}
+                        各 Agent 节点走网关{" "}
+                        <code className="rounded bg-muted px-1 text-xs">model_group_alias</code>；与 MCP Hub 工具模型无关。
+                        DeepSeek 见{" "}
                         <a
                           href="https://api-docs.deepseek.com/zh-cn/"
                           target="_blank"
                           rel="noopener noreferrer"
                           className="font-medium text-primary underline-offset-4 hover:underline"
                         >
-                          DeepSeek API 文档
+                          文档
                         </a>
                         。
+                      </>
+                    ) : (
+                      <>
+                        按工具名指定默认 <code className="rounded bg-muted px-1 text-xs">model</code>；调用时若 LLM
+                        未传参则使用此处（经会话提交到 agent-core）。
                       </>
                     )}
                   </Dialog.Description>
@@ -159,14 +199,14 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                       </p>
                     </button>
                   </div>
-                ) : (
+                ) : section === "models" ? (
                   <div className="space-y-5">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <p className="text-xs text-muted-foreground">
-                        默认：与当前仓库 LiteLLM 配置一致；修改后写入本机浏览器，随下一条消息提交。
+                        默认与当前仓库 LiteLLM 配置一致；修改写入本机浏览器，随下一条消息提交。
                       </p>
                       <Button type="button" variant="outline" size="sm" onClick={onResetModels}>
-                        恢复模型默认
+                        恢复 Agent 模型默认
                       </Button>
                     </div>
                     <div className="space-y-4">
@@ -194,7 +234,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                             {!MODEL_CHOICES.some((c) => c.value === models[row.key]) ? (
                               <option value={models[row.key]}>{models[row.key]}（自定义）</option>
                             ) : null}
-                            {groups.map((g) => (
+                            {agentModelGroups.map((g) => (
                               <optgroup key={g} label={g}>
                                 {MODEL_CHOICES.filter((c) => c.group === g).map((c) => (
                                   <option key={c.value} value={c.value}>
@@ -208,11 +248,68 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                       ))}
                     </div>
                   </div>
+                ) : (
+                  <div className="space-y-5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-xs text-muted-foreground">
+                        与 mcp-hub 各工具默认一致；下发起会话消息时一并提交。
+                      </p>
+                      <Button type="button" variant="outline" size="sm" onClick={onResetMcpModels}>
+                        恢复 MCP 默认
+                      </Button>
+                    </div>
+                    <div className="space-y-4">
+                      {MCP_TOOL_MODEL_META.map((row) => {
+                        const choices = choicesForMcpTool(row.key);
+                        const cgroups = [...new Set(choices.map((c) => c.group))];
+                        return (
+                          <div
+                            key={row.key}
+                            className="grid gap-1.5 sm:grid-cols-[minmax(0,200px)_1fr] sm:items-center"
+                          >
+                            <div>
+                              <p className="text-sm font-medium">
+                                <code className="rounded bg-muted px-1 text-xs">{row.title}</code>
+                              </p>
+                              <p className="text-xs text-muted-foreground">{row.hint}</p>
+                              <p className="text-[11px] text-muted-foreground/80">
+                                默认：{DEFAULT_MCP_TOOL_MODELS[row.key]}
+                              </p>
+                            </div>
+                            <select
+                              id={`mcp-model-${row.key}`}
+                              value={mcpModels[row.key]}
+                              onChange={(e) => onMcpModelChange(row.key, e.target.value)}
+                              className={cn(
+                                "h-9 w-full max-w-md rounded-md border border-input bg-background px-2 text-sm",
+                                "ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                              )}
+                            >
+                              {!choices.some((c) => c.value === mcpModels[row.key]) ? (
+                                <option value={mcpModels[row.key]}>{mcpModels[row.key]}（自定义）</option>
+                              ) : null}
+                              {cgroups.map((g) => (
+                                <optgroup key={g} label={g}>
+                                  {choices
+                                    .filter((c) => c.group === g)
+                                    .map((c) => (
+                                      <option key={c.value} value={c.value}>
+                                        {c.label}
+                                      </option>
+                                    ))}
+                                </optgroup>
+                              ))}
+                            </select>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
                 )}
               </div>
 
               <p className="border-t px-5 py-3 text-xs text-muted-foreground">
-                Agent 模式与模型偏好均保存在本机浏览器；发送下一条消息时生效。
+                Agent 模式、LiteLLM 模型与 MCP 工具默认均保存在本机浏览器；发送下一条消息时生效。
               </p>
             </div>
           </div>

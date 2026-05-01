@@ -45,6 +45,7 @@ from app.graph.nodes.execute import (
     _proof_from_execution_summary,
     _run_tool_calls,
     _summarize_execution,
+    effective_mcp_tool_models_map,
 )
 
 log = get_logger(__name__)
@@ -202,6 +203,7 @@ async def execute_anthropic_node(state: SessionState) -> SessionState:
     exec_alias = (state.get("executor_model") or settings.agent_default_executor).strip()
     coder_alias = (state.get("coder_model") or settings.agent_default_coder).strip()
     sandbox_id = state.get("sandbox_id") or str(session_id)
+    mcp_tool_models_map = effective_mcp_tool_models_map(state)
     _tf = state.get("task_frame") if isinstance(state.get("task_frame"), dict) else None
     _eff_auto = effective_autonomy_level(_tf)
     _dv_policy = delivery_validation_policy(_eff_auto)
@@ -377,6 +379,7 @@ async def execute_anthropic_node(state: SessionState) -> SessionState:
                 run_id=run_id,
                 working_messages=working_messages,
                 manifests=manifests,
+                mcp_tool_models=mcp_tool_models_map,
             )
             proof = _merge_proof(proof, turn_proof)
             finish_validation_failures = 0

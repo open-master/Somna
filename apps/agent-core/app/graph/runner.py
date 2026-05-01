@@ -8,6 +8,7 @@ from somna_events import ErrorEvent, InterruptAckEvent, SessionPhase, StatusEven
 
 from app.config import get_settings
 from app.events.emitter import emit
+from app.graph.mcp_tool_models import merge_mcp_tool_models
 from app.graph.runtime import get_registry
 from app.graph.session_graph import close_graph, get_compiled_graph
 from app.logging_setup import get_logger
@@ -34,6 +35,7 @@ async def run_session_graph(
     coder_model: str | None = None,
     reasoner_model: str | None = None,
     longctx_model: str | None = None,
+    mcp_tool_models: dict[str, str] | None = None,
 ) -> None:
     settings = get_settings()
     current = asyncio.current_task()
@@ -54,6 +56,7 @@ async def run_session_graph(
                 "coder_model": coder_model or settings.agent_default_coder,
                 "reasoner_model": reasoner_model or settings.agent_default_reasoner,
                 "longctx_model": longctx_model or settings.agent_default_longctx,
+                "mcp_tool_models": merge_mcp_tool_models(settings, mcp_tool_models),
                 "executor_engine": (executor_engine or "native").lower(),
                 "skip_planner": planner_model is None,
                 "sandbox_id": str(session_id),

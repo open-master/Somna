@@ -16,3 +16,4 @@ class SessionWorkflowInput:
     coder_model: str | None = None
     reasoner_model: str | None = None
     longctx_model: str | None = None
+    mcp_tool_models: dict[str, str] | None = None
