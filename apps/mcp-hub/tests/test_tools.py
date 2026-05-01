@@ -136,3 +136,150 @@ async def test_minimax_tts_requires_key(ctx):
     finally:
         settings.minimax_api_key = old
 
+
+@pytest.mark.asyncio
+async def test_wan_text2image_wan26_uses_image_generation_api(ctx, monkeypatch):
+    """万相 2.6 T2I 应走 image-generation/generation + messages 形态。"""
+    import app.tools.media_tools as mt
+
+    tool = registry.get("wan_text2image")
+    assert tool is not None
+    settings = get_settings()
+    old_k = settings.dashscope_api_key
+    settings.dashscope_api_key = "sk-test"
+    try:
+        calls: list[tuple[str, dict]] = []
+
+        async def fake_post(client, base, key, path, body):
+            calls.append((path, body))
+            return {"output": {"task_id": "task-w26"}}
+
+        async def fake_poll(_client, **_kw):
+            return {
+                "output": {
+                    "task_status": "SUCCEEDED",
+                    "results": [{"url": "http://example.test/out.png"}],
+                }
+            }
+
+        async def fake_download(client, url, timeout_sec):
+            return b"\x89PNG\r\n\x1a\n"
+
+        monkeypatch.setattr(mt, "_dashscope_post", fake_post)
+        monkeypatch.setattr(mt, "_poll_dashscope_task", fake_poll)
+        monkeypatch.setattr(mt, "_download_bytes", fake_download)
+
+        res = await tool.invoke(
+            ctx,
+            {"prompt": "一只猫", "model": "wan2.6-t2i", "negative_prompt": "模糊"},
+        )
+        assert res.ok is True
+        assert calls
+        path, body = calls[0]
+        assert path == "/services/aigc/image-generation/generation"
+        assert body["model"] == "wan2.6-t2i"
+        msgs = body["input"]["messages"]
+        assert msgs[0]["role"] == "user"
+        assert msgs[0]["content"] == [{"text": "一只猫"}]
+        assert body["parameters"]["size"] == "1280*1280"
+        assert body["parameters"]["negative_prompt"] == "模糊"
+    finally:
+        settings.dashscope_api_key = old_k
+
+
+@pytest.mark.asyncio
+async def test_wan_text2image_wan22_uses_text2image_synthesis(ctx, monkeypatch):
+    """万相 2.2 系仍走 text2image/image-synthesis + input.prompt。"""
+    import app.tools.media_tools as mt
+
+    tool = registry.get("wan_text2image")
+    assert tool is not None
+    settings = get_settings()
+    old_k = settings.dashscope_api_key
+    settings.dashscope_api_key = "sk-test"
+    try:
+        calls: list[tuple[str, dict]] = []
+
+        async def fake_post(client, base, key, path, body):
+            calls.append((path, body))
+            return {"output": {"task_id": "task-22"}}
+
+        async def fake_poll(_client, **_kw):
+            return {
+                "output": {
+                    "task_status": "SUCCEEDED",
+                    "results": [{"url": "http://example.test/out.png"}],
+                }
+            }
+
+        async def fake_download(client, url, timeout_sec):
+            return b"\x89PNG\r\n\x1a\n"
+
+        monkeypatch.setattr(mt, "_dashscope_post", fake_post)
+        monkeypatch.setattr(mt, "_poll_dashscope_task", fake_poll)
+        monkeypatch.setattr(mt, "_download_bytes", fake_download)
+
+        res = await tool.invoke(ctx, {"prompt": "狗", "model": "wan2.2-t2i-flash"})
+        assert res.ok is True
+        path, body = calls[0]
+        assert path == "/services/aigc/text2image/image-synthesis"
+        assert body["input"]["prompt"] == "狗"
+        assert "messages" not in body["input"]
+    finally:
+        settings.dashscope_api_key = old_k
+
+
+@pytest.mark.asyncio
+async def test_wan_text2video_happyhorse_sends_resolution_ratio_duration(ctx, monkeypatch):
+    """HappyHorse 文生视频应传 resolution / ratio / duration，不传万相 size。"""
+    import app.tools.media_tools as mt
+
+    tool = registry.get("wan_text2video")
+    assert tool is not None
+    settings = get_settings()
+    old_k = settings.dashscope_api_key
+    settings.dashscope_api_key = "sk-test"
+    try:
+        bodies: list[dict] = []
+
+        async def fake_post(client, base, key, path, body):
+            bodies.append(body)
+            return {"output": {"task_id": "task-hh"}}
+
+        async def fake_poll(_client, **_kw):
+            return {
+                "output": {
+                    "task_status": "SUCCEEDED",
+                    "video_url": "http://example.test/a.mp4",
+                }
+            }
+
+        async def fake_download(client, url, timeout_sec):
+            return b"\x00\x00\x00\x18ftypmp42"
+
+        monkeypatch.setattr(mt, "_dashscope_post", fake_post)
+        monkeypatch.setattr(mt, "_poll_dashscope_task", fake_poll)
+        monkeypatch.setattr(mt, "_download_bytes", fake_download)
+
+        res = await tool.invoke(
+            ctx,
+            {
+                "prompt": "海浪",
+                "model": "happyhorse-1.0-t2v",
+                "resolution": "720P",
+                "ratio": "16:9",
+                "duration": 8,
+            },
+        )
+        assert res.ok is True
+        assert bodies
+        b0 = bodies[0]
+        assert b0["model"] == "happyhorse-1.0-t2v"
+        assert b0["input"] == {"prompt": "海浪"}
+        assert b0["parameters"]["resolution"] == "720P"
+        assert b0["parameters"]["ratio"] == "16:9"
+        assert b0["parameters"]["duration"] == 8
+        assert "size" not in b0["parameters"]
+    finally:
+        settings.dashscope_api_key = old_k
+

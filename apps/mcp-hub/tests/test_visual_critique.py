@@ -52,10 +52,16 @@ def _fake_httpx_client_factory(content: str):
 async def test_visual_critique_requires_api_key(ctx_visual, monkeypatch):
     monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
     get_settings.cache_clear()
-    tool = registry.get("visual_critique")
-    res = await tool.invoke(ctx_visual, {"path": "shot.png"})
-    assert res.ok is False
-    assert "DASHSCOPE_API_KEY" in (res.error or "")
+    settings = get_settings()
+    old_key = settings.dashscope_api_key
+    settings.dashscope_api_key = ""
+    try:
+        tool = registry.get("visual_critique")
+        res = await tool.invoke(ctx_visual, {"path": "shot.png"})
+        assert res.ok is False
+        assert "DASHSCOPE_API_KEY" in (res.error or "")
+    finally:
+        settings.dashscope_api_key = old_key
 
 
 @pytest.mark.asyncio

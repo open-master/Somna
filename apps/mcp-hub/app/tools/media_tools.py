@@ -115,6 +115,24 @@ def _write_sandbox_file(workdir: str, rel_path: str, data: bytes) -> str:
     return rel
 
 
+def _t2i_uses_wan26_style_api(model: str) -> bool:
+    """万相 2.6+ 文生图：HTTP 异步 `image-generation/generation`，body 为 messages 形态。"""
+    m = (model or "").strip().lower()
+    return m.startswith("wan2.6-t2i") or m.startswith("wan2.7")
+
+
+def _video_is_happyhorse(model: str) -> bool:
+    return "happyhorse" in (model or "").lower()
+
+
+def _extract_image_urls_from_task_output(fout: dict[str, Any]) -> list[str]:
+    urls: list[str] = []
+    for item in fout.get("results") or []:
+        if isinstance(item, dict) and item.get("url"):
+            urls.append(str(item["url"]))
+    return urls
+
+
 @register
 class WanText2ImageTool(BaseTool):
     name = "wan_text2image"
@@ -169,24 +187,48 @@ class WanText2ImageTool(BaseTool):
         if args.get("n") is not None:
             params["n"] = int(args["n"])
 
-        body: dict[str, Any] = {
-            "model": model,
-            "input": {"prompt": prompt},
-            "parameters": params,
-        }
         neg = (args.get("negative_prompt") or "").strip()
-        if neg:
-            body["input"]["negative_prompt"] = neg
 
         base = settings.dashscope_http_base
         timeout = httpx.Timeout(settings.wan_request_timeout_sec)
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
+                if _t2i_uses_wan26_style_api(model):
+                    size_eff = size or "1280*1280"
+                    body = {
+                        "model": model,
+                        "input": {
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": [{"text": prompt}],
+                                }
+                            ]
+                        },
+                        "parameters": {
+                            "prompt_extend": True,
+                            "watermark": False,
+                            "n": int(args["n"]) if args.get("n") is not None else 1,
+                            "negative_prompt": neg,
+                            "size": size_eff,
+                        },
+                    }
+                    t2i_path = "/services/aigc/image-generation/generation"
+                else:
+                    body = {
+                        "model": model,
+                        "input": {"prompt": prompt},
+                        "parameters": params,
+                    }
+                    if neg:
+                        body["input"]["negative_prompt"] = neg
+                    t2i_path = "/services/aigc/text2image/image-synthesis"
+
                 created = await _dashscope_post(
                     client,
                     base,
                     key,
-                    "/services/aigc/text2image/image-synthesis",
+                    t2i_path,
                     body,
                 )
                 out0 = created.get("output") or {}
@@ -203,11 +245,7 @@ class WanText2ImageTool(BaseTool):
                     timeout_sec=settings.wan_poll_timeout_sec,
                 )
                 fout = final.get("output") or {}
-                results = fout.get("results") or []
-                urls: list[str] = []
-                for item in results:
-                    if isinstance(item, dict) and item.get("url"):
-                        urls.append(item["url"])
+                urls = _extract_image_urls_from_task_output(fout)
 
                 if not urls:
                     return ToolResult(
@@ -277,6 +315,18 @@ class WanText2VideoTool(BaseTool):
                 "type": "boolean",
                 "description": "Let the model extend/rewrite the prompt (adds latency).",
             },
+            "resolution": {
+                "type": "string",
+                "description": "HappyHorse 等模型：如 720P（默认 720P）。",
+            },
+            "ratio": {
+                "type": "string",
+                "description": "HappyHorse：画幅如 16:9（默认 16:9）。",
+            },
+            "duration": {
+                "type": "integer",
+                "description": "HappyHorse：时长秒数 3–15（默认 5）。",
+            },
         },
         "additionalProperties": False,
     }
@@ -296,16 +346,27 @@ class WanText2VideoTool(BaseTool):
 
         model = (args.get("model") or settings.wan_t2v_model).strip()
         parameters: dict[str, Any] = {}
-        size = (args.get("size") or "").strip()
-        if size:
-            parameters["size"] = size
-        if args.get("prompt_extend") is not None:
-            parameters["prompt_extend"] = bool(args["prompt_extend"])
-
         inp: dict[str, Any] = {"prompt": prompt}
-        neg = (args.get("negative_prompt") or "").strip()
-        if neg:
-            inp["negative_prompt"] = neg
+
+        if _video_is_happyhorse(model):
+            dur = args.get("duration")
+            try:
+                duration = int(dur) if dur is not None else 5
+            except (TypeError, ValueError):
+                duration = 5
+            duration = max(3, min(15, duration))
+            parameters["resolution"] = (args.get("resolution") or "720P").strip() or "720P"
+            parameters["ratio"] = (args.get("ratio") or "16:9").strip() or "16:9"
+            parameters["duration"] = duration
+        else:
+            size = (args.get("size") or "").strip()
+            if size:
+                parameters["size"] = size
+            if args.get("prompt_extend") is not None:
+                parameters["prompt_extend"] = bool(args["prompt_extend"])
+            neg = (args.get("negative_prompt") or "").strip()
+            if neg:
+                inp["negative_prompt"] = neg
 
         body = {"model": model, "input": inp, "parameters": parameters}
         base = settings.dashscope_http_base
