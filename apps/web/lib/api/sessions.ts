@@ -14,6 +14,7 @@ export interface Session {
   workflow_id?: string | null;
   run_id?: string | null;
   planner_model?: string | null;
+  task_frame_model?: string | null;
   executor_model?: string | null;
   created_at?: string;
   updated_at?: string;
@@ -70,6 +71,7 @@ export async function postMessage(
       attachments,
       executor_engine,
       planner_model: m.planner,
+      task_frame_model: m.taskframe,
       executor_model: m.executor,
       compact_model: m.cheap,
       coder_model: m.coder,

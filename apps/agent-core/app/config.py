@@ -47,6 +47,7 @@ class Settings(BaseSettings):
 
     # ---- Agent model aliases ----
     agent_default_planner: str = Field(default="agent-planner", alias="AGENT_DEFAULT_PLANNER")
+    agent_default_taskframe: str = Field(default="agent-taskframe", alias="AGENT_DEFAULT_TASKFRAME")
     agent_default_executor: str = Field(default="agent-executor", alias="AGENT_DEFAULT_EXECUTOR")
     agent_default_coder: str = Field(default="agent-coder", alias="AGENT_DEFAULT_CODER")
     agent_default_reasoner: str = Field(default="agent-reasoner", alias="AGENT_DEFAULT_REASONER")

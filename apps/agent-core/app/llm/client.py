@@ -1,6 +1,6 @@
 """LLM client facade — all model calls go through LiteLLM.
 
-Business code uses *aliases* (agent-planner / agent-executor / agent-coder / agent-cheap
+Business code uses *aliases* (agent-planner / agent-taskframe / agent-executor / agent-coder / agent-cheap
 / agent-embed / agent-rerank) defined in infra/litellm/config.yaml. Changing underlying
 models only touches LiteLLM config, never Python code.
 """

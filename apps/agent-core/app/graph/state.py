@@ -24,6 +24,7 @@ class SessionState(TypedDict, total=False):
 
     # Models
     planner_model: str
+    task_frame_model: str
     executor_model: str
     compact_model: str
     coder_model: str

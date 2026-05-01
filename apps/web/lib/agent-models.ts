@@ -1,7 +1,8 @@
-export type AgentModelRole = "planner" | "executor" | "coder" | "reasoner" | "longctx" | "cheap";
+export type AgentModelRole = "taskframe" | "planner" | "executor" | "coder" | "reasoner" | "longctx" | "cheap";
 
 /** 与 LiteLLM `model_group_alias` 默认解析一致（具体 model id，便于直连网关）。 */
 export const DEFAULT_AGENT_MODELS: Record<AgentModelRole, string> = {
+  taskframe: "qwen-turbo",
   planner: "kimi-k2-0905",
   executor: "kimi-k2-0905",
   coder: "deepseek-chat",
@@ -18,6 +19,7 @@ export const AGENT_ROLE_META: {
   title: string;
   hint: string;
 }[] = [
+  { key: "taskframe", alias: "agent-taskframe", title: "任务定调", hint: "意图与路由 JSON，宜快宜省" },
   { key: "planner", alias: "agent-planner", title: "规划", hint: "拆解任务与 TODO" },
   { key: "executor", alias: "agent-executor", title: "执行环", hint: "工具调用主循环" },
   { key: "coder", alias: "agent-coder", title: "写代码 / 调试", hint: "偏重代码与排错" },
@@ -37,6 +39,7 @@ export const MODEL_CHOICES: { value: string; label: string; group: string }[] = 
   { group: "DeepSeek", value: "deepseek-v4-pro", label: "DeepSeek V4 Pro" },
   { group: "DeepSeek", value: "deepseek-chat", label: "DeepSeek Chat (兼容)" },
   { group: "DeepSeek", value: "deepseek-reasoner", label: "DeepSeek Reasoner (兼容)" },
+  { group: "业务别名", value: "agent-taskframe", label: "agent-taskframe（别名）" },
   { group: "业务别名", value: "agent-planner", label: "agent-planner（别名）" },
   { group: "业务别名", value: "agent-executor", label: "agent-executor（别名）" },
   { group: "业务别名", value: "agent-coder", label: "agent-coder（别名）" },
@@ -61,6 +64,7 @@ function readOverrides(): Partial<Record<AgentModelRole, string>> {
 export function getResolvedAgentModels(): Record<AgentModelRole, string> {
   const o = readOverrides();
   return {
+    taskframe: (o.taskframe?.trim() || DEFAULT_AGENT_MODELS.taskframe) as string,
     planner: (o.planner?.trim() || DEFAULT_AGENT_MODELS.planner) as string,
     executor: (o.executor?.trim() || DEFAULT_AGENT_MODELS.executor) as string,
     coder: (o.coder?.trim() || DEFAULT_AGENT_MODELS.coder) as string,

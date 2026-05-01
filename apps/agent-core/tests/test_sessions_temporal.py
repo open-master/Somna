@@ -50,6 +50,7 @@ class _TemporalClient:
 
 class _SettingsStub:
     agent_default_planner = "agent-planner"
+    agent_default_taskframe = "agent-taskframe"
     agent_default_executor = "agent-executor"
     temporal_task_queue = "somna-agent-core"
 
@@ -61,6 +62,7 @@ async def test_post_message_starts_temporal_workflow():
         [
             {
                 "planner_model": "agent-planner",
+                "task_frame_model": "agent-taskframe",
                 "executor_model": "agent-executor",
                 "status": "active",
             }
@@ -82,13 +84,14 @@ async def test_post_message_starts_temporal_workflow():
     temporal.start_workflow.assert_awaited_once()
     wf_arg = temporal.start_workflow.call_args[0][1]
     assert getattr(wf_arg, "executor_engine", None) == "native"
+    assert getattr(wf_arg, "task_frame_model", None) == "agent-taskframe"
     assert conn.execute.await_count == 2
 
 
 @pytest.mark.asyncio
 async def test_post_message_passes_executor_engine_anthropic():
     sid = uuid4()
-    conn = _Conn([{"planner_model": None, "executor_model": None, "status": "active"}])
+    conn = _Conn([{"planner_model": None, "task_frame_model": None, "executor_model": None, "status": "active"}])
     temporal = _TemporalClient()
     with (
         patch.object(sessions_mod, "get_pool", return_value=_Pool(conn)),
@@ -106,7 +109,7 @@ async def test_post_message_passes_executor_engine_anthropic():
 @pytest.mark.asyncio
 async def test_post_message_invalid_engine_falls_back_native():
     sid = uuid4()
-    conn = _Conn([{"planner_model": None, "executor_model": None, "status": "active"}])
+    conn = _Conn([{"planner_model": None, "task_frame_model": None, "executor_model": None, "status": "active"}])
     temporal = _TemporalClient()
     with (
         patch.object(sessions_mod, "get_pool", return_value=_Pool(conn)),

@@ -32,6 +32,7 @@ async def run_session_graph_activity(req: SessionWorkflowInput) -> None:
             planner_model=req.planner_model,
             executor_model=req.executor_model,
             executor_engine=req.executor_engine,
+            task_frame_model=req.task_frame_model,
             compact_model=req.compact_model,
             coder_model=req.coder_model,
             reasoner_model=req.reasoner_model,

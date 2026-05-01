@@ -128,6 +128,7 @@ router_settings:
 
   # 业务代码只用这些别名，底层模型随时替换
   model_group_alias:
+    agent-taskframe: qwen-turbo         # 任务定调（路由 JSON，宜快宜省；可改为 deepseek-v4-flash 等）
     agent-planner:   kimi-k2-0905        # 规划
     agent-executor:  kimi-k2-0905        # Agent loop 执行
     agent-coder:     deepseek-chat       # 写代码 / 调试
@@ -139,6 +140,7 @@ router_settings:
 
   fallbacks:
     # 别名在部分错误路径下会被当作 model_group；显式兜底到真实模型，避免 “No fallback for agent-executor”
+    - agent-taskframe:   [qwen-turbo, deepseek-v4-flash]
     - agent-executor:    [kimi-k2-0905]
     - agent-planner:     [kimi-k2-0905]
     - kimi-k2-0905:      [kimi-k2-turbo, qwen3-max, deepseek-chat]

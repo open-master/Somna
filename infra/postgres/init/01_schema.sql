@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS sessions (
                   CHECK (status IN ('active','running','paused','interrupted','stopped','done','error','archived')),
     sandbox_id    TEXT,
     planner_model TEXT,
+    task_frame_model TEXT,
     executor_model TEXT,
     workflow_id   TEXT,           -- Temporal workflow id
     run_id        TEXT,           -- Temporal run id

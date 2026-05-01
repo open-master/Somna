@@ -11,6 +11,7 @@ class SessionWorkflowInput:
     planner_model: str | None
     executor_model: str | None
     executor_engine: str = "native"
+    task_frame_model: str | None = None
     compact_model: str | None = None
     coder_model: str | None = None
     reasoner_model: str | None = None

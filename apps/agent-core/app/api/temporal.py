@@ -177,6 +177,7 @@ async def retry_temporal_workflow(workflow_id: str) -> TemporalRetryResp:
                 planner_model=session_row["planner_model"] or settings.agent_default_planner,
                 executor_model=session_row["executor_model"] or settings.agent_default_executor,
                 executor_engine="native",
+                task_frame_model=session_row["task_frame_model"] or settings.agent_default_taskframe,
             ),
             id=new_workflow_id,
             task_queue=settings.temporal_task_queue,
@@ -236,7 +237,7 @@ async def _session_row_for_workflow_id(workflow_id: str) -> Any:
     async with pool.acquire() as conn:
         return await conn.fetchrow(
             """
-            SELECT id, title, status, workflow_id, run_id, planner_model, executor_model, created_at, updated_at
+            SELECT id, title, status, workflow_id, run_id, planner_model, task_frame_model, executor_model, created_at, updated_at
             FROM sessions
             WHERE workflow_id = $1
             ORDER BY updated_at DESC

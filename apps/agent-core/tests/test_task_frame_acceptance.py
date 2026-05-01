@@ -61,6 +61,13 @@ def test_normalize_forces_no_planner_when_clarify():
     assert out["should_invoke_planner"] is False
 
 
+def test_normalize_autonomy_level_invalid_keeps_default():
+    out = tf_mod.normalize_task_frame({"autonomy_level": "nope", "reasoning_summary": "x"})
+    assert out["autonomy_level"] == "medium"
+    out_ok = tf_mod.normalize_task_frame({"autonomy_level": "low"})
+    assert out_ok["autonomy_level"] == "low"
+
+
 def test_blank_frame_is_clarify_only():
     frame = tf_mod.frame_for_blank_user_message()
     assert frame["needs_clarification"] is True

@@ -37,6 +37,7 @@ DEFAULT_TASK_FRAME: dict[str, Any] = {
     "clarification_questions": [],
     "task_mode": "full_pipeline",
     "effort_level": "medium",
+    "autonomy_level": "medium",
     "risk_level": "low",
     "deliverable_type": "unspecified",
     "should_invoke_planner": True,
@@ -146,6 +147,9 @@ def normalize_task_frame(parsed: dict[str, Any] | None) -> dict[str, Any]:
     out["clarification_questions"] = _coerce_str_list(parsed.get("clarification_questions"))
     out["task_mode"] = str(parsed.get("task_mode") or out["task_mode"]).strip() or out["task_mode"]
     out["effort_level"] = str(parsed.get("effort_level") or out["effort_level"]).strip() or out["effort_level"]
+    _al = str(parsed.get("autonomy_level") or "").strip().lower()
+    if _al in ("low", "medium", "high"):
+        out["autonomy_level"] = _al
     out["risk_level"] = str(parsed.get("risk_level") or out["risk_level"]).strip() or out["risk_level"]
     out["deliverable_type"] = (
         str(parsed.get("deliverable_type") or out["deliverable_type"]).strip() or out["deliverable_type"]
@@ -192,7 +196,7 @@ def format_task_frame_block(frame: dict[str, Any] | None) -> str:
         return "(无)"
     lines = [
         f"- task_mode: {frame.get('task_mode')}",
-        f"- effort_level: {frame.get('effort_level')} · risk_level: {frame.get('risk_level')}",
+        f"- effort_level: {frame.get('effort_level')} · autonomy_level: {frame.get('autonomy_level')} · risk_level: {frame.get('risk_level')}",
         f"- deliverable_type: {frame.get('deliverable_type')}",
         f"- should_invoke_planner: {frame.get('should_invoke_planner')}",
     ]
@@ -265,7 +269,7 @@ async def task_frame_node(state: SessionState) -> SessionState:
         return {"task_frame": tf, "task_frame_path": path}
 
     settings = get_settings()
-    model = (state.get("planner_model") or settings.agent_default_planner).strip()
+    model = (state.get("task_frame_model") or settings.agent_default_taskframe).strip()
     template = load_template("task_frame", "v1")
 
     if not template:

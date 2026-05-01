@@ -85,6 +85,7 @@ class CreateSessionReq(BaseModel):
     user_id: uuid.UUID | None = None
     title: str = "New session"
     planner_model: str | None = None
+    task_frame_model: str | None = None
     executor_model: str | None = None
     skip_planner: bool = False
 
@@ -107,6 +108,7 @@ class PostMessageReq(BaseModel):
     coder_model: str | None = None
     reasoner_model: str | None = None
     longctx_model: str | None = None
+    task_frame_model: str | None = None
 
 
 def _strip_model(s: str | None) -> str | None:
@@ -127,7 +129,7 @@ async def list_sessions(limit: int = 100) -> list[dict[str, Any]]:
     pool = get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT id, user_id, title, status, planner_model, executor_model, workflow_id, run_id, created_at, updated_at "
+            "SELECT id, user_id, title, status, planner_model, task_frame_model, executor_model, workflow_id, run_id, created_at, updated_at "
             "FROM sessions ORDER BY updated_at DESC LIMIT $1",
             limit,
         )
@@ -143,13 +145,14 @@ async def create_session(req: CreateSessionReq) -> CreateSessionResp:
     async with pool.acquire() as conn:
         await conn.execute(
             """
-            INSERT INTO sessions (id, user_id, title, planner_model, executor_model, status)
-            VALUES ($1, $2, $3, $4, $5, 'active')
+            INSERT INTO sessions (id, user_id, title, planner_model, task_frame_model, executor_model, status)
+            VALUES ($1, $2, $3, $4, $5, $6, 'active')
             """,
             session_id,
             user_id,
             req.title,
             None if req.skip_planner else (req.planner_model or s.agent_default_planner),
+            req.task_frame_model or s.agent_default_taskframe,
             req.executor_model or s.agent_default_executor,
         )
     log.info("session.created", id=str(session_id), user_id=str(user_id))
@@ -161,7 +164,7 @@ async def get_session(sid: uuid.UUID) -> dict[str, Any]:
     pool = get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT id, user_id, title, status, planner_model, executor_model, workflow_id, run_id, created_at, updated_at "
+            "SELECT id, user_id, title, status, planner_model, task_frame_model, executor_model, workflow_id, run_id, created_at, updated_at "
             "FROM sessions WHERE id = $1",
             sid,
         )
@@ -177,7 +180,7 @@ async def post_message(sid: uuid.UUID, req: PostMessageReq) -> PostMessageResp:
     pool = get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT planner_model, executor_model, status FROM sessions WHERE id = $1",
+            "SELECT planner_model, task_frame_model, executor_model, status FROM sessions WHERE id = $1",
             sid,
         )
         if row is None:
@@ -203,8 +206,11 @@ async def post_message(sid: uuid.UUID, req: PostMessageReq) -> PostMessageResp:
 
     req_pl = _strip_model(req.planner_model)
     req_ex = _strip_model(req.executor_model)
+    req_tf = _strip_model(req.task_frame_model)
     eff_pl = req_pl if req_pl is not None else row["planner_model"]
     eff_ex = req_ex if req_ex is not None else row["executor_model"]
+    eff_tf = req_tf if req_tf is not None else row["task_frame_model"]
+    eff_tf = eff_tf or settings.agent_default_taskframe
 
     run_id = f"run_{uuid.uuid4().hex[:12]}"
     workflow_id = f"session:{sid}:run:{run_id}"
@@ -219,6 +225,7 @@ async def post_message(sid: uuid.UUID, req: PostMessageReq) -> PostMessageResp:
                 planner_model=eff_pl,
                 executor_model=eff_ex,
                 executor_engine=engine,
+                task_frame_model=eff_tf,
                 compact_model=_strip_model(req.compact_model),
                 coder_model=_strip_model(req.coder_model),
                 reasoner_model=_strip_model(req.reasoner_model),
@@ -240,13 +247,15 @@ async def post_message(sid: uuid.UUID, req: PostMessageReq) -> PostMessageResp:
                 run_id = $2,
                 planner_model = $3,
                 executor_model = $4,
+                task_frame_model = $5,
                 updated_at = now()
-            WHERE id = $5
+            WHERE id = $6
             """,
             workflow_id,
             run_id,
             eff_pl,
             store_ex,
+            eff_tf,
             sid,
         )
     log.info("session.message.posted", session_id=str(sid), run_id=run_id)
