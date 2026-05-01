@@ -47,6 +47,8 @@ export function Composer({ sessionId }: { sessionId: string }) {
         workflowId: existing?.workflowId ?? null,
         status: "running",
         runId: resp.run_id,
+        lastRunTerminal: null,
+        awaitingUser: false,
         updatedAt: new Date().toISOString(),
       });
     } catch (e) {

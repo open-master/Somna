@@ -17,7 +17,7 @@ const PHASE_LABEL: Record<string, string> = {
   waiting_user: "等待用户",
   interrupted: "已中断",
   stopped: "已停止",
-  done: "已完成",
+  done: "本轮已完成",
   error: "出错",
 };
 

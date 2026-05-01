@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils/cn";
 import { createSession, listSessions, type Session } from "@/lib/api/sessions";
-import { useSessionStore } from "@/lib/store/session";
+import { useSessionStore, type SessionSummary } from "@/lib/store/session";
 import { SettingsDialog } from "@/components/layout/SettingsDialog";
 
 const NAV_ITEMS = [
@@ -73,8 +73,10 @@ export function Sidebar() {
   }, [sessions, query]);
 
   const runningCount = sessions.filter((s) => s.status === "running").length;
-  const completedCount = sessions.filter((s) => s.status === "done").length;
-  const waitingCount = sessions.filter((s) => s.status === "active").length;
+  const completedCount = sessions.filter((s) => s.lastRunTerminal === "success").length;
+  const waitingCount = sessions.filter(
+    (s) => s.awaitingUser || (s.status === "active" && s.lastRunTerminal !== "success"),
+  ).length;
 
   async function handleNew() {
     const s = await createSession("新会话");
@@ -159,7 +161,9 @@ export function Sidebar() {
                   还没有会话。先创建一个任务工作区，再把目标交给 Agent。
                 </div>
               ) : (
-                filteredSessions.map((s) => (
+                filteredSessions.map((s) => {
+                  const visual = sessionRowVisual(s);
+                  return (
                   <Link
                     key={s.id}
                     href={`/chat/${s.id}`}
@@ -175,14 +179,15 @@ export function Sidebar() {
                         <p className="truncate text-sm font-medium">{s.title}</p>
                         <p className="mt-1 truncate text-xs text-muted-foreground">{s.id}</p>
                       </div>
-                      <SessionStatusDot status={s.status} />
+                      <SessionStatusDot variant={visual.dot} />
                     </div>
                     <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
-                      <span>{labelForStatus(s.status)}</span>
+                      <span>{visual.label}</span>
                       <span>{formatDate(s.updatedAt)}</span>
                     </div>
                   </Link>
-                ))
+                  );
+                })
               )}
             </nav>
           </ScrollArea>
@@ -203,7 +208,9 @@ export function Sidebar() {
 
           <ScrollArea className="flex-1 px-3 pb-3">
             <div className="space-y-2">
-              {sessions.slice(0, 8).map((s) => (
+              {sessions.slice(0, 8).map((s) => {
+                const visual = sessionRowVisual(s);
+                return (
                 <Link
                   key={s.id}
                   href="/temporal"
@@ -214,13 +221,14 @@ export function Sidebar() {
                       <p className="truncate text-sm font-medium">{s.title}</p>
                       <p className="mt-1 truncate text-xs text-muted-foreground">{s.workflowId ?? "等待首次运行"}</p>
                     </div>
-                    <SessionStatusDot status={s.status} />
+                    <SessionStatusDot variant={visual.dot} />
                   </div>
                   <p className="mt-3 truncate text-xs text-muted-foreground">
                     {s.runId ? `Run ${s.runId}` : "尚未生成 workflow / run"}
                   </p>
                 </Link>
-              ))}
+                );
+              })}
             </div>
           </ScrollArea>
         </>
@@ -269,36 +277,39 @@ function MetricCard({
   );
 }
 
-function SessionStatusDot({ status }: { status?: string }) {
+function sessionRowVisual(s: SessionSummary): { dot: string; label: string } {
+  if (s.awaitingUser) return { dot: "waiting_user", label: "等待您补充" };
+  if (s.lastRunTerminal === "success") return { dot: "run_success", label: "本轮已完成" };
+  if (s.lastRunTerminal === "error") return { dot: "error", label: "上轮出错" };
+  switch (s.status) {
+    case "running":
+      return { dot: "running", label: "执行中" };
+    case "error":
+      return { dot: "error", label: "出错" };
+    case "interrupted":
+      return { dot: "interrupted", label: "已中断" };
+    case "stopped":
+      return { dot: "stopped", label: "已停止" };
+    default:
+      return { dot: "idle", label: "可继续" };
+  }
+}
+
+function SessionStatusDot({ variant }: { variant: string }) {
   return (
     <span
       className={cn(
         "mt-0.5 inline-flex size-2.5 rounded-full",
-        status === "running" && "bg-emerald-500",
-        status === "done" && "bg-primary",
-        status === "error" && "bg-destructive",
-        status === "interrupted" && "bg-amber-500",
-        (!status || status === "active" || status === "stopped") && "bg-muted-foreground/40",
+        variant === "running" && "bg-emerald-500",
+        variant === "run_success" && "bg-primary",
+        variant === "waiting_user" && "bg-amber-500",
+        variant === "error" && "bg-destructive",
+        variant === "interrupted" && "bg-amber-500",
+        variant === "stopped" && "bg-muted-foreground/50",
+        variant === "idle" && "bg-muted-foreground/40",
       )}
     />
   );
-}
-
-function labelForStatus(status?: string) {
-  switch (status) {
-    case "running":
-      return "执行中";
-    case "done":
-      return "已完成";
-    case "error":
-      return "出错";
-    case "interrupted":
-      return "已中断";
-    case "stopped":
-      return "已停止";
-    default:
-      return "待执行";
-  }
 }
 
 function formatDate(value?: string) {

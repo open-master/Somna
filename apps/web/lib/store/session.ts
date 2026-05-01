@@ -1,6 +1,9 @@
 import { create } from "zustand";
 import type { SessionPhase } from "@somna/event-schema";
 
+/** 客户端根据 `status.done` / `status.error` 等事件推断，便于与后端 `sessions.status=active` 对齐。刷新页面后可能丢失。 */
+export type LastRunTerminal = "success" | "error";
+
 export interface SessionSummary {
   id: string;
   title: string;
@@ -9,6 +12,9 @@ export interface SessionSummary {
   status?: string;
   runId?: string | null;
   workflowId?: string | null;
+  lastRunTerminal?: LastRunTerminal | null;
+  /** 定调追问等，`phase=waiting_user` */
+  awaitingUser?: boolean;
 }
 
 interface SessionState {

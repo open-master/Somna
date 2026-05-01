@@ -40,6 +40,7 @@ from somna_events import (
 
 from app.config import get_settings
 from app.events.emitter import emit
+from app.graph.autonomy_policy import delivery_validation_policy, effective_autonomy_level
 from app.graph.compact import maybe_compact
 from app.graph.model_policy import pick_executor_turn_model
 from app.graph.nodes.plan import advance_with_proof, mark_progress
@@ -429,6 +430,9 @@ async def execute_node(state: SessionState) -> SessionState:
     if not any(isinstance(m, SystemMessage) for m in working_messages):
         working_messages = [SystemMessage(content=system_prompt)] + working_messages
 
+    _tf = state.get("task_frame") if isinstance(state.get("task_frame"), dict) else None
+    _eff_auto = effective_autonomy_level(_tf)
+    _dv_policy = delivery_validation_policy(_eff_auto)
     log.info(
         "graph.execute.start",
         session_id=str(session_id),
@@ -436,6 +440,8 @@ async def execute_node(state: SessionState) -> SessionState:
         coder_model=coder_alias,
         n_msgs=len(working_messages),
         tools=len(tools_schema or []),
+        effective_autonomy=_eff_auto,
+        max_native_delivery_rounds=_dv_policy.max_native_stop_without_delivery,
     )
 
     prompt_tokens_total = completion_tokens_total = 0
@@ -519,7 +525,7 @@ async def execute_node(state: SessionState) -> SessionState:
                         attempt=finish_validation_failures,
                         reason=reason,
                     )
-                    if finish_validation_failures >= 2:
+                    if finish_validation_failures >= _dv_policy.max_native_stop_without_delivery:
                         plan = await mark_progress(
                             plan, session_id=session_id, run_id=run_id, fail_current=True
                         )

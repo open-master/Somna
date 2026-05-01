@@ -28,6 +28,7 @@ import {
   looksLikeDeliverableFilename,
   sessionArtifactContentUrl,
 } from "@/lib/utils/deliverable-resolve";
+import { normalizeWorkspacePath } from "@/lib/utils/workspace-path";
 
 const PREVIEW_LIMIT = 12;
 
@@ -42,7 +43,15 @@ type HubRow = {
 };
 
 function normalizePath(p: string): string {
-  return p.trim().replace(/^\.\//, "");
+  return normalizeWorkspacePath(p.trim().replace(/^\.\//, ""));
+}
+
+/** 与列表 dedupe 键一致：避免 index.html 与 foo/index.html 在 artifact / fileItems 中各记一条却显示重名。 */
+function hubDedupeKey(pathOrUrl: string, fallbackName?: string): string {
+  const fromUrl = parseArtifactPathFromUrl(pathOrUrl);
+  const raw = (fromUrl ?? pathOrUrl ?? fallbackName ?? "").trim();
+  if (!raw) return "";
+  return normalizePath(raw);
 }
 
 function friendlyDesc(mime: string, name: string, kind: HubRow["kind"]): string {
@@ -78,14 +87,14 @@ function artifactRelPath(a: { name: string; description?: string; url: string })
   return normalizePath(a.name);
 }
 
-/** live 列表已新→旧；同一沙盒相对路径只保留一条。 */
+/** live 列表已新→旧；同一沙盒相对路径只保留一条（键与 Hub 一致）。 */
 function dedupeLiveArtifacts(
   artifacts: { name: string; description?: string; mime: string; url: string; ts: number }[],
 ) {
   const seen = new Set<string>();
   const out: typeof artifacts = [];
   for (const a of artifacts) {
-    const key = artifactRelPath(a);
+    const key = hubDedupeKey(artifactRelPath(a), a.name);
     if (!key || seen.has(key)) continue;
     seen.add(key);
     out.push(a);
@@ -130,7 +139,8 @@ export function DeliverablesHub({ sessionId }: { sessionId: string }) {
     const covered = new Set<string>();
 
     for (const a of dedupedLive) {
-      const key = artifactRelPath(a);
+      const rel = artifactRelPath(a);
+      const key = hubDedupeKey(rel, a.name);
       if (!key) continue;
       covered.add(key);
       put(key, {
@@ -147,7 +157,8 @@ export function DeliverablesHub({ sessionId }: { sessionId: string }) {
     for (const m of messages) {
       if (m.kind !== "artifact") continue;
       const pathFromUrl = parseArtifactPathFromUrl(m.url);
-      const key = (pathFromUrl ? normalizePath(pathFromUrl) : "") || normalizePath(m.name);
+      const raw = (pathFromUrl ? normalizePath(pathFromUrl) : "") || normalizePath(m.name);
+      const key = hubDedupeKey(raw, m.name);
       if (!key) continue;
       covered.add(key);
       put(key, {
@@ -163,16 +174,18 @@ export function DeliverablesHub({ sessionId }: { sessionId: string }) {
 
     for (const f of fileItems) {
       const p = normalizePath(f.path);
-      if (!p || covered.has(p)) continue;
+      if (!p) continue;
+      const key = hubDedupeKey(p);
+      if (!key || covered.has(key)) continue;
       if (!looksLikeDeliverableFilename(p)) continue;
-      covered.add(p);
+      covered.add(key);
       const base = p.split("/").pop() ?? p;
-      put(p, {
-        key: p,
+      put(key, {
+        key,
         name: base,
         desc: friendlyDesc("", base, "path"),
         mime: "",
-        url: sessionArtifactContentUrl(sessionId, p),
+        url: sessionArtifactContentUrl(sessionId, key),
         ts: f.ts,
         kind: "path",
       });

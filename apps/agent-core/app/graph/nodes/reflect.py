@@ -11,6 +11,7 @@ from somna_events import SessionPhase, StatusEvent
 
 from app.config import get_settings
 from app.events.emitter import emit
+from app.graph.autonomy_policy import effective_autonomy_level
 from app.graph.nodes.plan import mark_progress
 from app.graph.state import SessionState
 from app.llm.client import get_async_openai
@@ -80,11 +81,21 @@ def _artifact_block(plan: dict[str, Any] | None, execution_summary: dict[str, An
     return "\n".join(lines) or "(无)"
 
 
+def _pending_todos(plan: dict[str, Any] | None) -> list[dict[str, Any]]:
+    return [
+        t
+        for t in ((plan or {}).get("todos") or [])
+        if isinstance(t, dict) and str(t.get("status")) in {"pending", "in_progress"}
+    ]
+
+
 def _fallback_decision(state: SessionState) -> dict[str, Any]:
     summary = state.get("execution_summary") or {}
     plan = state.get("plan")
     reason = str(summary.get("delivery_missing_reason") or "").strip()
     reflections = int(state.get("reflection_count") or 0)
+    tf = state.get("task_frame") if isinstance(state.get("task_frame"), dict) else {}
+    eff = effective_autonomy_level(tf)
 
     if reflections >= _MAX_REFLECTIONS:
         return {
@@ -98,14 +109,49 @@ def _fallback_decision(state: SessionState) -> dict[str, Any]:
         return {"decision": "continue_execute", "reason": reason, "focus": "补齐缺失的真实执行和验证"}
     if not (state.get("assistant_text") or "").strip():
         return {"decision": "continue_execute", "reason": "当前没有形成有效回答", "focus": "继续执行并形成有效结论"}
-    pending = [
-        t
-        for t in ((plan or {}).get("todos") or [])
-        if isinstance(t, dict) and str(t.get("status")) in {"pending", "in_progress"}
-    ]
+    pending = _pending_todos(plan)
     if pending:
         return {"decision": "continue_execute", "reason": "仍有未完成 TODO", "focus": str(pending[0].get("text") or "")}
+
+    # 低自主 + 首轮反思：若定调写了验收标准，多给一轮执行做对照（避免过早 finalize）。
+    sc = tf.get("success_criteria") if isinstance(tf.get("success_criteria"), list) else []
+    sc_texts = [str(x).strip() for x in sc if str(x).strip()]
+    if eff == "low" and reflections == 0 and sc_texts:
+        return {
+            "decision": "continue_execute",
+            "reason": "低自主：定调含 success_criteria，需再自检一轮",
+            "focus": "；".join(sc_texts[:4]),
+        }
+
     return {"decision": "finalize", "reason": "当前结果已满足结束条件", "focus": ""}
+
+
+def _coerce_route_for_high_autonomy(state: SessionState, route: str, reason: str, focus: str) -> tuple[str, str, str]:
+    """高自主：若无交付缺口且无待办、已有回答，则将多余的 continue_execute 收为 finalize。"""
+    if route != "continue_execute":
+        return route, reason, focus
+    if effective_autonomy_level(state.get("task_frame") if isinstance(state.get("task_frame"), dict) else None) != "high":
+        return route, reason, focus
+    summary = state.get("execution_summary") or {}
+    if str(summary.get("delivery_missing_reason") or "").strip():
+        return route, reason, focus
+    if _pending_todos(state.get("plan")):
+        return route, reason, focus
+    if not (state.get("assistant_text") or "").strip():
+        return route, reason, focus
+    return (
+        "finalize",
+        reason or "高自主：无未完成项与交付缺口，收口结束",
+        "",
+    )
+
+
+def _autonomy_audit_line(state: SessionState) -> tuple[str, str, str]:
+    tf = state.get("task_frame") if isinstance(state.get("task_frame"), dict) else {}
+    declared = str(tf.get("autonomy_level") or "medium").strip().lower()
+    risk = str(tf.get("risk_level") or "low").strip().lower()
+    eff = effective_autonomy_level(tf)
+    return eff, declared if declared in ("low", "medium", "high") else "medium", risk if risk in ("low", "medium", "high") else "low"
 
 
 async def reflect_node(state: SessionState) -> SessionState:
@@ -126,6 +172,13 @@ async def reflect_node(state: SessionState) -> SessionState:
 
     template = load_template("reflect", "v1")
     summary = state.get("execution_summary") or {}
+    eff_a, declared_a, risk_a = _autonomy_audit_line(state)
+    autonomy_playbook = (
+        f"当前 effective_autonomy={eff_a}（声明 {declared_a}，risk={risk_a}；"
+        "high risk 时 autonomy 上限为 medium）。"
+        "low = 宁可多轮执行/重规划也别过早 finalize；"
+        "high = 无缺口时可果断 finalize。"
+    )
     prompt = render(
         template,
         session_goal=state.get("user_message") or "",
@@ -135,6 +188,8 @@ async def reflect_node(state: SessionState) -> SessionState:
         artifacts=_artifact_block(state.get("plan"), summary),
         execution_summary=json.dumps(summary, ensure_ascii=False, indent=2)[:4000] if summary else "(无)",
         compact_memory=state.get("compact_memory") or "(无)",
+        effective_autonomy=eff_a,
+        autonomy_playbook=autonomy_playbook,
     )
 
     decision = _fallback_decision(state)
@@ -171,10 +226,23 @@ async def reflect_node(state: SessionState) -> SessionState:
     reason = str(decision.get("reason") or "").strip()
     focus = str(decision.get("focus") or "").strip()
 
+    route, reason, focus = _coerce_route_for_high_autonomy(state, route, reason, focus)
+
     if reflections >= _MAX_REFLECTIONS and route != "finalize":
         route = "finalize"
         reason = reason or "已达到反思上限，结束本轮"
         focus = ""
+
+    log.info(
+        "graph.reflect.decision",
+        session_id=str(session_id),
+        run_id=run_id,
+        route=route,
+        reflections=reflections,
+        effective_autonomy=eff_a,
+        declared_autonomy=declared_a,
+        risk_level=risk_a,
+    )
 
     plan = state.get("plan")
     messages = list(state.get("messages") or [])

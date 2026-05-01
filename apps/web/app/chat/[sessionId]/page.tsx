@@ -14,6 +14,7 @@ import { usePlanStore } from "@/lib/store/plan";
 import { useSessionStore } from "@/lib/store/session";
 import { useTaskFrameStore } from "@/lib/store/taskFrame";
 
+/** 与会话行 `sessions.status` 对齐：`done` 仅表示本轮 run 结束，会话仍 `active`，可继续发消息。 */
 function statusFromPhase(phase: string): string {
   switch (phase) {
     case "planning":
@@ -23,7 +24,7 @@ function statusFromPhase(phase: string): string {
     case "waiting_user":
       return "active";
     case "done":
-      return "done";
+      return "active";
     case "error":
       return "error";
     case "interrupted":
@@ -96,6 +97,22 @@ export default function ChatSessionPage() {
         session.setPhase(e.phase);
         if (e.run_id) session.setRunId(e.run_id);
         const existing = session.sessions.find((item) => item.id === sessionId);
+        const existingTerminal = existing?.lastRunTerminal ?? null;
+        let lastRunTerminal: typeof existingTerminal = existingTerminal;
+        let nextAwaiting = false;
+        const p = e.phase;
+        if (p === "planning" || p === "executing" || p === "compacting") {
+          lastRunTerminal = null;
+        } else if (p === "done") {
+          lastRunTerminal = "success";
+        } else if (p === "error") {
+          lastRunTerminal = "error";
+        } else if (p === "waiting_user") {
+          lastRunTerminal = null;
+          nextAwaiting = true;
+        } else if (p === "interrupted" || p === "stopped") {
+          lastRunTerminal = null;
+        }
         session.upsertSession({
           id: sessionId,
           title: existing?.title ?? "新会话",
@@ -103,6 +120,8 @@ export default function ChatSessionPage() {
           workflowId: existing?.workflowId ?? null,
           status: statusFromPhase(e.phase),
           runId: e.run_id ?? existing?.runId ?? null,
+          lastRunTerminal,
+          awaitingUser: nextAwaiting,
           updatedAt: new Date().toISOString(),
         });
         live.track(e);
@@ -118,11 +137,14 @@ export default function ChatSessionPage() {
           workflowId: existing?.workflowId ?? null,
           status: e.reason === "user_stop" ? "stopped" : "interrupted",
           runId: e.run_id ?? existing?.runId ?? null,
+          lastRunTerminal: null,
+          awaitingUser: false,
           updatedAt: new Date().toISOString(),
         });
         live.track(e);
       },
       error: (e) => {
+        session.setPhase("error");
         const existing = session.sessions.find((item) => item.id === sessionId);
         session.upsertSession({
           id: sessionId,
@@ -131,6 +153,8 @@ export default function ChatSessionPage() {
           workflowId: existing?.workflowId ?? null,
           status: "error",
           runId: existing?.runId ?? null,
+          lastRunTerminal: "error",
+          awaitingUser: false,
           updatedAt: new Date().toISOString(),
         });
         live.track(e);

@@ -30,6 +30,7 @@ from somna_events import MessageDeltaEvent, TokenUsageEvent
 
 from app.config import get_settings
 from app.events.emitter import emit
+from app.graph.autonomy_policy import delivery_validation_policy, effective_autonomy_level
 from app.graph.compact import maybe_compact
 from app.graph.model_policy import pick_executor_turn_model
 from app.graph.nodes.plan import advance_with_proof, mark_progress
@@ -61,9 +62,6 @@ from app.graph.nodes.execute import (
 log = get_logger(__name__)
 
 _SOMNA_MCP_SERVER_NAME = "somna"
-
-# 模式二每次 query() 为独立子进程回合；交付校验失败时多给几轮，避免仅 search 就结束。
-_SDK_DELIVERY_MAX_ROUNDS = 10
 
 
 @dataclass
@@ -283,6 +281,9 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
     coder_alias = (state.get("coder_model") or settings.agent_default_coder).strip()
     sandbox_id = state.get("sandbox_id") or str(session_id)
     user_message = state.get("user_message") or ""
+    _tf = state.get("task_frame") if isinstance(state.get("task_frame"), dict) else None
+    _eff_auto = effective_autonomy_level(_tf)
+    _sdk_max_delivery_rounds = delivery_validation_policy(_eff_auto).max_sdk_delivery_rounds
 
     manifests = list(tool_manifest_cache().values())
     manifest_by_name = {m.name: m for m in manifests}
@@ -339,6 +340,8 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
         coder_model=coder_alias,
         n_msgs=len(working_messages),
         tools=len(manifests),
+        effective_autonomy=_eff_auto,
+        max_sdk_delivery_rounds=_sdk_max_delivery_rounds,
     )
 
     prompt_tokens_total = completion_tokens_total = 0
@@ -350,7 +353,7 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
 
     try:
         t_start = time.perf_counter()
-        while finish_validation_failures < _SDK_DELIVERY_MAX_ROUNDS:
+        while finish_validation_failures < _sdk_max_delivery_rounds:
             working_messages, did_compact, summary = await maybe_compact(
                 working_messages,
                 session_id=session_id,
@@ -467,7 +470,7 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
                 sdk_stop_reason=getattr(lr, "stop_reason", None),
                 sdk_is_error=getattr(lr, "is_error", None),
             )
-            if finish_validation_failures >= _SDK_DELIVERY_MAX_ROUNDS:
+            if finish_validation_failures >= _sdk_max_delivery_rounds:
                 plan = await mark_progress(plan, session_id=session_id, run_id=run_id, fail_current=True)
                 await sync_plan_artifact(artifact_state, plan)
                 await append_executor_progress_snapshot(
