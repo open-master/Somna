@@ -33,6 +33,8 @@ export const MODEL_CHOICES: { value: string; label: string; group: string }[] = 
   { group: "Kimi (Moonshot)", value: "kimi-k2-0905", label: "Kimi K2 0905" },
   { group: "Kimi (Moonshot)", value: "kimi-k2-turbo", label: "Kimi K2 Turbo" },
   { group: "Qwen (DashScope)", value: "qwen3-max", label: "Qwen3 Max" },
+  { group: "Qwen (DashScope)", value: "qwen3-vl-plus", label: "Qwen3 VL Plus（多模态）" },
+  { group: "Qwen (DashScope)", value: "qwen3-vl-flash", label: "Qwen3 VL Flash（多模态）" },
   { group: "Qwen (DashScope)", value: "qwen-plus", label: "Qwen Plus" },
   { group: "Qwen (DashScope)", value: "qwen-turbo", label: "Qwen Turbo" },
   { group: "DeepSeek", value: "deepseek-v4-flash", label: "DeepSeek V4 Flash" },

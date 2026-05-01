@@ -7,3 +7,4 @@ from . import filesystem as _fs  # noqa: F401
 from . import media_tools as _media  # noqa: F401
 from . import search as _search  # noqa: F401
 from . import shell as _shell  # noqa: F401
+from . import visual_critique as _visual_critique  # noqa: F401

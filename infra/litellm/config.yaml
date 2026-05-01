@@ -56,6 +56,23 @@ model_list:
       api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
       api_key: os.environ/DASHSCOPE_API_KEY
 
+  # Qwen3-VL：百炼视觉理解（OpenAI 兼容），见 https://help.aliyun.com/zh/model-studio/vision
+  - model_name: qwen3-vl-plus
+    litellm_params:
+      model: openai/qwen3-vl-plus
+      api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+      api_key: os.environ/DASHSCOPE_API_KEY
+    model_info:
+      description: "Qwen3 VL Plus — 多模态旗舰档"
+
+  - model_name: qwen3-vl-flash
+    litellm_params:
+      model: openai/qwen3-vl-flash
+      api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+      api_key: os.environ/DASHSCOPE_API_KEY
+    model_info:
+      description: "Qwen3 VL Flash — 多模态高性价比"
+
   # ======================== DeepSeek ========================
   - model_name: deepseek-chat
     litellm_params:
@@ -148,6 +165,8 @@ router_settings:
     - qwen3-max:         [qwen-plus, kimi-k2-0905]
     - qwen-plus:         [qwen-turbo, deepseek-chat]
     - qwen-turbo:        [qwen-plus]
+    - qwen3-vl-plus:     [qwen3-vl-flash, qwen-plus, qwen3-max]
+    - qwen3-vl-flash:    [qwen-turbo, qwen-plus]
     - deepseek-chat:     [deepseek-v4-flash, kimi-k2-0905, qwen-plus]
     - deepseek-reasoner: [deepseek-v4-pro, kimi-k2-0905]
     - deepseek-v4-flash: [deepseek-chat, kimi-k2-turbo, qwen-plus]

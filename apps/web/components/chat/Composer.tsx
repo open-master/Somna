@@ -21,12 +21,15 @@ export function Composer({ sessionId }: { sessionId: string }) {
 
   const [sendError, setSendError] = useState<string | null>(null);
 
+  /** 可发下一条：本轮已落地（含用户主动中断/停止），与后端仅拦 status=running 一致 */
   const isBusy =
     sending ||
     (phase !== "idle" &&
       phase !== "done" &&
       phase !== "error" &&
-      phase !== "waiting_user");
+      phase !== "waiting_user" &&
+      phase !== "interrupted" &&
+      phase !== "stopped");
 
   const send = useCallback(async () => {
     const value = text.trim();

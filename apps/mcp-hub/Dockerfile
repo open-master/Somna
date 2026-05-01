@@ -19,7 +19,8 @@ RUN pip install --no-cache-dir uv==0.4.25
 WORKDIR /app
 
 COPY apps/mcp-hub/pyproject.toml /app/pyproject.toml
-RUN uv pip install --system --no-cache-dir -r /app/pyproject.toml
+RUN uv pip install --system --no-cache-dir -r /app/pyproject.toml \
+    && uv pip install --system --no-cache-dir pytest pytest-asyncio
 
 COPY apps/mcp-hub/app   /app/app
 COPY apps/mcp-hub/tests /app/tests

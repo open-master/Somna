@@ -1,4 +1,4 @@
-.PHONY: help up down restart logs ps health clean reset seed bootstrap env test-agent-core-docker
+.PHONY: help up down restart logs ps health clean reset seed bootstrap env test-agent-core-docker test-mcp-hub-docker
 
 SHELL := /bin/bash
 COMPOSE := docker compose
@@ -63,3 +63,10 @@ test-agent-core-docker: ## 在 agent-core 容器内跑 tests/（挂载本机 app
 		-v "$$(pwd)/packages/event-schema/python:/packages/event-schema/python:ro" \
 		agent-core \
 		sh -lc 'uv pip install --system --no-cache-dir pytest pytest-asyncio respx >/dev/null && cd /app && python -m pytest tests/ -q --tb=short'
+
+test-mcp-hub-docker: ## 在 mcp-hub 容器内跑 tests/（pytest 已打进镜像；改 Dockerfile 后需 rebuild mcp-hub）
+	@$(COMPOSE) run --rm --no-deps --pull never --user root \
+		-v "$$(pwd)/apps/mcp-hub/app:/app/app:ro" \
+		-v "$$(pwd)/apps/mcp-hub/tests:/app/tests:ro" \
+		mcp-hub \
+		sh -lc 'cd /app && python -m pytest tests/ -q --tb=short'

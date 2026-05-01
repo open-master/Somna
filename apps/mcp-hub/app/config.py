@@ -59,6 +59,18 @@ class Settings(BaseSettings):
     wan_poll_timeout_sec: float = Field(default=600.0, alias="MCP_WAN_POLL_TIMEOUT_SEC")
     wan_request_timeout_sec: float = Field(default=120.0, alias="MCP_WAN_REQUEST_TIMEOUT_SEC")
 
+    # ---- Visual critique (DashScope OpenAI-compatible multimodal) ----
+    visual_critique_model: str = Field(default="qwen3-vl-plus", alias="MCP_VISUAL_CRITIQUE_MODEL")
+    visual_critique_openai_base: str = Field(
+        default="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        alias="MCP_VISUAL_CRITIQUE_OPENAI_BASE",
+    )
+    visual_critique_timeout_sec: float = Field(default=120.0, alias="MCP_VISUAL_CRITIQUE_TIMEOUT_SEC")
+    visual_critique_max_image_bytes: int = Field(
+        default=20 * 1024 * 1024,
+        alias="MCP_VISUAL_CRITIQUE_MAX_IMAGE_BYTES",
+    )
+
     # ---- MiniMax TTS（国内常用 https://api.minimaxi.com；国际为 https://api.minimax.io）----
     minimax_api_key: str = Field(default="", alias="MINIMAX_API_KEY")
     minimax_http_base: str = Field(
