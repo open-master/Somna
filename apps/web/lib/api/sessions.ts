@@ -1,11 +1,14 @@
 import { parseAgentEvent, type AgentEvent } from "@somna/event-schema";
 
 import { getResolvedAgentModels } from "@/lib/agent-models";
+import { authHeaders } from "@/lib/auth/cookie";
 import { getResolvedMcpToolModels } from "@/lib/mcp-tool-models";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE
-  ? `${process.env.NEXT_PUBLIC_API_BASE}/v1/sessions`
-  : "/api/v1/sessions";
+/** 浏览器走 Next 反代，以便携带 cookie + Authorization；SSR 直连 agent-core（仅构建/少数场景）。 */
+const API_BASE =
+  typeof window !== "undefined"
+    ? "/api/v1/sessions"
+    : `${process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000"}/v1/sessions`;
 
 export interface Session {
   id: string;
@@ -24,7 +27,11 @@ export interface Session {
 export type SessionEvent = AgentEvent & { seq?: number | null };
 
 export async function listSessions(limit = 100): Promise<Session[]> {
-  const res = await fetch(`${API_BASE}?limit=${limit}`, { cache: "no-store" });
+  const res = await fetch(`${API_BASE}?limit=${limit}`, {
+    cache: "no-store",
+    headers: { ...authHeaders() },
+  });
+  if (res.status === 401) throw new Error("401");
   if (!res.ok) throw new Error(`listSessions: ${res.status}`);
   return res.json();
 }
@@ -32,21 +39,54 @@ export async function listSessions(limit = 100): Promise<Session[]> {
 export async function createSession(title = "新会话"): Promise<Session> {
   const res = await fetch(API_BASE, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...authHeaders() },
     body: JSON.stringify({ title }),
   });
+  if (res.status === 401) throw new Error("401");
   if (!res.ok) throw new Error(`createSession: ${res.status}`);
   return res.json();
 }
 
 export async function getSession(id: string): Promise<Session> {
-  const res = await fetch(`${API_BASE}/${id}`, { cache: "no-store" });
+  const res = await fetch(`${API_BASE}/${id}`, {
+    cache: "no-store",
+    headers: { ...authHeaders() },
+  });
+  if (res.status === 401) throw new Error("401");
   if (!res.ok) throw new Error(`getSession: ${res.status}`);
   return res.json();
 }
 
+export async function patchSessionTitle(id: string, title: string): Promise<Session> {
+  const res = await fetch(`${API_BASE}/${id}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ title }),
+  });
+  if (res.status === 401) throw new Error("401");
+  if (!res.ok) throw new Error(`patchSession: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteSession(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/${id}`, {
+    method: "DELETE",
+    headers: { ...authHeaders() },
+  });
+  if (res.status === 401) throw new Error("401");
+  if (res.status === 409) {
+    const t = await res.text();
+    throw new Error(t || "delete conflict: session running");
+  }
+  if (!res.ok) throw new Error(`deleteSession: ${res.status}`);
+}
+
 export async function listSessionEvents(id: string, since = 0, limit = 200): Promise<SessionEvent[]> {
-  const res = await fetch(`${API_BASE}/${id}/events?since=${since}&limit=${limit}`, { cache: "no-store" });
+  const res = await fetch(`${API_BASE}/${id}/events?since=${since}&limit=${limit}`, {
+    cache: "no-store",
+    headers: { ...authHeaders() },
+  });
+  if (res.status === 401) throw new Error("401");
   if (!res.ok) throw new Error(`listSessionEvents: ${res.status}`);
   const payload = (await res.json()) as { events?: unknown[] };
   const events: SessionEvent[] = [];
@@ -67,7 +107,7 @@ export async function postMessage(
   const mcp = getResolvedMcpToolModels();
   const res = await fetch(`${API_BASE}/${id}/messages`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...authHeaders() },
     body: JSON.stringify({
       text,
       attachments,
@@ -82,6 +122,7 @@ export async function postMessage(
       mcp_tool_models: mcp,
     }),
   });
+  if (res.status === 401) throw new Error("401");
   if (!res.ok) throw new Error(`postMessage: ${res.status}`);
   return res.json();
 }
@@ -90,16 +131,18 @@ export async function interruptSession(
   id: string,
   reason: "user_interrupt" | "user_stop" = "user_interrupt",
 ): Promise<{ interrupted: boolean; run_id: string | null }> {
-  const res = await fetch(
-    `${API_BASE}/${id}/interrupt?reason=${encodeURIComponent(reason)}`,
-    { method: "POST" },
-  );
+  const res = await fetch(`${API_BASE}/${id}/interrupt?reason=${encodeURIComponent(reason)}`, {
+    method: "POST",
+    headers: { ...authHeaders() },
+  });
+  if (res.status === 401) throw new Error("401");
   if (!res.ok) throw new Error(`interruptSession: ${res.status}`);
   return res.json();
 }
 
+/** 同源 EventSource：由 Next route 把 cookie 转为 upstream Authorization。 */
 export function streamUrl(id: string, since = 0): string {
-  return `${API_BASE}/${id}/stream?since=${since}`;
+  return `/api/v1/sessions/${encodeURIComponent(id)}/stream?since=${since}`;
 }
 
 function parseSessionEvent(raw: unknown): SessionEvent | null {

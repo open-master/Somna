@@ -78,11 +78,26 @@ class McpHubClient:
 
     # ---------- sandbox ----------
 
+    async def delete_sandbox(self, session_id: str) -> None:
+        try:
+            r = await self._client.delete(f"/v1/sandbox/{session_id}")
+            if r.status_code not in (200, 404):
+                log.warning("mcp.sandbox.delete", status=r.status_code, text=r.text[:200])
+        except httpx.HTTPError as exc:
+            log.warning("mcp.sandbox.delete_http", error=str(exc))
+
     async def ensure_sandbox(self, session_id: str) -> dict[str, Any]:
-        """Create-or-return a sandbox keyed by session id."""
-        r = await self._client.post("/v1/sandbox", json={"session_id": session_id})
-        r.raise_for_status()
-        return r.json()
+        """Ensure MCP Hub has a workdir for this session (idempotent POST /v1/sandbox)."""
+        async for attempt in AsyncRetrying(
+            stop=stop_after_attempt(3),
+            wait=wait_exponential(multiplier=0.4, max=2),
+            retry=retry_if_exception_type(httpx.HTTPError),
+            reraise=True,
+        ):
+            with attempt:
+                r = await self._client.post("/v1/sandbox", json={"session_id": session_id})
+                r.raise_for_status()
+                return r.json()
 
     # ---------- invoke ----------
 

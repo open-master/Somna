@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils/cn";
+import { meRequest, type AuthUser } from "@/lib/api/auth";
 import {
   AGENT_ROLE_META,
   DEFAULT_AGENT_MODELS,
@@ -15,6 +16,8 @@ import {
   resetAgentModelsToDefaults,
   setAgentModelOverride,
 } from "@/lib/agent-models";
+
+import { SettingsUserManagement } from "@/components/layout/SettingsUserManagement";
 import {
   DEFAULT_MCP_TOOL_MODELS,
   MCP_TOOL_MODEL_META,
@@ -31,13 +34,20 @@ import {
   setExecutorEngine,
 } from "@/lib/executor-engine";
 
-type SettingsSection = "mode" | "models" | "mcp_tools";
+type SettingsSection = "mode" | "models" | "mcp_tools" | "users";
 
 export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const [section, setSection] = useState<SettingsSection>("mode");
   const [mode, setMode] = useState<ExecutorEngine>("native");
   const [models, setModels] = useState<Record<AgentModelRole, string>>(() => getResolvedAgentModels());
   const [mcpModels, setMcpModels] = useState<Record<McpToolModelKey, string>>(() => getResolvedMcpToolModels());
+  const [meProfile, setMeProfile] = useState<AuthUser | null>(null);
+
+  const isAdmin = meProfile?.role === "admin";
+
+  useEffect(() => {
+    if (!isAdmin && section === "users") setSection("mode");
+  }, [isAdmin, section]);
 
   useEffect(() => {
     if (open) {
@@ -45,6 +55,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
       setModels(getResolvedAgentModels());
       setMcpModels(getResolvedMcpToolModels());
       setSection("mode");
+      void meRequest().then(setMeProfile);
     }
   }, [open]);
 
@@ -81,7 +92,10 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[2px]" />
         <Dialog.Content
           className={cn(
-            "fixed left-[50%] top-[50%] z-50 flex h-[min(560px,calc(100vh-2rem))] w-[min(720px,calc(100vw-2rem))] translate-x-[-50%] translate-y-[-50%]",
+            "fixed left-[50%] top-[50%] z-50 flex translate-x-[-50%] translate-y-[-50%]",
+            section === "users"
+              ? "h-[min(900px,calc(100vh-1.5rem))] w-[min(1120px,calc(100vw-1.5rem))]"
+              : "h-[min(640px,calc(100vh-2rem))] w-[min(760px,calc(100vw-2rem))]",
             "overflow-hidden rounded-2xl border bg-background shadow-lg outline-none",
           )}
         >
@@ -97,7 +111,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                     section === "mode" ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:bg-muted/80",
                   )}
                 >
-                  Agent 模式
+                  Agent 运行模式
                 </button>
                 <button
                   type="button"
@@ -107,7 +121,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                     section === "models" ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:bg-muted/80",
                   )}
                 >
-                  模型（Agent）
+                  Agent 模型配置
                 </button>
                 <button
                   type="button"
@@ -117,8 +131,20 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                     section === "mcp_tools" ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:bg-muted/80",
                   )}
                 >
-                  MCP 工具
+                  MCP 模型配置
                 </button>
+                {isAdmin ? (
+                  <button
+                    type="button"
+                    onClick={() => setSection("users")}
+                    className={cn(
+                      "w-full rounded-lg px-2 py-2 text-left text-sm transition",
+                      section === "users" ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:bg-muted/80",
+                    )}
+                  >
+                    用户管理
+                  </button>
+                ) : null}
               </nav>
             </aside>
 
@@ -127,10 +153,12 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                 <div className="min-w-0 pr-2">
                   <Dialog.Title className="text-base font-semibold">
                     {section === "mode"
-                      ? "Agent 模式"
+                      ? "Agent 运行模式"
                       : section === "models"
-                        ? "模型（LiteLLM）"
-                        : "MCP 工具默认模型"}
+                        ? "Agent 模型配置"
+                        : section === "mcp_tools"
+                          ? "MCP 模型配置"
+                          : "用户管理"}
                   </Dialog.Title>
                   <Dialog.Description className="mt-1 text-sm text-muted-foreground">
                     {section === "mode" ? (
@@ -150,11 +178,13 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                         </a>
                         。
                       </>
-                    ) : (
+                    ) : section === "mcp_tools" ? (
                       <>
                         按工具名指定默认 <code className="rounded bg-muted px-1 text-xs">model</code>；调用时若 LLM
                         未传参则使用此处（经会话提交到 agent-core）。
                       </>
+                    ) : (
+                      <>查看与维护已注册用户信息；仅「活跃」用户可登录。</>
                     )}
                   </Dialog.Description>
                 </div>
@@ -166,7 +196,11 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
               </div>
 
               <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-                {section === "mode" ? (
+                {section === "users" && isAdmin ? (
+                  <SettingsUserManagement currentUserId={meProfile?.id ?? null} />
+                ) : section === "users" ? (
+                  <p className="text-sm text-muted-foreground">仅管理员可访问用户管理。</p>
+                ) : section === "mode" ? (
                   <div className="space-y-3">
                     <button
                       type="button"
@@ -248,7 +282,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                       ))}
                     </div>
                   </div>
-                ) : (
+                ) : section === "mcp_tools" ? (
                   <div className="space-y-5">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <p className="text-xs text-muted-foreground">
@@ -305,11 +339,12 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                       })}
                     </div>
                   </div>
-                )}
+                ) : null}
               </div>
 
               <p className="border-t px-5 py-3 text-xs text-muted-foreground">
-                Agent 模式、LiteLLM 模型与 MCP 工具默认均保存在本机浏览器；发送下一条消息时生效。
+                Agent 运行模式、Agent 模型配置与 MCP 模型配置保存在本机浏览器；发送下一条消息时生效。
+                {isAdmin ? " 用户管理在服务端即时生效。" : ""}
               </p>
             </div>
           </div>

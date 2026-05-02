@@ -4,10 +4,11 @@ import { Paperclip, Send } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { postMessage } from "@/lib/api/sessions";
+import { postMessage, patchSessionTitle } from "@/lib/api/sessions";
 import { getExecutorEngine } from "@/lib/executor-engine";
 import { useChatStore } from "@/lib/store/chat";
 import { useSessionStore } from "@/lib/store/session";
+import { DEFAULT_SESSION_TITLE, isDefaultSessionTitle, titleFromUserMessage } from "@/lib/session-title";
 
 export function Composer({ sessionId }: { sessionId: string }) {
   const [text, setText] = useState("");
@@ -43,9 +44,30 @@ export function Composer({ sessionId }: { sessionId: string }) {
       setPhase("planning");
       setRunId(resp.run_id);
       const existing = useSessionStore.getState().sessions.find((session) => session.id === sessionId);
+      const currentTitle = existing?.title ?? DEFAULT_SESSION_TITLE;
+      let titleToUse = currentTitle;
+      if (isDefaultSessionTitle(currentTitle)) {
+        const derived = titleFromUserMessage(value);
+        if (!isDefaultSessionTitle(derived)) {
+          titleToUse = derived;
+          void patchSessionTitle(sessionId, derived).catch(() => {
+            upsertSession({
+              id: sessionId,
+              title: currentTitle,
+              createdAt: existing?.createdAt,
+              workflowId: existing?.workflowId ?? null,
+              status: "running",
+              runId: resp.run_id,
+              lastRunTerminal: null,
+              awaitingUser: false,
+              updatedAt: new Date().toISOString(),
+            });
+          });
+        }
+      }
       upsertSession({
         id: sessionId,
-        title: existing?.title ?? "新会话",
+        title: titleToUse,
         createdAt: existing?.createdAt,
         workflowId: existing?.workflowId ?? null,
         status: "running",

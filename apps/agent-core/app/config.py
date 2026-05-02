@@ -92,6 +92,28 @@ class Settings(BaseSettings):
     milvus_host: str = Field(default="milvus", alias="MILVUS_HOST")
     milvus_port: int = Field(default=19530, alias="MILVUS_PORT")
 
+    # ---- Auth (JWT) ----
+    jwt_secret: str = Field(
+        default="dev-insecure-change-me",
+        alias="JWT_SECRET",
+        description="HS256 secret for access tokens; MUST override in production",
+    )
+    jwt_expire_hours: int = Field(default=168, alias="JWT_EXPIRE_HOURS")
+
+    # ---- Email (SMTP / 验证码) ----
+    smtp_host: str = Field(default="", alias="SMTP_HOST")
+    smtp_port: int = Field(default=465, alias="SMTP_PORT")
+    smtp_user: str = Field(default="", alias="SMTP_USER")
+    smtp_password: str = Field(default="", alias="SMTP_PASSWORD")
+    smtp_from: str = Field(default="", alias="SMTP_FROM")
+    smtp_use_tls: bool = Field(default=True, alias="SMTP_USE_TLS")
+
+    # Google Sign-In：验证前端 GIS 下发的 id_token（audience = 该 Client ID）
+    google_oauth_client_id: str = Field(default="", alias="GOOGLE_OAUTH_CLIENT_ID")
+
+    # 逗号分隔：首次注册/谷歌建号时把这些邮箱设为 admin，其它为 user
+    admin_emails: str = Field(default="", alias="ADMIN_EMAILS")
+
     # ---- Misc ----
     prompts_dir: str = Field(default="/packages/prompts", alias="PROMPTS_DIR")
 

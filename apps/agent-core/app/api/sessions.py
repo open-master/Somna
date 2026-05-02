@@ -22,11 +22,12 @@ from typing import Annotated, Any
 from urllib.parse import quote as url_quote
 from urllib.parse import unquote
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from temporalio.service import RPCError
 
+from app.api.deps import CurrentUser, get_current_user
 from app.config import get_settings
 from app.events.emitter import fetch_history
 from app.graph.runtime import get_registry
@@ -35,6 +36,7 @@ from app.storage.postgres import get_pool
 from app.temporal.client import get_temporal_client
 from app.temporal.models import SessionWorkflowInput
 from app.temporal.workflows import SessionRunWorkflow
+from app.services.session_cleanup import assert_session_owner, hard_delete_session
 from app.tools.client import get_client
 
 log = get_logger(__name__)
@@ -82,7 +84,6 @@ def _guess_media_type_for_artifact(path: str) -> str:
 
 # ----- Schemas -----
 class CreateSessionReq(BaseModel):
-    user_id: uuid.UUID | None = None
     title: str = "New session"
     planner_model: str | None = None
     task_frame_model: str | None = None
@@ -135,25 +136,35 @@ class PostMessageResp(BaseModel):
     queued: bool = True
 
 
+class PatchSessionReq(BaseModel):
+    title: str = Field(min_length=1, max_length=500)
+
+
 # ----- CRUD -----
 @router.get("")
-async def list_sessions(limit: int = 100) -> list[dict[str, Any]]:
+async def list_sessions(
+    limit: int = 100,
+    user: CurrentUser = Depends(get_current_user),
+) -> list[dict[str, Any]]:
     pool = get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT id, user_id, title, status, planner_model, task_frame_model, executor_model, workflow_id, run_id, created_at, updated_at "
-            "FROM sessions ORDER BY updated_at DESC LIMIT $1",
+            "FROM sessions WHERE user_id = $1 ORDER BY updated_at DESC LIMIT $2",
+            user.id,
             limit,
         )
     return [dict(row) for row in rows]
 
 
 @router.post("", response_model=CreateSessionResp, status_code=201)
-async def create_session(req: CreateSessionReq) -> CreateSessionResp:
+async def create_session(
+    req: CreateSessionReq,
+    user: CurrentUser = Depends(get_current_user),
+) -> CreateSessionResp:
     s = get_settings()
     pool = get_pool()
     session_id = uuid.uuid4()
-    user_id = req.user_id or uuid.uuid4()  # dev shortcut; real auth comes in M3
     async with pool.acquire() as conn:
         await conn.execute(
             """
@@ -161,39 +172,85 @@ async def create_session(req: CreateSessionReq) -> CreateSessionResp:
             VALUES ($1, $2, $3, $4, $5, $6, 'active')
             """,
             session_id,
-            user_id,
+            user.id,
             req.title,
             None if req.skip_planner else (req.planner_model or s.agent_default_planner),
             req.task_frame_model or s.agent_default_taskframe,
             req.executor_model or s.agent_default_executor,
         )
-    log.info("session.created", id=str(session_id), user_id=str(user_id))
+    log.info("session.created", id=str(session_id), user_id=str(user.id))
     return CreateSessionResp(id=session_id, status="active", title=req.title)
 
 
 @router.get("/{sid}")
-async def get_session(sid: uuid.UUID) -> dict[str, Any]:
+async def get_session(sid: uuid.UUID, user: CurrentUser = Depends(get_current_user)) -> dict[str, Any]:
+    row = await assert_session_owner(sid, user.id)
+    return {
+        k: row[k]
+        for k in (
+            "id",
+            "user_id",
+            "title",
+            "status",
+            "planner_model",
+            "task_frame_model",
+            "executor_model",
+            "workflow_id",
+            "run_id",
+            "created_at",
+            "updated_at",
+        )
+        if k in row
+    }
+
+
+@router.patch("/{sid}")
+async def patch_session(
+    sid: uuid.UUID,
+    req: PatchSessionReq,
+    user: CurrentUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    await assert_session_owner(sid, user.id)
     pool = get_pool()
     async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE sessions SET title = $1, updated_at = now() WHERE id = $2 AND user_id = $3",
+            req.title.strip(),
+            sid,
+            user.id,
+        )
         row = await conn.fetchrow(
             "SELECT id, user_id, title, status, planner_model, task_frame_model, executor_model, workflow_id, run_id, created_at, updated_at "
             "FROM sessions WHERE id = $1",
             sid,
         )
-    if row is None:
-        raise HTTPException(404, "session not found")
-    return dict(row)
+    r = dict(row) if row else {}
+    return {k: r[k] for k in ("id", "user_id", "title", "status", "planner_model", "task_frame_model", "executor_model", "workflow_id", "run_id", "created_at", "updated_at") if k in r}
+
+
+@router.delete("/{sid}", status_code=204)
+async def delete_session(
+    sid: uuid.UUID,
+    user: CurrentUser = Depends(get_current_user),
+) -> Response:
+    await hard_delete_session(session_id=sid, user_id=user.id)
+    return Response(status_code=204)
 
 
 # ----- Messages -----
 @router.post("/{sid}/messages", response_model=PostMessageResp)
-async def post_message(sid: uuid.UUID, req: PostMessageReq) -> PostMessageResp:
+async def post_message(
+    sid: uuid.UUID,
+    req: PostMessageReq,
+    user: CurrentUser = Depends(get_current_user),
+) -> PostMessageResp:
     settings = get_settings()
     pool = get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT planner_model, task_frame_model, executor_model, status FROM sessions WHERE id = $1",
+            "SELECT planner_model, task_frame_model, executor_model, status FROM sessions WHERE id = $1 AND user_id = $2",
             sid,
+            user.id,
         )
         if row is None:
             raise HTTPException(404, "session not found")
@@ -282,14 +339,21 @@ class InterruptResp(BaseModel):
 
 
 @router.post("/{sid}/interrupt", response_model=InterruptResp)
-async def interrupt_session(sid: uuid.UUID, reason: str = "user_interrupt") -> InterruptResp:
+async def interrupt_session(
+    sid: uuid.UUID,
+    reason: str = "user_interrupt",
+    user: CurrentUser = Depends(get_current_user),
+) -> InterruptResp:
     pool = get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT workflow_id, run_id, status FROM sessions WHERE id = $1",
+            "SELECT workflow_id, run_id, status FROM sessions WHERE id = $1 AND user_id = $2",
             sid,
+            user.id,
         )
-    if row is None or row["status"] != "running" or not row["workflow_id"]:
+    if row is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    if row["status"] != "running" or not row["workflow_id"]:
         return InterruptResp(interrupted=False)
     await get_registry().set_reason(sid, reason=reason)
     temporal = await get_temporal_client()
@@ -337,13 +401,9 @@ async def get_artifact_content(
     path: str,
     download: Annotated[bool, Query()] = False,
     inline_preferred: Annotated[bool, Query(alias="inline")] = False,
+    user: CurrentUser = Depends(get_current_user),
 ) -> Response:
-    pool = get_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT id FROM sessions WHERE id = $1", sid)
-    if row is None:
-        raise HTTPException(404, "session not found")
-
+    await assert_session_owner(sid, user.id)
     candidates = _artifact_path_candidates(path)
     if not candidates:
         raise HTTPException(400, "invalid path")
@@ -393,7 +453,13 @@ async def get_artifact_content(
 
 # ----- Event replay -----
 @router.get("/{sid}/events")
-async def list_events(sid: uuid.UUID, since: int = 0, limit: int = 500) -> dict[str, Any]:
+async def list_events(
+    sid: uuid.UUID,
+    since: int = 0,
+    limit: int = 500,
+    user: CurrentUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    await assert_session_owner(sid, user.id)
     events = await fetch_history(str(sid), since_seq=since, limit=limit)
     next_seq = events[-1]["seq"] if events else since
     return {"events": events, "next_seq": next_seq}

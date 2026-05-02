@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from google.protobuf.json_format import MessageToDict
 from pydantic import BaseModel
 from temporalio.service import RPCError
 
+from app.api.deps import CurrentUser, get_current_user
 from app.config import get_settings
 from app.events.emitter import emit
 from app.graph.runtime import get_registry
@@ -21,6 +23,27 @@ from app.temporal.workflows import SessionRunWorkflow
 from somna_events import InterruptAckEvent, SessionPhase, StatusEvent
 
 router = APIRouter(prefix="/v1/temporal", tags=["temporal"])
+
+
+def _session_uuid_from_workflow_id(workflow_id: str) -> uuid.UUID | None:
+    m = re.match(r"^session:([0-9a-fA-F-]{36}):run:", workflow_id or "")
+    if not m:
+        return None
+    try:
+        return uuid.UUID(m.group(1))
+    except ValueError:
+        return None
+
+
+async def _assert_workflow_session_user(workflow_id: str, user: CurrentUser) -> None:
+    sid = _session_uuid_from_workflow_id(workflow_id)
+    if sid is None:
+        raise HTTPException(status_code=404, detail="workflow not found")
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT user_id FROM sessions WHERE id = $1", sid)
+    if row is None or row["user_id"] != user.id:
+        raise HTTPException(status_code=404, detail="workflow not found")
 
 
 class TemporalActionResp(BaseModel):
@@ -43,6 +66,7 @@ class TemporalRetryResp(BaseModel):
 async def list_temporal_workflows(
     limit: int = 100,
     query: str = "WorkflowType='SessionRunWorkflow'",
+    user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     temporal = await get_temporal_client()
     workflows: list[dict[str, Any]] = []
@@ -52,8 +76,21 @@ async def list_temporal_workflows(
     except RPCError as exc:
         raise HTTPException(status_code=503, detail=f"temporal unavailable: {exc}") from exc
 
-    await _attach_sessions(workflows)
-    return {"query": query, "workflows": workflows}
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        user_session_ids = {
+            row["id"] for row in await conn.fetch("SELECT id FROM sessions WHERE user_id = $1", user.id)
+        }
+
+    filtered: list[dict[str, Any]] = []
+    for item in workflows:
+        wid = str(item.get("workflow_id") or "")
+        sid = _session_uuid_from_workflow_id(wid)
+        if sid is not None and sid in user_session_ids:
+            filtered.append(item)
+
+    await _attach_sessions(filtered)
+    return {"query": query, "workflows": filtered}
 
 
 @router.get("/workflows/{workflow_id}")
@@ -61,7 +98,9 @@ async def get_temporal_workflow(
     workflow_id: str,
     run_id: str | None = None,
     history_limit: int = 100,
+    user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
+    await _assert_workflow_session_user(workflow_id, user)
     temporal = await get_temporal_client()
     handle = temporal.get_workflow_handle(workflow_id, run_id=run_id)
     try:
@@ -91,7 +130,9 @@ async def cancel_temporal_workflow(
     workflow_id: str,
     run_id: str | None = None,
     reason: str = "user_interrupt",
+    user: CurrentUser = Depends(get_current_user),
 ) -> TemporalActionResp:
+    await _assert_workflow_session_user(workflow_id, user)
     temporal = await get_temporal_client()
     handle = temporal.get_workflow_handle(workflow_id, run_id=run_id)
     session_row = await _session_row_for_workflow_id(workflow_id)
@@ -118,7 +159,9 @@ async def terminate_temporal_workflow(
     workflow_id: str,
     run_id: str | None = None,
     reason: str = "user_stop",
+    user: CurrentUser = Depends(get_current_user),
 ) -> TemporalActionResp:
+    await _assert_workflow_session_user(workflow_id, user)
     temporal = await get_temporal_client()
     handle = temporal.get_workflow_handle(workflow_id, run_id=run_id)
     session_row = await _session_row_for_workflow_id(workflow_id)
@@ -152,7 +195,11 @@ async def terminate_temporal_workflow(
 
 
 @router.post("/workflows/{workflow_id}/retry", response_model=TemporalRetryResp)
-async def retry_temporal_workflow(workflow_id: str) -> TemporalRetryResp:
+async def retry_temporal_workflow(
+    workflow_id: str,
+    user: CurrentUser = Depends(get_current_user),
+) -> TemporalRetryResp:
+    await _assert_workflow_session_user(workflow_id, user)
     session_row = await _session_row_for_workflow_id(workflow_id)
     if session_row is None:
         raise HTTPException(status_code=404, detail="linked session not found for workflow")

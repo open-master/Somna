@@ -165,7 +165,7 @@ export default function ChatSessionPage() {
   useEventStream(sessionId, handlers);
 
   const title = useSessionStore((s) =>
-    s.sessions.find((x) => x.id === s.currentId)?.title ?? "Somna AI",
+    s.sessions.find((x) => x.id === s.currentId)?.title ?? "新会话",
   );
 
   return (

@@ -11,11 +11,13 @@ import json
 import uuid
 from collections.abc import AsyncGenerator
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from sse_starlette.sse import EventSourceResponse
 
+from app.api.deps import CurrentUser, get_current_user
 from app.events.emitter import fetch_history
 from app.logging_setup import get_logger
+from app.services.session_cleanup import assert_session_owner
 from app.storage.nats_client import get_js
 
 log = get_logger(__name__)
@@ -94,5 +96,7 @@ async def stream(
     sid: uuid.UUID,
     request: Request,
     since: int = Query(default=0, ge=0),
+    user: CurrentUser = Depends(get_current_user),
 ) -> EventSourceResponse:
+    await assert_session_owner(sid, user.id)
     return EventSourceResponse(_replay_then_live(sid, since, request))

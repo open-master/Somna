@@ -14,9 +14,12 @@ export async function GET(req: NextRequest, context: { params: { sid: string } }
   const origin = (process.env.AGENT_CORE_URL ?? "http://127.0.0.1:8000").replace(/\/$/, "");
   const url = `${origin}/v1/sessions/${encodeURIComponent(sid)}/stream?since=${encodeURIComponent(since)}`;
 
+  const token = req.cookies.get("somna_access_token")?.value;
+  const headers: Record<string, string> = { Accept: "text/event-stream" };
+  if (token) headers.Authorization = `Bearer ${token}`;
   const upstream = await fetch(url, {
     cache: "no-store",
-    headers: { Accept: "text/event-stream" },
+    headers,
   });
 
   if (!upstream.ok) {

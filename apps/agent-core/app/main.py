@@ -9,6 +9,8 @@ import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.auth import router as auth_router
+from app.api.admin_users import router as admin_users_router
 from app.api.health import router as health_router
 from app.api.sessions import router as sessions_router
 from app.api.stream import router as stream_router
@@ -102,6 +104,8 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(health_router)
+    app.include_router(auth_router)
+    app.include_router(admin_users_router)
     app.include_router(sessions_router)
     app.include_router(stream_router)
     app.include_router(temporal_router)

@@ -1,6 +1,7 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE
-  ? `${process.env.NEXT_PUBLIC_API_BASE}/v1/temporal`
-  : "/api/v1/temporal";
+import { authHeaders } from "@/lib/auth/cookie";
+
+const API_BASE =
+  typeof window !== "undefined" ? "/api/v1/temporal" : `${process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000"}/v1/temporal`;
 
 export interface LinkedSession {
   id: string;
@@ -64,7 +65,7 @@ export async function listTemporalWorkflows(
 ): Promise<{ query: string; workflows: TemporalWorkflow[] }> {
   const res = await fetch(
     `${API_BASE}/workflows?limit=${limit}&query=${encodeURIComponent(query)}`,
-    { cache: "no-store" },
+    { cache: "no-store", headers: { ...authHeaders() } },
   );
   if (!res.ok) throw new Error(`listTemporalWorkflows: ${res.status}`);
   return res.json();
@@ -79,6 +80,7 @@ export async function getTemporalWorkflow(
   params.set("history_limit", String(opts.historyLimit ?? 100));
   const res = await fetch(`${API_BASE}/workflows/${encodeURIComponent(workflowId)}?${params.toString()}`, {
     cache: "no-store",
+    headers: { ...authHeaders() },
   });
   if (!res.ok) throw new Error(`getTemporalWorkflow: ${res.status}`);
   return res.json();
@@ -93,6 +95,7 @@ export async function cancelTemporalWorkflow(
   params.set("reason", opts.reason ?? "user_interrupt");
   const res = await fetch(`${API_BASE}/workflows/${encodeURIComponent(workflowId)}/cancel?${params.toString()}`, {
     method: "POST",
+    headers: { ...authHeaders() },
   });
   if (!res.ok) throw new Error(`cancelTemporalWorkflow: ${res.status}`);
   return res.json();
@@ -107,6 +110,7 @@ export async function terminateTemporalWorkflow(
   params.set("reason", opts.reason ?? "user_stop");
   const res = await fetch(`${API_BASE}/workflows/${encodeURIComponent(workflowId)}/terminate?${params.toString()}`, {
     method: "POST",
+    headers: { ...authHeaders() },
   });
   if (!res.ok) throw new Error(`terminateTemporalWorkflow: ${res.status}`);
   return res.json();
@@ -115,6 +119,7 @@ export async function terminateTemporalWorkflow(
 export async function retryTemporalWorkflow(workflowId: string): Promise<TemporalWorkflowActionResp> {
   const res = await fetch(`${API_BASE}/workflows/${encodeURIComponent(workflowId)}/retry`, {
     method: "POST",
+    headers: { ...authHeaders() },
   });
   if (!res.ok) throw new Error(`retryTemporalWorkflow: ${res.status}`);
   return res.json();

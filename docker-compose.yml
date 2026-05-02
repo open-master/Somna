@@ -361,6 +361,7 @@ services:
       dockerfile: apps/web/Dockerfile
       args:
         AGENT_CORE_URL: http://agent-core:8000
+        NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${NEXT_PUBLIC_GOOGLE_CLIENT_ID:-}
     restart: unless-stopped
     env_file:
       - .env

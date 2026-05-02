@@ -1,4 +1,5 @@
 "use client";
+import * as Dialog from "@radix-ui/react-dialog";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -6,21 +7,35 @@ import {
   Activity,
   CheckCircle2,
   Clock3,
+  LogOut,
   MessagesSquare,
+  MoreHorizontal,
   PanelLeft,
   PanelRight,
+  Pencil,
   PlayCircle,
   Plus,
   Search,
   Settings2,
+  Trash2,
   User2,
   Workflow,
+  X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { createSession, deleteSession, listSessions, patchSessionTitle, type Session } from "@/lib/api/sessions";
+import { clearAccessTokenCookie } from "@/lib/auth/cookie";
+import { meRequest, type AuthUser } from "@/lib/api/auth";
 import { cn } from "@/lib/utils/cn";
-import { createSession, listSessions, type Session } from "@/lib/api/sessions";
 import { useSessionStore, type SessionSummary } from "@/lib/store/session";
 import { useUiStore } from "@/lib/store/ui";
 import { SettingsDialog } from "@/components/layout/SettingsDialog";
@@ -53,10 +68,18 @@ export function Sidebar() {
   const current = useSessionStore((s) => s.currentId);
   const sessions = useSessionStore((s) => s.sessions);
   const upsert = useSessionStore((s) => s.upsertSession);
+  const removeSession = useSessionStore((s) => s.removeSession);
   const hydrate = useSessionStore((s) => s.hydrateSessions);
 
   const [query, setQuery] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<{ id: string; title: string } | null>(null);
+  const [renameInput, setRenameInput] = useState("");
+  const [profile, setProfile] = useState<AuthUser | null>(null);
+
+  useEffect(() => {
+    void meRequest().then(setProfile);
+  }, [pathname]);
 
   useEffect(() => {
     let cancelled = false;
@@ -66,11 +89,39 @@ export function Sidebar() {
       })
       .catch((err) => {
         console.error("sessions.list.failed", err);
+        if (err instanceof Error && /401|403/.test(err.message)) {
+          clearAccessTokenCookie();
+          router.push("/login");
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [hydrate]);
+  }, [hydrate, router]);
+
+  async function handleDeleteSession(id: string) {
+    if (!window.confirm("确定删除该会话？本地与云端相关数据将硬删除且不可恢复。")) return;
+    try {
+      await deleteSession(id);
+      removeSession(id);
+      if (current === id) router.push("/");
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "删除失败");
+    }
+  }
+
+  async function submitRename() {
+    if (!renameTarget) return;
+    const title = renameInput.trim();
+    if (!title) return;
+    try {
+      const updated = await patchSessionTitle(renameTarget.id, title);
+      upsert(toSummary(updated));
+      setRenameTarget(null);
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "重命名失败");
+    }
+  }
 
   const filteredSessions = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -85,9 +136,18 @@ export function Sidebar() {
   ).length;
 
   async function handleNew() {
-    const s = await createSession("新会话");
-    upsert(toSummary(s));
-    router.push(`/chat/${s.id}`);
+    try {
+      const s = await createSession("新会话");
+      upsert(toSummary(s));
+      router.push(`/chat/${s.id}`);
+    } catch (e) {
+      if (e instanceof Error && /401|403/.test(e.message)) {
+        clearAccessTokenCookie();
+        router.push("/login");
+        return;
+      }
+      console.error("createSession.failed", e);
+    }
   }
 
   return (
@@ -109,7 +169,7 @@ export function Sidebar() {
           </div>
           {!sidebarCollapsed ? (
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold tracking-tight">Somna AI</p>
+              <p className="truncate text-sm font-semibold tracking-tight">Somna</p>
             </div>
           ) : null}
           <Button
@@ -131,10 +191,10 @@ export function Sidebar() {
               "rounded-xl gap-2",
               sidebarCollapsed ? "size-10 w-full justify-center p-0" : "w-full justify-start",
             )}
-            title="新建会话"
+            title="开始新会话"
           >
             <Plus className="size-4 shrink-0" />
-            {!sidebarCollapsed ? "新建会话" : null}
+            {!sidebarCollapsed ? "开始新会话" : null}
           </Button>
           <div className={cn(sidebarCollapsed ? "flex flex-col gap-2" : "grid grid-cols-2 gap-2")}>
             {NAV_ITEMS.map((item) => {
@@ -208,28 +268,61 @@ export function Sidebar() {
                 filteredSessions.map((s) => {
                   const visual = sessionRowVisual(s);
                   return (
-                  <Link
-                    key={s.id}
-                    href={`/chat/${s.id}`}
-                    className={cn(
-                      "block rounded-2xl border px-3 py-3 transition-colors",
-                      current === s.id
-                        ? "border-primary/30 bg-primary/5 shadow-sm"
-                        : "border-transparent bg-background/70 hover:border-border hover:bg-background",
-                    )}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium">{s.title}</p>
-                        <p className="mt-1 truncate text-xs text-muted-foreground">{s.id}</p>
+                    <div
+                      key={s.id}
+                      className={cn(
+                        "grid grid-cols-[minmax(0,1fr)_auto] items-stretch rounded-2xl border transition-colors",
+                        current === s.id
+                          ? "border-primary/30 bg-primary/5 shadow-sm"
+                          : "border-transparent bg-background/70 hover:border-border hover:bg-background",
+                      )}
+                    >
+                      <Link href={`/chat/${s.id}`} className="min-w-0 overflow-hidden px-3 py-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium">{s.title}</p>
+                            <p className="mt-1 truncate text-xs text-muted-foreground font-mono">{s.id}</p>
+                          </div>
+                          <SessionStatusDot variant={visual.dot} />
+                        </div>
+                        <div className="mt-3 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                          <span className="shrink-0">{visual.label}</span>
+                          <span className="shrink-0 tabular-nums">{formatDate(s.updatedAt)}</span>
+                        </div>
+                      </Link>
+                      <div className="flex shrink-0 flex-col items-center justify-start border-l border-border/50 bg-muted/10 py-2 pl-0.5 pr-1.5">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              type="button"
+                              size="icon"
+                              variant="ghost"
+                              className="size-8 shrink-0 rounded-lg text-muted-foreground hover:text-foreground"
+                              aria-label="会话操作"
+                            >
+                              <MoreHorizontal className="size-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-44">
+                            <DropdownMenuItem
+                              className="gap-2"
+                              onSelect={() => {
+                                setRenameTarget({ id: s.id, title: s.title });
+                                setRenameInput(s.title);
+                              }}
+                            >
+                              <Pencil className="size-3.5" /> 重命名
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              className="gap-2 text-destructive focus:text-destructive"
+                              onSelect={() => void handleDeleteSession(s.id)}
+                            >
+                              <Trash2 className="size-3.5" /> 删除
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </div>
-                      <SessionStatusDot variant={visual.dot} />
                     </div>
-                    <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
-                      <span>{visual.label}</span>
-                      <span>{formatDate(s.updatedAt)}</span>
-                    </div>
-                  </Link>
                   );
                 })
               )}
@@ -289,10 +382,28 @@ export function Sidebar() {
         </div>
         {!sidebarCollapsed ? (
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium">Me</p>
-            <p className="text-xs text-muted-foreground">Local operator</p>
+            <p className="truncate text-sm font-medium" title={profile?.email}>
+              {profile?.email ?? "…"}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {profile?.role === "admin" ? "管理员" : "用户"}
+            </p>
           </div>
         ) : null}
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          aria-label="退出登录"
+          title="退出登录"
+          onClick={() => {
+            clearAccessTokenCookie();
+            router.push("/");
+          }}
+          className={cn(sidebarCollapsed && "w-full")}
+        >
+          <LogOut className="size-4" />
+        </Button>
         <Button
           type="button"
           size="icon"
@@ -304,6 +415,40 @@ export function Sidebar() {
           <Settings2 className="size-4" />
         </Button>
       </div>
+      <Dialog.Root
+        open={renameTarget !== null}
+        onOpenChange={(o) => {
+          if (!o) setRenameTarget(null);
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm data-[state=open]:animate-in" />
+          <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-2xl border bg-card p-6 shadow-xl outline-none">
+            <div className="flex items-start justify-between gap-3">
+              <Dialog.Title className="text-lg font-semibold">重命名会话</Dialog.Title>
+              <Dialog.Close asChild>
+                <Button size="icon" variant="ghost" className="size-8 shrink-0 rounded-lg" aria-label="关闭">
+                  <X className="size-4" />
+                </Button>
+              </Dialog.Close>
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">将同步到服务器。</p>
+            <div className="mt-4 space-y-3">
+              <Input value={renameInput} onChange={(e) => setRenameInput(e.target.value)} className="rounded-xl" placeholder="标题" />
+              <div className="flex justify-end gap-2">
+                <Dialog.Close asChild>
+                  <Button type="button" variant="secondary" className="rounded-xl">
+                    取消
+                  </Button>
+                </Dialog.Close>
+                <Button type="button" className="rounded-xl" onClick={() => void submitRename()}>
+                  保存
+                </Button>
+              </div>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
     </aside>
   );

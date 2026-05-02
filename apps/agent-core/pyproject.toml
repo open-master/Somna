@@ -44,6 +44,10 @@ dependencies = [
     "mem0ai>=0.1.50",
     "pymilvus>=2.4",
 
+    "pyjwt>=2.9",
+    "bcrypt>=4.2",
+    "google-auth>=2.35",
+
     # Tools / observability
     "tenacity>=9.0",
     "langfuse>=2.50",
