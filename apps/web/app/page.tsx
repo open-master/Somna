@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Activity, ArrowRight, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -10,12 +10,72 @@ import { meRequest } from "@/lib/api/auth";
 import { buildAuthHref } from "@/lib/auth/finish-login";
 import { useSessionStore } from "@/lib/store/session";
 
+const TAGLINE_TYPEWRITER = "Somna · Autonomous General Agent";
+
+function useTypewriterLoop(text: string) {
+  const [display, setDisplay] = useState("");
+  const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  useEffect(() => {
+    const typeMs = 72;
+    const deleteMs = 42;
+    const pauseFullMs = 2400;
+    const pauseEmptyMs = 650;
+    let cancelled = false;
+    let pos = 0;
+    let forward = true;
+
+    const clearTimers = () => {
+      for (const t of timersRef.current) clearTimeout(t);
+      timersRef.current = [];
+    };
+
+    const schedule = (fn: () => void, ms: number) => {
+      const t = setTimeout(fn, ms);
+      timersRef.current.push(t);
+    };
+
+    const step = () => {
+      if (cancelled) return;
+      if (forward) {
+        if (pos < text.length) {
+          pos += 1;
+          setDisplay(text.slice(0, pos));
+          schedule(step, typeMs);
+        } else {
+          schedule(() => {
+            if (cancelled) return;
+            forward = false;
+            step();
+          }, pauseFullMs);
+        }
+      } else if (pos > 0) {
+        pos -= 1;
+        setDisplay(text.slice(0, pos));
+        schedule(step, deleteMs);
+      } else {
+        forward = true;
+        schedule(step, pauseEmptyMs);
+      }
+    };
+
+    step();
+    return () => {
+      cancelled = true;
+      clearTimers();
+    };
+  }, [text]);
+
+  return display;
+}
+
 export default function HomePage() {
   const router = useRouter();
   const upsert = useSessionStore((s) => s.upsertSession);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [authed, setAuthed] = useState<boolean | null>(null);
+  const taglineTyped = useTypewriterLoop(TAGLINE_TYPEWRITER);
 
   const loginHref = buildAuthHref("/login", { afterLogin: "new-session" });
   const registerHref = buildAuthHref("/register", { afterLogin: "new-session" });
@@ -80,28 +140,23 @@ export default function HomePage() {
       </header>
 
       <div className="grid h-full place-items-center">
-        <div className="max-w-xl space-y-6 px-6 text-center">
-          <div className="inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs text-muted-foreground">
-            <Sparkles className="size-3.5 text-primary" /> Somna · Manus-like autonomous agent
+        <div className="max-w-4xl space-y-6 px-6 text-center">
+          <div className="mx-auto inline-flex min-h-[2rem] max-w-full items-center justify-center gap-2 rounded-full border px-3 py-1 text-xs text-muted-foreground">
+            <Sparkles className="size-3.5 shrink-0 text-primary" />
+            <span className="text-left font-mono tabular-nums">
+              {taglineTyped}
+              <span className="ml-px inline-block w-0.5 animate-pulse bg-primary align-text-bottom" aria-hidden />
+            </span>
           </div>
-          <h1 className="text-4xl font-semibold tracking-tight">
-            把任务交给一个<span className="text-primary"> 会打开浏览器 </span>的 Agent
+          <h1 className="whitespace-nowrap text-3xl font-semibold tracking-tight sm:text-4xl">
+            把目标交给 Somna 它会自己完成
           </h1>
-          <p className="text-muted-foreground">
-            它有屏幕、文件、终端和记忆。你给一个目标，它给你结果。
-          </p>
           <div className="flex flex-wrap items-center justify-center gap-3">
             <Button size="lg" onClick={() => void start()} disabled={loading} className="gap-1">
-              {loading ? "创建中…" : "开始新会话"} <ArrowRight className="size-4" />
+              {loading ? "创建中…" : "开始"} <ArrowRight className="size-4" />
             </Button>
           </div>
-          {error ? (
-            <p className="text-xs text-destructive">{error}</p>
-          ) : (
-            <p className="text-xs text-muted-foreground">
-              后端未就绪？请先 <code className="font-mono">make up</code>，再刷新。
-            </p>
-          )}
+          {error ? <p className="text-xs text-destructive">{error}</p> : null}
         </div>
       </div>
     </main>
