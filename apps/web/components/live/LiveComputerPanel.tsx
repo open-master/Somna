@@ -1,7 +1,9 @@
 "use client";
-import { Monitor, TerminalSquare, FolderOpen, Activity } from "lucide-react";
+import { Monitor, TerminalSquare, FolderOpen, Activity, X } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { useUiStore } from "@/lib/store/ui";
 
 import { FilesPanel } from "./FilesPanel";
 import { ScreenPanel } from "./ScreenPanel";
@@ -9,17 +11,33 @@ import { TerminalPanel } from "./TerminalPanel";
 import { TracePanel } from "./TracePanel";
 
 export function LiveComputerPanel({ sessionId }: { sessionId: string }) {
+  const closeLiveComputer = useUiStore((s) => s.closeLiveComputer);
+
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex h-16 shrink-0 items-center justify-between border-b px-4">
-        <div className="flex items-center gap-2">
-          <span className="inline-block size-2 rounded-full bg-emerald-500 animate-pulse" />
-          <div>
+    <div className="flex flex-col h-full min-h-0">
+      <div className="flex h-16 shrink-0 items-center justify-between gap-2 border-b px-4">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="inline-block size-2 shrink-0 rounded-full bg-emerald-500 animate-pulse" />
+          <div className="min-w-0">
             <div className="text-sm font-medium">Live Computer</div>
-            <div className="text-xs text-muted-foreground">屏幕、文件、终端与事件正在同步</div>
+            <div className="truncate text-xs text-muted-foreground">屏幕、文件、终端与事件正在同步</div>
           </div>
         </div>
-        <span className="rounded-full border px-2.5 py-1 text-xs text-muted-foreground">Agent 观察区</span>
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="hidden sm:inline rounded-full border px-2.5 py-1 text-xs text-muted-foreground">
+            Agent 观察区
+          </span>
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className="rounded-xl"
+            aria-label="收起观察区"
+            onClick={() => closeLiveComputer()}
+          >
+            <X className="size-4" />
+          </Button>
+        </div>
       </div>
       <Tabs defaultValue="screen" className="flex-1 flex flex-col min-h-0">
         <TabsList className="mx-3 mt-3 w-auto self-start rounded-xl bg-muted/60 p-1">

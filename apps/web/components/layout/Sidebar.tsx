@@ -7,6 +7,8 @@ import {
   CheckCircle2,
   Clock3,
   MessagesSquare,
+  PanelLeft,
+  PanelRight,
   PlayCircle,
   Plus,
   Search,
@@ -20,6 +22,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils/cn";
 import { createSession, listSessions, type Session } from "@/lib/api/sessions";
 import { useSessionStore, type SessionSummary } from "@/lib/store/session";
+import { useUiStore } from "@/lib/store/ui";
 import { SettingsDialog } from "@/components/layout/SettingsDialog";
 
 const NAV_ITEMS = [
@@ -43,6 +46,9 @@ export function Sidebar() {
   const router = useRouter();
   const pathname = usePathname();
   const activeNav = pathname.startsWith("/temporal") ? "temporal" : "sessions";
+
+  const sidebarCollapsed = useUiStore((s) => s.sidebarCollapsed);
+  const toggleSidebar = useUiStore((s) => s.toggleSidebar);
 
   const current = useSessionStore((s) => s.currentId);
   const sessions = useSessionStore((s) => s.sessions);
@@ -85,24 +91,52 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="flex w-[296px] shrink-0 flex-col border-r bg-muted/20 backdrop-blur">
-      <div className="border-b px-4 pb-4 pt-5">
-        <div className="flex items-center gap-3">
-          <div className="grid size-10 place-items-center rounded-2xl border bg-background shadow-sm">
+    <aside
+      className={cn(
+        "flex shrink-0 flex-col border-r bg-muted/20 backdrop-blur transition-[width] duration-200 ease-out",
+        sidebarCollapsed ? "w-[72px]" : "w-[296px]",
+      )}
+    >
+      <div className={cn("border-b pt-5 pb-4", sidebarCollapsed ? "px-2" : "px-4")}>
+        <div
+          className={cn(
+            "flex w-full items-center",
+            sidebarCollapsed ? "flex-col gap-2" : "gap-3",
+          )}
+        >
+          <div className="grid size-10 shrink-0 place-items-center rounded-2xl border bg-background shadow-sm">
             <Activity className="size-4 text-primary" />
           </div>
-          <div className="min-w-0">
-            <p className="truncate text-sm font-semibold tracking-tight">Somna AI</p>
-            <p className="text-xs text-muted-foreground">Autonomous Agent Console</p>
-          </div>
+          {!sidebarCollapsed ? (
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-semibold tracking-tight">Somna AI</p>
+            </div>
+          ) : null}
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className={cn("shrink-0 rounded-xl", sidebarCollapsed && "mx-auto")}
+            aria-label={sidebarCollapsed ? "展开侧栏" : "收起侧栏"}
+            onClick={() => toggleSidebar()}
+          >
+            {sidebarCollapsed ? <PanelRight className="size-4" /> : <PanelLeft className="size-4" />}
+          </Button>
         </div>
 
-        <div className="mt-4 space-y-2">
-          <Button onClick={handleNew} className="w-full justify-start rounded-xl">
-            <Plus className="size-4" />
-            新建会话
+        <div className={cn("mt-4 space-y-2", sidebarCollapsed && "flex flex-col items-stretch")}>
+          <Button
+            onClick={handleNew}
+            className={cn(
+              "rounded-xl gap-2",
+              sidebarCollapsed ? "size-10 w-full justify-center p-0" : "w-full justify-start",
+            )}
+            title="新建会话"
+          >
+            <Plus className="size-4 shrink-0" />
+            {!sidebarCollapsed ? "新建会话" : null}
           </Button>
-          <div className="grid grid-cols-2 gap-2">
+          <div className={cn(sidebarCollapsed ? "flex flex-col gap-2" : "grid grid-cols-2 gap-2")}>
             {NAV_ITEMS.map((item) => {
               const Icon = item.icon;
               const isActive = item.key === activeNav;
@@ -121,13 +155,21 @@ export function Sidebar() {
                   asChild
                   variant={isActive ? "secondary" : "ghost"}
                   className={cn(
-                    "justify-start rounded-xl border",
-                    !isActive && "border-transparent bg-transparent",
+                    sidebarCollapsed ? "size-10 w-full justify-center p-0" : "justify-start rounded-xl border",
+                    !isActive && !sidebarCollapsed && "border-transparent bg-transparent",
+                    !isActive && sidebarCollapsed && "border-transparent",
                   )}
+                  title={item.label}
                 >
-                  <Link href={href}>
-                    <Icon className="size-4" />
-                    {item.label}
+                  <Link
+                    href={href}
+                    className={cn(
+                      "flex w-full items-center gap-2",
+                      sidebarCollapsed && "size-full justify-center gap-0",
+                    )}
+                  >
+                    <Icon className="size-4 shrink-0" />
+                    {!sidebarCollapsed ? item.label : <span className="sr-only">{item.label}</span>}
                   </Link>
                 </Button>
               );
@@ -136,7 +178,9 @@ export function Sidebar() {
         </div>
       </div>
 
-      {activeNav === "sessions" ? (
+      {sidebarCollapsed ? (
+        <div className="flex-1 min-h-0" aria-hidden />
+      ) : activeNav === "sessions" ? (
         <>
           <div className="space-y-3 px-4 py-4">
             <div>
@@ -234,20 +278,28 @@ export function Sidebar() {
         </>
       )}
 
-      <div className="flex items-center gap-3 border-t px-4 py-3">
+      <div
+        className={cn(
+          "flex items-center gap-3 border-t py-3",
+          sidebarCollapsed ? "flex-col px-2" : "px-4",
+        )}
+      >
         <div className="grid size-9 place-items-center rounded-full bg-primary/10 text-primary">
           <User2 className="size-4" />
         </div>
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium">Me</p>
-          <p className="text-xs text-muted-foreground">Local operator</p>
-        </div>
+        {!sidebarCollapsed ? (
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-medium">Me</p>
+            <p className="text-xs text-muted-foreground">Local operator</p>
+          </div>
+        ) : null}
         <Button
           type="button"
           size="icon"
           variant="ghost"
           aria-label="设置"
           onClick={() => setSettingsOpen(true)}
+          className={cn(sidebarCollapsed && "w-full")}
         >
           <Settings2 className="size-4" />
         </Button>

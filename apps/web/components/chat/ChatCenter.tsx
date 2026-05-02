@@ -1,6 +1,8 @@
 "use client";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { LiveComputerDock } from "@/components/live/LiveComputerDock";
 import { useChatStore } from "@/lib/store/chat";
+import { useUiStore } from "@/lib/store/ui";
 
 import { Composer } from "./Composer";
 import { DeliverablesHub } from "./DeliverablesHub";
@@ -11,6 +13,7 @@ import { TaskFrameBanner } from "./TaskFrameBanner";
 export function ChatCenter({ sessionId }: { sessionId: string }) {
   const messages = useChatStore((s) => s.messages);
   const hasConversation = messages.length > 0;
+  const liveExpanded = useUiStore((s) => s.liveComputerExpanded);
 
   return (
     <div className="flex flex-1 min-h-0 flex-col bg-[linear-gradient(180deg,transparent,hsl(var(--muted)/0.28))]">
@@ -28,6 +31,13 @@ export function ChatCenter({ sessionId }: { sessionId: string }) {
       <ScrollArea className="flex-1 min-h-0">
         <MessageList sessionId={sessionId} />
       </ScrollArea>
+      {!liveExpanded ? (
+        <div className="shrink-0 border-t border-border/60 bg-gradient-to-t from-background to-background/80 px-4 py-3">
+          <div className="mx-auto w-full max-w-3xl">
+            <LiveComputerDock />
+          </div>
+        </div>
+      ) : null}
       <Composer sessionId={sessionId} />
     </div>
   );
