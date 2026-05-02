@@ -191,7 +191,13 @@ export function DeliverablesHub({ sessionId }: { sessionId: string }) {
       });
     }
 
-    const list = Array.from(byKey.values()).sort((a, b) => b.ts - a.ts);
+    const list = Array.from(byKey.values())
+      .filter((r) => {
+        if (/[\{\}\[\]`]/.test(r.key) || /[\{\}\[\]`]/.test(r.name)) return false;
+        if (/:\d+\]/.test(r.key) || /:\d+\]/.test(r.name)) return false;
+        return true;
+      })
+      .sort((a, b) => b.ts - a.ts);
     return list;
   }, [artifacts, fileItems, messages, sessionId]);
 

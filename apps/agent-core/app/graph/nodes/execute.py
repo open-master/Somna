@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import json
 import mimetypes
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shlex
 import time
@@ -843,6 +843,23 @@ def _render_tool_content(result) -> str:
     return json.dumps(body, ensure_ascii=False)
 
 
+def _is_publishable_artifact_relpath(path: str) -> bool:
+    """Skip junk paths recovered from shell/logs（如代码片段误当作文件名）。"""
+    s = (path or "").strip().replace("\\", "/")
+    if not s or len(s) > 512:
+        return False
+    if ".." in PurePosixPath(s).parts:
+        return False
+    if any(c in s for c in "{}"):
+        return False
+    if "[:" in s:
+        return False
+    base = Path(s).name
+    if not base or len(base) > 240:
+        return False
+    return True
+
+
 def _artifact_url(session_id, path: str) -> str:
     """Browser-facing URL. When NEXT_PUBLIC_API_BASE is unset, use Next.js /api proxy."""
     base = (get_settings().public_api_base or "").strip().rstrip("/")
@@ -864,6 +881,8 @@ async def _emit_artifact_events(
         if path in seen:
             continue
         seen.add(path)
+        if not _is_publishable_artifact_relpath(path):
+            continue
         suffix = Path(path).suffix.lower()
         if not suffix:
             continue

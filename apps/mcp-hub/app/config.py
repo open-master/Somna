@@ -30,7 +30,10 @@ class Settings(BaseSettings):
     shell_max_timeout_sec: int = Field(default=600, alias="MCP_SHELL_MAX_TIMEOUT_SEC")
     shell_output_preview_bytes: int = Field(default=4096, alias="MCP_SHELL_PREVIEW_BYTES")
 
-    fs_max_file_bytes: int = Field(default=50 * 1024 * 1024, alias="MCP_FS_MAX_FILE_BYTES")  # 50 MiB
+    fs_max_file_bytes: int = Field(
+        default=256 * 1024 * 1024,
+        alias="MCP_FS_MAX_FILE_BYTES",
+    )  # 256 MiB：视频等交付物预览需一次 read；过大会占内存，可用 env 再调
     fs_max_list_entries: int = Field(default=2000, alias="MCP_FS_MAX_LIST_ENTRIES")
 
     # ---- Search tool ----

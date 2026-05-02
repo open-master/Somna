@@ -411,6 +411,7 @@ async def get_artifact_content(
     await get_client().ensure_sandbox(str(sid))
     chosen: str | None = None
     body_b64: str | None = None
+    last_err: str | None = None
     for cand in candidates:
         tool = await get_client().invoke(
             "filesystem",
@@ -419,6 +420,9 @@ async def get_artifact_content(
             session_id=str(sid),
         )
         if not tool.ok:
+            err = (tool.error or "").strip()
+            if err:
+                last_err = err
             continue
         out = tool.output if isinstance(tool.output, dict) else {}
         content = out.get("content")
@@ -429,6 +433,12 @@ async def get_artifact_content(
         break
 
     if not chosen or not body_b64:
+        le = (last_err or "").lower()
+        if "exceeds limit" in le or "exceed" in le and "bytes" in le:
+            raise HTTPException(
+                status_code=413,
+                detail="artifact too large for inline preview; raise MCP_FS_MAX_FILE_BYTES or use download",
+            )
         raise HTTPException(404, "artifact not found")
 
     try:
