@@ -27,13 +27,24 @@ model_list:
       description: "Kimi K2 Turbo - faster variant"
       max_tokens: 262144
 
+  # 官方请求体 model 字段为 kimi-k2.6（见 https://platform.kimi.com/docs/guide/kimi-k2-6-quickstart ）
+  - model_name: kimi-k2.6
+    litellm_params:
+      model: openai/kimi-k2.6
+      api_base: https://api.moonshot.cn/v1
+      api_key: os.environ/MOONSHOT_API_KEY
+    model_info:
+      description: "Kimi K2.6 — Moonshot（model=kimi-k2.6，多模态/Agent）"
+      max_tokens: 262144
+
+  # 历史别名：旧前端曾使用 kimi-k2-6，与 kimi-k2.6 同一路由，避免已选模型失效
   - model_name: kimi-k2-6
     litellm_params:
       model: openai/kimi-k2.6
       api_base: https://api.moonshot.cn/v1
       api_key: os.environ/MOONSHOT_API_KEY
     model_info:
-      description: "Kimi K2.6 — Moonshot multimodal / agent (upstream id kimi-k2.6)"
+      description: "别名 → 同 kimi-k2.6（请优先选 Kimi K2.6 / kimi-k2.6）"
       max_tokens: 262144
 
   - model_name: moonshot-v1-128k
@@ -169,8 +180,9 @@ router_settings:
     - agent-taskframe:   [qwen-turbo, deepseek-v4-flash]
     - agent-executor:    [kimi-k2-0905]
     - agent-planner:     [kimi-k2-0905]
-    - kimi-k2-0905:      [kimi-k2-turbo, kimi-k2-6, qwen3-max, deepseek-chat]
-    - kimi-k2-turbo:     [kimi-k2-0905, kimi-k2-6, qwen-plus]
+    - kimi-k2-0905:      [kimi-k2-turbo, kimi-k2.6, qwen3-max, deepseek-chat]
+    - kimi-k2-turbo:     [kimi-k2-0905, kimi-k2.6, qwen-plus]
+    - kimi-k2.6:         [kimi-k2-0905, kimi-k2-turbo, qwen3-max]
     - kimi-k2-6:         [kimi-k2-0905, kimi-k2-turbo, qwen3-max]
     - qwen3-max:         [qwen-plus, kimi-k2-0905]
     - qwen-plus:         [qwen-turbo, deepseek-chat]
