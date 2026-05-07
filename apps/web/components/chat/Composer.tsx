@@ -107,7 +107,7 @@ export function Composer({ sessionId }: { sessionId: string }) {
     } finally {
       setSending(false);
     }
-  }, [sending, sessionId, pushUser, rollbackLastUserMessage, setPhase, setRunId, upsertSession]);
+  }, [text, sending, sessionId, pushUser, rollbackLastUserMessage, setPhase, setRunId, upsertSession]);
 
   const onKey = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
