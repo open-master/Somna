@@ -39,9 +39,11 @@ from app.temporal.workflows import SessionRunWorkflow
 from app.services.session_cleanup import assert_session_owner, hard_delete_session
 from app.services.attachments import (
     ALLOWED_EXTENSIONS,
+    fetch_object_bytes,
     normalize_attachment_refs,
     put_upload_object,
     safe_filename,
+    uploads_key_prefix,
     validate_mime_for_extension,
 )
 from app.tools.client import get_client
@@ -293,6 +295,28 @@ async def upload_session_attachment(
         mime=ct,
         size=len(body),
         s3_key=key,
+    )
+
+
+@router.get("/{sid}/attachments/file")
+async def get_session_upload_file(
+    sid: uuid.UUID,
+    key: str = Query(..., min_length=1, description="S3 对象完整 key（本会话 uploads 前缀下）"),
+    user: CurrentUser = Depends(get_current_user),
+) -> Response:
+    """拉取用户上传的原始字节（Cookie / Bearer 均可），供前端 <img> 内联预览。"""
+    await assert_session_owner(sid, user.id)
+    prefix = uploads_key_prefix(sid)
+    if not key.startswith(prefix) or ".." in PurePosixPath(key).parts:
+        raise HTTPException(status_code=404, detail="not found")
+    body = await fetch_object_bytes(key)
+    if body is None:
+        raise HTTPException(status_code=404, detail="not found")
+    media_type = _guess_media_type_for_artifact(Path(key).name)
+    return Response(
+        content=body,
+        media_type=media_type,
+        headers={"Cache-Control": "private, max-age=3600"},
     )
 
 

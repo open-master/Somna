@@ -25,7 +25,7 @@ export type ChatMessage =
 interface ChatState {
   messages: ChatMessage[];
   activeAssistantId: string | null;
-  pushUser: (text: string) => void;
+  pushUser: (text: string, attachments?: SessionAttachmentRef[]) => void;
   /** 自 DB 注水，id 与 createdAt 用服务端值，避免刷新后重复或乱序 */
   pushUserHydrated: (row: {
     id: string;
@@ -48,11 +48,17 @@ interface ChatState {
 export const useChatStore = create<ChatState>((set) => ({
   messages: [],
   activeAssistantId: null,
-  pushUser: (text) =>
+  pushUser: (text, attachments) =>
     set((s) => ({
       messages: [
         ...s.messages,
-        { kind: "user", id: `u_${Date.now()}`, text, createdAt: Date.now() },
+        {
+          kind: "user",
+          id: `u_${Date.now()}`,
+          text,
+          createdAt: Date.now(),
+          ...(attachments?.length ? { attachments } : {}),
+        },
       ],
     })),
   pushUserHydrated: (row) =>

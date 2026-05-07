@@ -57,11 +57,11 @@ export function Composer({ sessionId }: { sessionId: string }) {
     if ((!value && attachments.length === 0) || sending) return;
     setSendError(null);
     setSending(true);
-    const userBubble =
-      value || (attachments.length ? `「已添加 ${attachments.length} 个附件」` : "");
-    if (userBubble) pushUser(userBubble);
-    setText("");
     const pendingAtt = [...attachments];
+    const userBubble =
+      value || (pendingAtt.length ? `「已添加 ${pendingAtt.length} 个附件」` : "");
+    if (userBubble) pushUser(userBubble, pendingAtt.length ? pendingAtt : undefined);
+    setText("");
     setAttachments([]);
     const execEngine = getExecutorEngine();
     try {

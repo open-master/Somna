@@ -228,6 +228,11 @@ export async function waitUntilSessionAllowsMessage(
   throw new Error("等待上一段任务释放会话超时，请稍后重试");
 }
 
+/** 同源 URL：用户上传文件预览（<img src> 带 Cookie） */
+export function sessionUserUploadFileUrl(sessionId: string, s3Key: string): string {
+  return `/api/v1/sessions/${encodeURIComponent(sessionId)}/attachments/file?key=${encodeURIComponent(s3Key)}`;
+}
+
 /** 同源 EventSource：由 Next route 把 cookie 转为 upstream Authorization。 */
 export function streamUrl(id: string, since = 0): string {
   return `/api/v1/sessions/${encodeURIComponent(id)}/stream?since=${since}`;

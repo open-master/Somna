@@ -23,6 +23,7 @@ export function MessageList({ sessionId }: { sessionId: string }) {
             return (
               <UserMessage
                 key={m.id}
+                sessionId={sessionId}
                 text={m.text}
                 attachments={m.attachments}
               />
