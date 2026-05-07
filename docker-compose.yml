@@ -60,7 +60,8 @@ services:
       MYSQL_USER: ${MYSQL_USER}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
       MYSQL_DATABASE: ${MYSQL_DATABASE}
-    command: --default-authentication-plugin=caching_sha2_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    # MySQL 8.4+ 已移除 default-authentication-plugin（默认即为 caching_sha2_password）
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     # 宿主机端口：云主机常已占用 3306，可在 .env 设 MYSQL_HOST_PORT=3307
     ports:
       - "${MYSQL_HOST_PORT:-3306}:3306"
