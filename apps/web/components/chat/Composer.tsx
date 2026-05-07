@@ -100,9 +100,10 @@ export function Composer({ sessionId }: { sessionId: string }) {
       const existing = useSessionStore.getState().sessions.find((session) => session.id === sessionId);
       const currentTitle = existing?.title ?? DEFAULT_SESSION_TITLE;
       let titleToUse = currentTitle;
-      const titleSource = value || userBubble;
-      if (isDefaultSessionTitle(currentTitle)) {
-        const derived = titleFromUserMessage(titleSource);
+      // 仅用用户输入的非空正文作为自动标题：纯附件不参与；首次出现文字的该次写入后标题锁死，直至默认标题被手动改名等
+      const userTextForTitle = value.trim();
+      if (isDefaultSessionTitle(currentTitle) && userTextForTitle.length > 0) {
+        const derived = titleFromUserMessage(userTextForTitle);
         if (!isDefaultSessionTitle(derived)) {
           titleToUse = derived;
           void patchSessionTitle(sessionId, derived).catch(() => {
