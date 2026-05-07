@@ -27,6 +27,15 @@ model_list:
       description: "Kimi K2 Turbo - faster variant"
       max_tokens: 262144
 
+  - model_name: kimi-k2-6
+    litellm_params:
+      model: openai/kimi-k2.6
+      api_base: https://api.moonshot.cn/v1
+      api_key: os.environ/MOONSHOT_API_KEY
+    model_info:
+      description: "Kimi K2.6 — Moonshot multimodal / agent (upstream id kimi-k2.6)"
+      max_tokens: 262144
+
   - model_name: moonshot-v1-128k
     litellm_params:
       model: openai/moonshot-v1-128k
@@ -160,8 +169,9 @@ router_settings:
     - agent-taskframe:   [qwen-turbo, deepseek-v4-flash]
     - agent-executor:    [kimi-k2-0905]
     - agent-planner:     [kimi-k2-0905]
-    - kimi-k2-0905:      [kimi-k2-turbo, qwen3-max, deepseek-chat]
-    - kimi-k2-turbo:     [kimi-k2-0905, qwen-plus]
+    - kimi-k2-0905:      [kimi-k2-turbo, kimi-k2-6, qwen3-max, deepseek-chat]
+    - kimi-k2-turbo:     [kimi-k2-0905, kimi-k2-6, qwen-plus]
+    - kimi-k2-6:         [kimi-k2-0905, kimi-k2-turbo, qwen3-max]
     - qwen3-max:         [qwen-plus, kimi-k2-0905]
     - qwen-plus:         [qwen-turbo, deepseek-chat]
     - qwen-turbo:        [qwen-plus]
