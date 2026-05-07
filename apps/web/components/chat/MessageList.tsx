@@ -20,7 +20,13 @@ export function MessageList({ sessionId }: { sessionId: string }) {
       {messages.map((m) => {
         switch (m.kind) {
           case "user":
-            return <UserMessage key={m.id} text={m.text} />;
+            return (
+              <UserMessage
+                key={m.id}
+                text={m.text}
+                attachments={m.attachments}
+              />
+            );
           case "assistant":
             return <AssistantMessage key={m.id} text={m.text} thinking={m.thinking} sessionId={sessionId} />;
           case "tool":

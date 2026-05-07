@@ -33,7 +33,14 @@ export interface SessionAttachmentRef {
   s3_key: string;
 }
 
-export type SessionEvent = AgentEvent & { seq?: number | null };
+export type SessionEvent = AgentEvent & { seq?: number | null; created_at?: string };
+
+export interface SessionUserMessageRow {
+  id: string;
+  role: string;
+  content: { text?: string; attachments?: SessionAttachmentRef[] };
+  created_at: string;
+}
 
 export async function listSessions(limit = 100): Promise<Session[]> {
   const res = await fetch(`${API_BASE}?limit=${limit}`, {
@@ -88,6 +95,44 @@ export async function deleteSession(id: string): Promise<void> {
     throw new Error(t || "delete conflict: session running");
   }
   if (!res.ok) throw new Error(`deleteSession: ${res.status}`);
+}
+
+export async function listSessionMessages(id: string): Promise<SessionUserMessageRow[]> {
+  const res = await fetch(`${API_BASE}/${encodeURIComponent(id)}/messages`, {
+    cache: "no-store",
+    headers: { ...authHeaders() },
+  });
+  if (res.status === 401) throw new Error("401");
+  if (!res.ok) throw new Error(`listSessionMessages: ${res.status}`);
+  const payload = (await res.json()) as { messages?: SessionUserMessageRow[] };
+  return payload.messages ?? [];
+}
+
+/** 分页拉取本会话全部事件原始 JSON（含 seq、created_at），用于与用户名交错合并 */
+export async function listAllSessionEventPayloads(id: string): Promise<unknown[]> {
+  const out: unknown[] = [];
+  let since = 0;
+  const limit = 800;
+  for (;;) {
+    const res = await fetch(
+      `${API_BASE}/${encodeURIComponent(id)}/events?since=${since}&limit=${limit}`,
+      {
+        cache: "no-store",
+        headers: { ...authHeaders() },
+      },
+    );
+    if (res.status === 401) throw new Error("401");
+    if (!res.ok) throw new Error(`listSessionEvents: ${res.status}`);
+    const payload = (await res.json()) as { events?: unknown[] };
+    const batch = payload.events ?? [];
+    if (batch.length === 0) break;
+    out.push(...batch);
+    const last = batch[batch.length - 1] as { seq?: number };
+    if (typeof last.seq !== "number") break;
+    since = last.seq;
+    if (batch.length < limit) break;
+  }
+  return out;
 }
 
 export async function listSessionEvents(id: string, since = 0, limit = 200): Promise<SessionEvent[]> {
@@ -191,6 +236,8 @@ export function streamUrl(id: string, since = 0): string {
 function parseSessionEvent(raw: unknown): SessionEvent | null {
   const parsed = parseAgentEvent(raw);
   if (!parsed) return null;
-  const seq = typeof (raw as { seq?: unknown }).seq === "number" ? (raw as { seq: number }).seq : null;
-  return { ...parsed, seq };
+  const r = raw as { seq?: unknown; created_at?: unknown };
+  const seq = typeof r.seq === "number" ? r.seq : null;
+  const created_at = typeof r.created_at === "string" ? r.created_at : undefined;
+  return { ...parsed, seq, ...(created_at ? { created_at } : {}) };
 }

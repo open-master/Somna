@@ -74,5 +74,7 @@ async def fetch_history(session_id: str, since_seq: int = 0, limit: int = 500) -
         payload = r["payload"]
         if isinstance(payload, str):
             payload = json.loads(payload)
-        out.append({**payload, "seq": r["seq"]})
+        row_ts = r["created_at"]
+        created = row_ts.isoformat() if hasattr(row_ts, "isoformat") else str(row_ts)
+        out.append({**payload, "seq": r["seq"], "created_at": created})
     return out

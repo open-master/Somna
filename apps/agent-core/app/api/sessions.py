@@ -297,6 +297,46 @@ async def upload_session_attachment(
 
 
 # ----- Messages -----
+@router.get("/{sid}/messages")
+async def list_session_messages(
+    sid: uuid.UUID,
+    user: CurrentUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """列出本会话已持久化的用户消息（按时间升序），供进页与 Agent 事件合并时间线。"""
+    await assert_session_owner(sid, user.id)
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, role, content, created_at
+            FROM messages
+            WHERE session_id = $1 AND role = 'user'
+            ORDER BY created_at ASC
+            """,
+            sid,
+        )
+    messages: list[dict[str, Any]] = []
+    for row in rows:
+        c = row["content"]
+        if isinstance(c, str):
+            try:
+                c = json.loads(c)
+            except json.JSONDecodeError:
+                c = {"text": c}
+        if not isinstance(c, dict):
+            c = {"text": str(c)}
+        ca = row["created_at"]
+        messages.append(
+            {
+                "id": str(row["id"]),
+                "role": row["role"],
+                "content": c,
+                "created_at": ca.isoformat() if hasattr(ca, "isoformat") else str(ca),
+            }
+        )
+    return {"messages": messages}
+
+
 @router.post("/{sid}/messages", response_model=PostMessageResp)
 async def post_message(
     sid: uuid.UUID,

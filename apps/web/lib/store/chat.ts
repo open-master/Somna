@@ -7,9 +7,17 @@ import type {
   ToolResultEvent,
 } from "@somna/event-schema";
 
+import type { SessionAttachmentRef } from "@/lib/api/sessions";
+
 // Unified message model rendered by MessageList
 export type ChatMessage =
-  | { kind: "user"; id: string; text: string; createdAt: number }
+  | {
+      kind: "user";
+      id: string;
+      text: string;
+      createdAt: number;
+      attachments?: SessionAttachmentRef[];
+    }
   | { kind: "assistant"; id: string; text: string; thinking?: string; createdAt: number }
   | { kind: "tool"; id: string; name: string; args: unknown; status: "running" | "ok" | "failed"; preview?: string; durationMs?: number; createdAt: number }
   | { kind: "artifact"; id: string; name: string; mime: string; url: string; createdAt: number };
@@ -18,6 +26,15 @@ interface ChatState {
   messages: ChatMessage[];
   activeAssistantId: string | null;
   pushUser: (text: string) => void;
+  /** 自 DB 注水，id 与 createdAt 用服务端值，避免刷新后重复或乱序 */
+  pushUserHydrated: (row: {
+    id: string;
+    text: string;
+    createdAt: number;
+    attachments?: SessionAttachmentRef[];
+  }) => void;
+  /** 新一轮 run 开始（如 status.planning）时切断上一轮助手气泡拼接 */
+  beginAssistantTurn: () => void;
   /** postMessage 失败时撤销最后一条乐观插入的用户消息 */
   rollbackLastUserMessage: () => void;
   onMessageDelta: (e: MessageDeltaEvent) => void;
@@ -38,6 +55,20 @@ export const useChatStore = create<ChatState>((set) => ({
         { kind: "user", id: `u_${Date.now()}`, text, createdAt: Date.now() },
       ],
     })),
+  pushUserHydrated: (row) =>
+    set((s) => ({
+      messages: [
+        ...s.messages,
+        {
+          kind: "user",
+          id: row.id,
+          text: row.text,
+          createdAt: row.createdAt,
+          ...(row.attachments?.length ? { attachments: row.attachments } : {}),
+        },
+      ],
+    })),
+  beginAssistantTurn: () => set({ activeAssistantId: null }),
   rollbackLastUserMessage: () =>
     set((s) => {
       const m = s.messages;

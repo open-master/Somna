@@ -94,6 +94,9 @@ export default function ChatSessionPage() {
       screenshot: (e) => { live.onScreenshot(e); live.track(e); },
       "token.usage": (e) => { live.onUsage(e); live.track(e); },
       status: (e) => {
+        if (e.phase === "planning") {
+          useChatStore.getState().beginAssistantTurn();
+        }
         session.setPhase(e.phase);
         if (e.run_id) session.setRunId(e.run_id);
         const existing = session.sessions.find((item) => item.id === sessionId);
