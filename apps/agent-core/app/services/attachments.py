@@ -213,6 +213,30 @@ async def fetch_object_bytes(key: str) -> bytes | None:
         return None
 
 
+def extract_pdf_text(data: bytes, *, max_pages: int = 80, max_chars: int = 120_000) -> str:
+    """从 PDF 字节中提取纯文本（供轻量直接回答等多模态兜底）；失败返回空串。"""
+    if not data:
+        return ""
+    try:
+        from io import BytesIO
+
+        from pypdf import PdfReader
+
+        reader = PdfReader(BytesIO(data))
+        chunks: list[str] = []
+        n = min(len(reader.pages), max_pages)
+        for i in range(n):
+            page = reader.pages[i]
+            chunks.append(page.extract_text() or "")
+        out = "\n".join(chunks).strip()
+        if len(out) > max_chars:
+            return out[:max_chars] + "\n…（PDF 文本过长已截断）"
+        return out
+    except Exception as exc:  # noqa: BLE001
+        log.warning("attachments.pdf_extract_failed", error=str(exc))
+        return ""
+
+
 async def delete_session_uploads_prefix(session_id: uuid.UUID) -> None:
     """删除本会话下 uploads 前缀的所有对象（硬删会话时调用）。"""
     settings = get_settings()

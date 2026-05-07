@@ -13,6 +13,7 @@ from app.config import get_settings
 from app.events.emitter import emit
 from app.graph.run_artifacts import persist_task_frame_pointer
 from app.graph.state import SessionState
+from app.graph.user_turn import last_human_turn_text
 from app.llm.client import get_async_openai
 from app.logging_setup import get_logger
 from app.prompts.loader import load_template, render
@@ -251,7 +252,7 @@ def deliverable_type_implies_artifact(deliverable_type: str) -> bool:
 async def task_frame_node(state: SessionState) -> SessionState:
     session_id = state["session_id"]
     run_id = state.get("run_id")
-    user_message = state.get("user_message") or ""
+    user_message = last_human_turn_text(state)
 
     if not str(user_message).strip():
         log.info("graph.task_frame.blank_user", session_id=str(session_id))

@@ -23,6 +23,15 @@ import {
   X,
 } from "lucide-react";
 
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -75,6 +84,9 @@ export function Sidebar() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<{ id: string; title: string } | null>(null);
   const [renameInput, setRenameInput] = useState("");
+  const [deletePromptId, setDeletePromptId] = useState<string | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [errorAlert, setErrorAlert] = useState<string | null>(null);
   const [profile, setProfile] = useState<AuthUser | null>(null);
 
   useEffect(() => {
@@ -99,14 +111,25 @@ export function Sidebar() {
     };
   }, [hydrate, router]);
 
-  async function handleDeleteSession(id: string) {
-    if (!window.confirm("确定删除该会话？本地与云端相关数据将硬删除且不可恢复。")) return;
+  async function confirmDeleteSession() {
+    const id = deletePromptId;
+    if (!id) return;
+    setDeleteBusy(true);
     try {
       await deleteSession(id);
       removeSession(id);
+      setDeletePromptId(null);
       if (current === id) router.push("/");
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : "删除失败");
+      setDeletePromptId(null);
+      if (e instanceof Error && /401|403/.test(e.message)) {
+        clearAccessTokenCookie();
+        router.push("/login");
+        return;
+      }
+      setErrorAlert(e instanceof Error ? e.message : "删除失败");
+    } finally {
+      setDeleteBusy(false);
     }
   }
 
@@ -119,7 +142,12 @@ export function Sidebar() {
       upsert(toSummary(updated));
       setRenameTarget(null);
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : "重命名失败");
+      if (e instanceof Error && /401|403/.test(e.message)) {
+        clearAccessTokenCookie();
+        router.push("/login");
+        return;
+      }
+      setErrorAlert(e instanceof Error ? e.message : "重命名失败");
     }
   }
 
@@ -315,7 +343,10 @@ export function Sidebar() {
                             </DropdownMenuItem>
                             <DropdownMenuItem
                               className="gap-2 text-destructive focus:text-destructive"
-                              onSelect={() => void handleDeleteSession(s.id)}
+                              onSelect={(e) => {
+                                e.preventDefault();
+                                setDeletePromptId(s.id);
+                              }}
                             >
                               <Trash2 className="size-3.5" /> 删除
                             </DropdownMenuItem>
@@ -449,6 +480,53 @@ export function Sidebar() {
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
+
+      <AlertDialog
+        open={deletePromptId !== null}
+        onOpenChange={(open) => {
+          if (!open && !deleteBusy) setDeletePromptId(null);
+        }}
+      >
+        <AlertDialogContent className="rounded-2xl">
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除会话</AlertDialogTitle>
+            <AlertDialogDescription>
+              确定删除该会话？本地与云端相关数据将硬删除且不可恢复。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteBusy} className="rounded-xl">
+              取消
+            </AlertDialogCancel>
+            <Button
+              type="button"
+              variant="destructive"
+              className="rounded-xl"
+              disabled={deleteBusy}
+              onClick={() => void confirmDeleteSession()}
+            >
+              {deleteBusy ? "删除中…" : "确定删除"}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={errorAlert !== null} onOpenChange={(open) => !open && setErrorAlert(null)}>
+        <AlertDialogContent className="rounded-2xl">
+          <AlertDialogHeader>
+            <AlertDialogTitle>无法完成操作</AlertDialogTitle>
+            <AlertDialogDescription className="whitespace-pre-wrap break-words">
+              {errorAlert ?? ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <Button type="button" className="rounded-xl" onClick={() => setErrorAlert(null)}>
+              确定
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
     </aside>
   );

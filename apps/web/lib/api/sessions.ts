@@ -4,6 +4,29 @@ import { getResolvedAgentModels } from "@/lib/agent-models";
 import { authHeaders } from "@/lib/auth/cookie";
 import { getResolvedMcpToolModels } from "@/lib/mcp-tool-models";
 
+/** 解析 FastAPI 等返回的 JSON `detail`，避免把整段 JSON 显示给用户。 */
+async function readApiErrorMessage(res: Response, fallback: string): Promise<string> {
+  const text = await res.text();
+  if (!text.trim()) return fallback;
+  try {
+    const j = JSON.parse(text) as { detail?: unknown };
+    if (typeof j.detail === "string") return j.detail;
+    if (Array.isArray(j.detail)) {
+      return j.detail
+        .map((item) => {
+          if (item && typeof item === "object" && "msg" in item) {
+            return String((item as { msg: unknown }).msg);
+          }
+          return String(item);
+        })
+        .join(" ");
+    }
+  } catch {
+    /* 非 JSON，用原文（短文本） */
+  }
+  return text.length <= 400 ? text : fallback;
+}
+
 /** 浏览器走 Next 反代，以便携带 cookie + Authorization；SSR 直连 agent-core（仅构建/少数场景）。 */
 const API_BASE =
   typeof window !== "undefined"
@@ -80,7 +103,10 @@ export async function patchSessionTitle(id: string, title: string): Promise<Sess
     body: JSON.stringify({ title }),
   });
   if (res.status === 401) throw new Error("401");
-  if (!res.ok) throw new Error(`patchSession: ${res.status}`);
+  if (!res.ok) {
+    const msg = await readApiErrorMessage(res, `patchSession: ${res.status}`);
+    throw new Error(msg);
+  }
   return res.json();
 }
 
@@ -90,11 +116,10 @@ export async function deleteSession(id: string): Promise<void> {
     headers: { ...authHeaders() },
   });
   if (res.status === 401) throw new Error("401");
-  if (res.status === 409) {
-    const t = await res.text();
-    throw new Error(t || "delete conflict: session running");
+  if (!res.ok) {
+    const msg = await readApiErrorMessage(res, `deleteSession: ${res.status}`);
+    throw new Error(msg);
   }
-  if (!res.ok) throw new Error(`deleteSession: ${res.status}`);
 }
 
 export async function listSessionMessages(id: string): Promise<SessionUserMessageRow[]> {

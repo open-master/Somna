@@ -2,16 +2,74 @@
 
 from __future__ import annotations
 
+import base64
+from typing import Any
+
 from langchain_core.messages import AIMessage
 from somna_events import MessageDeltaEvent, SessionPhase, StatusEvent
 
 from app.config import get_settings
 from app.events.emitter import emit
 from app.graph.state import SessionState
+from app.graph.user_turn import last_human_turn_text
 from app.llm.client import get_async_openai
 from app.logging_setup import get_logger
 
 log = get_logger(__name__)
+
+_MAX_DIRECT_ANSWER_IMAGES = 8
+
+
+async def _build_direct_answer_user_payload(
+    state: SessionState,
+    text_block: str,
+) -> str | list[dict[str, Any]]:
+    """轻量直接回答：附带 PDF 文本与图片（OpenAI 多模态），与 ingest 写入沙箱的附件列表对齐。"""
+    from app.services.attachments import extract_pdf_text, fetch_object_bytes
+
+    attachments = list(state.get("attachments") or [])
+    if not attachments:
+        return text_block
+
+    pdf_sections: list[str] = []
+    image_items: list[tuple[dict[str, Any], bytes]] = []
+
+    for att in attachments:
+        key = att.get("s3_key")
+        if not isinstance(key, str):
+            continue
+        mime = str(att.get("mime") or "").lower()
+        fname = str(att.get("filename") or "file")
+
+        if mime.startswith("image/"):
+            data = await fetch_object_bytes(key)
+            if data and len(image_items) < _MAX_DIRECT_ANSWER_IMAGES:
+                image_items.append((att, data))
+            continue
+
+        is_pdf = mime == "application/pdf" or fname.lower().endswith(".pdf")
+        if is_pdf:
+            data = await fetch_object_bytes(key)
+            if data:
+                txt = extract_pdf_text(data)
+                if txt.strip():
+                    pdf_sections.append(f"### {fname}\n{txt}")
+
+    body = text_block
+    if pdf_sections:
+        body = text_block + "\n\n### 附件文本（PDF 提取）\n\n" + "\n\n".join(pdf_sections)
+
+    if not image_items:
+        return body
+
+    out: list[dict[str, Any]] = [{"type": "text", "text": body}]
+    for att, raw in image_items:
+        m = str(att.get("mime") or "image/png").split(";")[0].strip()
+        if not m.startswith("image/"):
+            m = "image/png"
+        b64 = base64.standard_b64encode(raw).decode("ascii")
+        out.append({"type": "image_url", "image_url": {"url": f"data:{m};base64,{b64}"}})
+    return out
 
 
 async def clarify_node(state: SessionState) -> SessionState:
@@ -48,7 +106,7 @@ async def direct_answer_node(state: SessionState) -> SessionState:
     run_id = state.get("run_id")
     settings = get_settings()
     model = (state.get("executor_model") or settings.agent_default_executor).strip()
-    user_message = state.get("user_message") or ""
+    turn_text = last_human_turn_text(state)
     frame = state.get("task_frame") or {}
 
     parts: list[str] = []
@@ -60,12 +118,15 @@ async def direct_answer_node(state: SessionState) -> SessionState:
     sc = frame.get("success_criteria") or []
     if isinstance(sc, list) and sc:
         parts.append("success_criteria: " + "；".join(str(x) for x in sc[:5]))
-    parts.append("\n### 用户问题\n" + user_message)
+    parts.append("\n### 用户问题与材料\n" + turn_text)
 
     user_block = "\n".join(parts)
+    user_payload = await _build_direct_answer_user_payload(state, user_block)
+    is_multimodal = isinstance(user_payload, list)
 
     system = (
         "你是 Somna。当前为「直接回答」模式：用户请求适合用简短对话完成，无需启动沙盒工具或多步任务编排。\n"
+        "若用户提供了图片，请直接基于图片内容作答；若提供了 PDF 提取文本，请基于该文本作答。\n"
         "要求：简洁、准确、分点有条理；不确定处明确说明；不要编造未经验证的事实；"
         "不要承诺本会话内会去执行需要浏览器/搜索/写文件的操作（若需要，应建议用户改用完整任务模式）。\n"
         "语言与用户一致，默认中文。"
@@ -80,13 +141,21 @@ async def direct_answer_node(state: SessionState) -> SessionState:
         )
     )
 
+    att_n = len(list(state.get("attachments") or []))
+    log.info(
+        "graph.direct_answer",
+        session_id=str(session_id),
+        multimodal=is_multimodal,
+        attachments=att_n,
+    )
+
     client = get_async_openai()
     text_buf = ""
     stream = await client.chat.completions.create(
         model=model,
         messages=[
             {"role": "system", "content": system},
-            {"role": "user", "content": user_block},
+            {"role": "user", "content": user_payload},
         ],
         temperature=0.2,
         stream=True,
@@ -104,5 +173,5 @@ async def direct_answer_node(state: SessionState) -> SessionState:
     text = text_buf.strip() or "（未能生成回答，请重试或改用完整任务描述。）"
     new_msgs = list(state.get("messages") or [])
     new_msgs.append(AIMessage(content=text))
-    log.info("graph.direct_answer", session_id=str(session_id), chars=len(text))
+    log.info("graph.direct_answer.done", session_id=str(session_id), chars=len(text))
     return {"messages": new_msgs, "assistant_text": text, "finished": True}
