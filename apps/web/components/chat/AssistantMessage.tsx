@@ -8,6 +8,7 @@ import remarkGfm from "remark-gfm";
 import { Download, ExternalLink, Sparkles } from "lucide-react";
 
 import { PptxAwareLink, PptxAwarePreviewButton } from "@/components/chat/PptxAwarePreview";
+import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils/cn";
 import { useLiveStore } from "@/lib/store/live";
 import { artifactDownloadUrl, artifactPreviewUrl, parseArtifactPathFromUrl } from "@/lib/utils/artifact-links";
@@ -208,11 +209,13 @@ export function AssistantMessage({
           </details>
         ) : null}
         {text ? (
-          <article className="prose prose-sm max-w-none dark:prose-invert prose-p:my-1 prose-pre:my-2">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              rehypePlugins={[rehypeRaw, rehypeSanitize]}
-              components={{
+          <Card className="border-border/70 bg-gradient-to-b from-card to-muted/10 shadow-sm">
+            <CardContent className="p-4 sm:p-5">
+              <article className="prose prose-sm max-w-none dark:prose-invert prose-p:my-1.5 prose-pre:my-2 prose-headings:scroll-mt-20 prose-a:text-primary prose-a:underline-offset-4 hover:prose-a:underline">
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  rehypePlugins={[rehypeRaw, rehypeSanitize]}
+                  components={{
                 a: ({ href, children, ...props }) => {
                   const isApi = typeof href === "string" && href.startsWith("/api/");
                   return (
@@ -229,18 +232,36 @@ export function AssistantMessage({
                   const isDeliv = isDeliverablesMarkdownTable(children);
                   return (
                     <DeliverablesTableContext.Provider value={isDeliv}>
-                      <div className="not-prose my-3 overflow-x-auto rounded-md border border-border/80">
-                        <table className="w-full min-w-[28rem] border-collapse text-sm">{children}</table>
+                      <div className="not-prose my-3 overflow-hidden rounded-lg border border-border/80 bg-card shadow-sm">
+                        <div className="overflow-x-auto">
+                          <table className="w-full min-w-[28rem] border-collapse text-sm text-foreground">
+                            {children}
+                          </table>
+                        </div>
                       </div>
                     </DeliverablesTableContext.Provider>
                   );
                 },
+                thead: ({ children }) => <thead className="bg-muted/55">{children}</thead>,
+                tbody: ({ children }) => <tbody className="[&_tr:last-child_td]:border-b-0">{children}</tbody>,
+                th: ({ children, className, ...props }) => (
+                  <th className={cn("border-b border-border px-3 py-2.5 text-left text-xs font-semibold", className)} {...props}>
+                    {children}
+                  </th>
+                ),
+                td: ({ children, className, ...props }) => (
+                  <td className={cn("border-b border-border/60 px-3 py-2.5 align-top text-sm leading-relaxed", className)} {...props}>
+                    {children}
+                  </td>
+                ),
                 tr: ({ children }) => <MarkdownTableRow sessionId={sessionId}>{children}</MarkdownTableRow>,
-              }}
-            >
-              {text}
-            </ReactMarkdown>
-          </article>
+                  }}
+                >
+                  {text}
+                </ReactMarkdown>
+              </article>
+            </CardContent>
+          </Card>
         ) : (
           <div className="text-xs text-muted-foreground italic">思考中...</div>
         )}

@@ -3,6 +3,19 @@ import { Monitor } from "lucide-react";
 
 import { useLiveStore } from "@/lib/store/live";
 
+function screenshotSourceLabel(source: "browser" | "desktop" | "custom"): string {
+  switch (source) {
+    case "custom":
+      return "Workspace 交付物预览";
+    case "browser":
+      return "浏览器画面";
+    case "desktop":
+      return "桌面画面";
+    default:
+      return source;
+  }
+}
+
 export function ScreenPanel() {
   const latest = useLiveStore((s) => s.latestScreenshot);
   const screenshots = useLiveStore((s) => s.screenshots);
@@ -26,7 +39,7 @@ export function ScreenPanel() {
       {latest ? (
         <>
           <div className="px-3 py-1.5 text-xs text-muted-foreground border-t bg-background/70 flex justify-between">
-            <span>{latest.source}</span>
+            <span>{screenshotSourceLabel(latest.source)}</span>
             <span className="font-mono">{new Date(latest.ts).toLocaleTimeString()}</span>
           </div>
           {screenshots.length > 1 ? (
