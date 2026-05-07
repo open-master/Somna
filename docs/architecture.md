@@ -27,12 +27,10 @@ Somna AI 按"**大脑 / 躯干 / 四肢 / 记忆 / 神经**"五层解构：
 ┌──▼───────────────────┐ ┌─────────▼─────────┐
 │ Agent Core (FastAPI) │ │ MinIO / S3        │
 │ ┌──────────────────┐ │ └───────────────────┘
-│ │ LangGraph Graph  │ │
-│ │ ingest→plan→     │ │       ┌──────────────────────┐
-│ │ execute→compact→ │ │◀─────▶│ Temporal Server      │
-│ │ reflect→finalize │ │       │ (workflow durable)   │
-│ │ (Postgres ckpt)  │ │       └──────────────────────┘
-│ └────────┬─────────┘ │
+│ │ LangGraph Graph  │ │       ┌──────────────────────┐
+│ │ （节点级 §3.2）    │ │◀─────▶│ Temporal Server      │
+│ │ Postgres ckpt    │ │       │ (workflow durable)   │
+│ └────────┬─────────┘ │       └──────────────────────┘
 │          │ execute   │              ┌──────────────┐
 │ ┌────────▼─────────┐ │   MCP/HTTP   │ MCP Hub      │
 │ │ Claude Agent SDK │─┼─────────────▶│ tool router  │
@@ -69,15 +67,21 @@ Shared: Postgres (+pgvector) · MySQL · Milvus · Redis · NATS · Langfuse · 
 
 > 详见 [ADR 0002](./adr/0002-langgraph-claude-sdk-split.md)
 
-### 3.2 LangGraph 状态机节点
+### 3.2 LangGraph：路线图 vs 当前实现
+
+文档刻意拆成两层：**路线图**描述目标形态（评审与规划用）；**当前实现**以仓库代码为准（开发与排障用）。二者不一致时，以 `apps/agent-core/app/graph/session_graph.py` 为准。
+
+#### 3.2.1 路线图（目标态）
+
+以下为主干设想：**ingest 后进入规划环，execute 与上下文压缩（compact）可与 reflect 形成多轮闭环**。其中「ingest 内 RAG 预检索」「compact 为独立图节点」等能力与当前代码可能尚未完全对齐，属演进方向。
 
 ```text
        ┌─────────┐
-START→ │ ingest  │  规范化输入 + 附件登记 + RAG 预检索
+START→ │ ingest  │  规范化输入、附件落盘、（目标）RAG 预检索等
        └────┬────┘
             ▼
        ┌─────────┐
-       │ plan    │  生成/修订 TODO 列表（调 agent-planner 模型）
+       │ plan    │  生成/修订 TODO（agent-planner）
        └────┬────┘
             ▼
        ┌─────────┐    tokens > threshold     ┌──────────┐
@@ -89,14 +93,35 @@ START→ │ ingest  │  规范化输入 + 附件登记 + RAG 预检索
        └────┬────┘
     done │  │ continue    │ replan
          ▼  ▼             ▼
-    ┌────────┐       (回 execute)
+    ┌────────┐       (回 execute / plan)
     │finalize│
     └───┬────┘
         ▼
        END
 ```
 
-`execute` 节点是唯一调用 Claude Agent SDK 的地方，SDK 通过 LiteLLM 的 Anthropic 兼容端点去到 Kimi/Qwen/DeepSeek。
+#### 3.2.2 当前实现（代码：`session_graph.py`）
+
+主图节点与边（Checkpoint 使用 Postgres）：
+
+```text
+START → ingest → task_frame ─┬─（需澄清）───→ clarify ──────→ finalize → END
+                               ├─（轻量直接答）→ direct_answer → finalize → END
+                               ├─（error）───────────────────→ finalize → END
+                               └─（全链路）────→ plan → execute ─┬─（error）→ finalize → END
+                                                                  └─（正常）──→ reflect ─┬→ execute
+                                                                                        ├→ plan
+                                                                                        └→ finalize → END
+```
+
+- **ingest**：会话沙箱、附件从对象存储写入沙箱、本轮用户消息并入 LangGraph `messages`。
+- **task_frame**：任务定调（LLM JSON），决定澄清 / 直接回答 / 进入规划。
+- **clarify / direct_answer**：不经 Planner 与工具主环；**direct_answer** 可对图片/PDF 做多模态与正文抽取（实现见 `light_reply.py`）。
+- **plan**：产出/更新 TODO；**execute**：按 `executor_engine` 走 **OpenAI Chat Completions 自研 loop** 或 **Claude Agent SDK**（经 LiteLLM），再经 MCP Hub 调用沙箱工具。
+- **reflect**：复盘后设定 `next_node`（`execute` / `plan` / `finalize`）。**若 `execute` 结束时已设置 `state.error`，主图不进入 `reflect`，直接 `finalize`。**
+- **finalize**：终态事件、`sessions.status` 更新；**当前主图中无独立 `compact` 节点**（摘要/压缩若存在，为节点内或其它模块职责，非本节主环）。
+
+> **说明**：`compact` 仍以路线图中的「独立环上节点」为目标，落地后应回到本节更新「当前实现」示意图。
 
 ### 3.3 Temporal 与 LangGraph 的边界
 
@@ -204,16 +229,13 @@ Agent Core: enqueue(message)
 Temporal: signal SessionWorkflow
       │
       ▼
-LangGraph: ingest → plan → execute
+LangGraph: ingest → task_frame →（clarify | direct_answer | plan→execute→reflect…）
       │
-      ▼  ClaudeSDKClient.query()
-LiteLLM/Anthropic → Kimi K2
+      ▼  全链路时：execute 内 OpenAI 或 Claude Agent SDK + MCP
+LiteLLM（OpenAI `/v1` 或 Anthropic 兼容）→ 配置模型别名
       │
-      ▼ tool_use event
-MCP Hub → Sandbox tool (shell/file/browser)
-      │
-      ▼ tool_result
-Back to Claude SDK → model → answer chunks
+      ▼ tool_use / tool_result（全链路）
+回执行器 loop（OpenAI Chat 或 Agent SDK）→ 流式产出
       │
       ▼ publish events to NATS (session.{id})
 BFF subscribed → SSE to client
