@@ -41,8 +41,8 @@ import { useUiStore } from "@/lib/store/ui";
 import { SettingsDialog } from "@/components/layout/SettingsDialog";
 
 const NAV_ITEMS = [
-  { key: "sessions", label: "会话", href: "/", icon: MessagesSquare },
-  { key: "temporal", label: "Temporal", href: "/temporal", icon: Workflow },
+  { key: "sessions", label: "会话管理", href: "/", icon: MessagesSquare },
+  { key: "temporal", label: "调度管理", href: "/temporal", icon: Workflow },
 ] as const;
 
 function toSummary(session: Session) {
@@ -334,7 +334,7 @@ export function Sidebar() {
           <div className="space-y-3 px-4 py-4">
             <div>
               <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Control Plane</p>
-              <h2 className="mt-1 text-sm font-semibold">Temporal 概览</h2>
+              <h2 className="mt-1 text-sm font-semibold">调度概览</h2>
             </div>
             <div className="grid grid-cols-3 gap-2 text-xs">
               <MetricCard icon={PlayCircle} label="运行中" value={runningCount} />

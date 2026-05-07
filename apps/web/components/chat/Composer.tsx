@@ -4,7 +4,12 @@ import { Paperclip, Send } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { postMessage, patchSessionTitle } from "@/lib/api/sessions";
+import {
+  interruptSession,
+  patchSessionTitle,
+  postMessage,
+  waitUntilSessionAllowsMessage,
+} from "@/lib/api/sessions";
 import { getExecutorEngine } from "@/lib/executor-engine";
 import { useChatStore } from "@/lib/store/chat";
 import { useSessionStore } from "@/lib/store/session";
@@ -13,7 +18,6 @@ import { DEFAULT_SESSION_TITLE, isDefaultSessionTitle, titleFromUserMessage } fr
 export function Composer({ sessionId }: { sessionId: string }) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
-  const phase = useSessionStore((s) => s.phase);
   const pushUser = useChatStore((s) => s.pushUser);
   const rollbackLastUserMessage = useChatStore((s) => s.rollbackLastUserMessage);
   const setPhase = useSessionStore((s) => s.setPhase);
@@ -22,25 +26,45 @@ export function Composer({ sessionId }: { sessionId: string }) {
 
   const [sendError, setSendError] = useState<string | null>(null);
 
-  /** 可发下一条：本轮已落地（含用户主动中断/停止），与后端仅拦 status=running 一致 */
-  const isBusy =
-    sending ||
-    (phase !== "idle" &&
-      phase !== "done" &&
-      phase !== "error" &&
-      phase !== "waiting_user" &&
-      phase !== "interrupted" &&
-      phase !== "stopped");
-
   const send = useCallback(async () => {
     const value = text.trim();
-    if (!value || isBusy) return;
+    if (!value || sending) return;
     setSendError(null);
     setSending(true);
     pushUser(value);
     setText("");
+    const execEngine = getExecutorEngine();
     try {
-      const resp = await postMessage(sessionId, value, [], getExecutorEngine());
+      const active = new Set(["planning", "executing", "compacting"]);
+      const phaseNow = useSessionStore.getState().phase;
+      if (active.has(phaseNow)) {
+        try {
+          const ir = await interruptSession(sessionId, "user_interrupt");
+          if (ir.interrupted) {
+            setPhase("interrupted");
+          }
+        } catch (e) {
+          console.warn("send.pre_interrupt", e);
+        }
+        await waitUntilSessionAllowsMessage(sessionId);
+      }
+
+      let resp: Awaited<ReturnType<typeof postMessage>>;
+      try {
+        resp = await postMessage(sessionId, value, [], execEngine);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (!msg.includes("409")) throw e;
+        try {
+          const ir = await interruptSession(sessionId, "user_interrupt");
+          if (ir.interrupted) setPhase("interrupted");
+        } catch (ie) {
+          console.warn("send.conflict_recovery", ie);
+        }
+        await waitUntilSessionAllowsMessage(sessionId);
+        resp = await postMessage(sessionId, value, [], execEngine);
+      }
+
       setPhase("planning");
       setRunId(resp.run_id);
       const existing = useSessionStore.getState().sessions.find((session) => session.id === sessionId);
@@ -83,7 +107,7 @@ export function Composer({ sessionId }: { sessionId: string }) {
     } finally {
       setSending(false);
     }
-  }, [text, isBusy, sessionId, pushUser, rollbackLastUserMessage, setPhase, setRunId, upsertSession]);
+  }, [sending, sessionId, pushUser, rollbackLastUserMessage, setPhase, setRunId, upsertSession]);
 
   const onKey = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -113,13 +137,19 @@ export function Composer({ sessionId }: { sessionId: string }) {
                 <Paperclip className="size-4" />
               </Button>
               <span className="text-xs text-muted-foreground">
-                Enter 发送 · Shift + Enter 换行
+                Enter 发送 · Shift + Enter 换行 · 执行中也会先中断再发新任务
               </span>
             </div>
             {sendError ? <p className="pl-1 text-xs text-destructive">{sendError}</p> : null}
           </div>
-          <Button size="sm" onClick={() => void send()} disabled={isBusy || !text.trim()} className="gap-1">
-            <Send className="size-3.5" /> 发送
+          <Button
+            size="sm"
+            onClick={() => void send()}
+            disabled={sending || !text.trim()}
+            className="gap-1"
+            type="button"
+          >
+            <Send className="size-3.5" /> {sending ? "发送中…" : "发送"}
           </Button>
         </div>
       </div>

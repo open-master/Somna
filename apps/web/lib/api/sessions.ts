@@ -140,6 +140,22 @@ export async function interruptSession(
   return res.json();
 }
 
+/** 轮询直至 `sessions.status` 不再是 `running`（便于在 interrupt 后立刻 `postMessage`）。 */
+export async function waitUntilSessionAllowsMessage(
+  id: string,
+  options?: { timeoutMs?: number; intervalMs?: number },
+): Promise<void> {
+  const timeoutMs = options?.timeoutMs ?? 15000;
+  const intervalMs = options?.intervalMs ?? 200;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const s = await getSession(id);
+    if (s.status !== "running") return;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  throw new Error("等待上一段任务释放会话超时，请稍后重试");
+}
+
 /** 同源 EventSource：由 Next route 把 cookie 转为 upstream Authorization。 */
 export function streamUrl(id: string, since = 0): string {
   return `/api/v1/sessions/${encodeURIComponent(id)}/stream?since=${since}`;

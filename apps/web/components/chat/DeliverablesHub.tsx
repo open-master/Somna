@@ -218,7 +218,6 @@ export function DeliverablesHub({ sessionId }: { sessionId: string }) {
         <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary tabular-nums">
           {rows.length} 项
         </span>
-        <span className="text-xs text-muted-foreground max-sm:hidden">点击展开 · 收起可留出聊天/执行过程</span>
         <ChevronDown className="ml-auto size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
       </summary>
 

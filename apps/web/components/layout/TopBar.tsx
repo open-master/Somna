@@ -43,6 +43,7 @@ export function TopBar({
   showSessionControls?: boolean;
 }) {
   const phase = useSessionStore((s) => s.phase);
+  const setPhase = useSessionStore((s) => s.setPhase);
   const sessionId = useSessionStore((s) => s.currentId);
   const runId = useSessionStore((s) => s.runId);
   const usage = useLiveStore((s) => s.usage);
@@ -55,7 +56,10 @@ export function TopBar({
     if (!sessionId) return;
     setPending(reason === "user_interrupt" ? "interrupt" : "stop");
     try {
-      await interruptSession(sessionId, reason);
+      const res = await interruptSession(sessionId, reason);
+      if (res.interrupted) {
+        setPhase(reason === "user_stop" ? "stopped" : "interrupted");
+      }
     } catch (err) {
       console.error("interrupt.failed", err);
     } finally {
@@ -92,21 +96,21 @@ export function TopBar({
             <Separator orientation="vertical" className="mx-1 h-5" />
             <Button
               size="sm"
-              variant="secondary"
-              className="gap-1 rounded-xl"
+              variant="outline"
+              className="h-8 min-w-[5.5rem] gap-1.5 font-medium shadow-sm"
               disabled={!isRunning || pending !== null}
-              onClick={() => handleInterrupt("user_interrupt")}
+              onClick={() => void handleInterrupt("user_interrupt")}
             >
-              <Pause className="size-3.5" /> {pending === "interrupt" ? "中断中..." : "打断"}
+              <Pause className="size-3.5 shrink-0" /> {pending === "interrupt" ? "中断中…" : "中断"}
             </Button>
             <Button
               size="sm"
               variant="destructive"
-              className="gap-1 rounded-xl"
+              className="h-8 min-w-[5.5rem] gap-1.5 font-medium shadow-sm"
               disabled={!isRunning || pending !== null}
-              onClick={() => handleInterrupt("user_stop")}
+              onClick={() => void handleInterrupt("user_stop")}
             >
-              <Square className="size-3.5" /> {pending === "stop" ? "停止中..." : "停止"}
+              <Square className="size-3.5 shrink-0" /> {pending === "stop" ? "停止中…" : "停止"}
             </Button>
           </>
         ) : (
