@@ -119,7 +119,27 @@ export function Sidebar() {
       await deleteSession(id);
       removeSession(id);
       setDeletePromptId(null);
-      if (current === id) router.push("/");
+      if (current === id) {
+        try {
+          const s = await createSession("新会话");
+          upsert(toSummary(s));
+          router.replace(`/chat/${s.id}`);
+        } catch (ce) {
+          if (ce instanceof Error && /401|403/.test(ce.message)) {
+            clearAccessTokenCookie();
+            router.push("/login");
+            return;
+          }
+          console.error("sessions.create_after_delete.failed", ce);
+          const first = useSessionStore.getState().sessions[0];
+          if (first) {
+            router.replace(`/chat/${first.id}`);
+          } else {
+            router.replace("/");
+          }
+          setErrorAlert(ce instanceof Error ? ce.message : "已删除当前会话，但无法创建新会话");
+        }
+      }
     } catch (e) {
       setDeletePromptId(null);
       if (e instanceof Error && /401|403/.test(e.message)) {
