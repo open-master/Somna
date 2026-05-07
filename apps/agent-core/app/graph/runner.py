@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 from uuid import UUID
 
 import psycopg
@@ -36,6 +37,7 @@ async def run_session_graph(
     reasoner_model: str | None = None,
     longctx_model: str | None = None,
     mcp_tool_models: dict[str, str] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> None:
     settings = get_settings()
     current = asyncio.current_task()
@@ -49,6 +51,7 @@ async def run_session_graph(
                 "session_id": session_id,
                 "run_id": run_id,
                 "user_message": text,
+                "attachments": list(attachments or []),
                 "planner_model": planner_model or settings.agent_default_planner,
                 "task_frame_model": task_frame_model or settings.agent_default_taskframe,
                 "executor_model": executor_model or settings.agent_default_executor,

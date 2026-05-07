@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -17,3 +18,4 @@ class SessionWorkflowInput:
     reasoner_model: str | None = None
     longctx_model: str | None = None
     mcp_tool_models: dict[str, str] | None = None
+    attachments: list[dict[str, Any]] = field(default_factory=list)

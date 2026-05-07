@@ -7,6 +7,7 @@ from typing import Any
 
 from app.config import get_settings
 from app.logging_setup import get_logger
+from app.services.attachments import delete_session_uploads_prefix
 from app.storage.postgres import get_pool
 from app.tools.client import get_client
 
@@ -74,6 +75,7 @@ async def hard_delete_session(*, session_id: uuid.UUID, user_id: uuid.UUID) -> N
             s3_keys = [r["s3_key"] for r in key_rows if r.get("s3_key")]
 
     await _delete_s3_keys(s3_keys)
+    await delete_session_uploads_prefix(session_id)
     await _delete_mcp_sandbox(session_id)
 
     async with pool.acquire() as conn:

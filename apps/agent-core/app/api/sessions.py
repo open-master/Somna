@@ -22,9 +22,9 @@ from typing import Annotated, Any
 from urllib.parse import quote as url_quote
 from urllib.parse import unquote
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from temporalio.service import RPCError
 
 from app.api.deps import CurrentUser, get_current_user
@@ -37,6 +37,13 @@ from app.temporal.client import get_temporal_client
 from app.temporal.models import SessionWorkflowInput
 from app.temporal.workflows import SessionRunWorkflow
 from app.services.session_cleanup import assert_session_owner, hard_delete_session
+from app.services.attachments import (
+    ALLOWED_EXTENSIONS,
+    normalize_attachment_refs,
+    put_upload_object,
+    safe_filename,
+    validate_mime_for_extension,
+)
 from app.tools.client import get_client
 
 log = get_logger(__name__)
@@ -98,7 +105,7 @@ class CreateSessionResp(BaseModel):
 
 
 class PostMessageReq(BaseModel):
-    text: str = Field(min_length=1)
+    text: str = ""
     attachments: list[dict[str, Any]] = Field(default_factory=list)
     # native = OpenAI /v1；anthropic = LiteLLM /anthropic/v1（同一批 agent-* 别名 → 国产模型）
     executor_engine: str = "native"
@@ -112,6 +119,12 @@ class PostMessageReq(BaseModel):
     # 浏览器「MCP 工具」页：按工具名的默认 model（与 LiteLLM 角色分离）
     mcp_tool_models: dict[str, str] | None = None
     task_frame_model: str | None = None
+
+    @model_validator(mode="after")
+    def _text_or_attachments(self) -> PostMessageReq:
+        if not (self.text or "").strip() and not self.attachments:
+            raise ValueError("至少需要文字内容或附件之一")
+        return self
 
 
 def _strip_model(s: str | None) -> str | None:
@@ -134,6 +147,14 @@ def _mcp_overrides_from_post_message(req: PostMessageReq) -> dict[str, str] | No
 class PostMessageResp(BaseModel):
     run_id: str
     queued: bool = True
+
+
+class UploadAttachmentResp(BaseModel):
+    id: str
+    filename: str
+    mime: str
+    size: int
+    s3_key: str
 
 
 class PatchSessionReq(BaseModel):
@@ -237,6 +258,44 @@ async def delete_session(
     return Response(status_code=204)
 
 
+@router.post("/{sid}/attachments", response_model=UploadAttachmentResp, status_code=201)
+async def upload_session_attachment(
+    sid: uuid.UUID,
+    file: UploadFile = File(...),
+    user: CurrentUser = Depends(get_current_user),
+) -> UploadAttachmentResp:
+    await assert_session_owner(sid, user.id)
+    settings = get_settings()
+    body = await file.read()
+    if len(body) > settings.attachment_max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"文件超过上限 {settings.attachment_max_bytes} 字节",
+        )
+    raw_name = file.filename or "file"
+    safe = safe_filename(raw_name)
+    ext = Path(raw_name).suffix.lower() or Path(safe).suffix.lower()
+    if not ext or ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的文件扩展名: {ext or '（无）'}",
+        )
+    validate_mime_for_extension(ext, file.content_type)
+    ct = (file.content_type or "").split(";")[0].strip() if file.content_type else ""
+    if not ct:
+        ct = _guess_media_type_for_artifact(safe) or "application/octet-stream"
+    upload_id = str(uuid.uuid4())
+    key = f"sessions/{sid}/uploads/{upload_id}/{safe}"
+    await put_upload_object(key=key, body=body, content_type=ct)
+    return UploadAttachmentResp(
+        id=upload_id,
+        filename=safe,
+        mime=ct,
+        size=len(body),
+        s3_key=key,
+    )
+
+
 # ----- Messages -----
 @router.post("/{sid}/messages", response_model=PostMessageResp)
 async def post_message(
@@ -246,6 +305,9 @@ async def post_message(
 ) -> PostMessageResp:
     settings = get_settings()
     pool = get_pool()
+    norm_att = normalize_attachment_refs(sid, req.attachments, settings=settings)
+    user_text = (req.text or "").strip()
+    workflow_text = user_text or "请根据下方附件与用户意图完成任务。"
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT planner_model, task_frame_model, executor_model, status FROM sessions WHERE id = $1 AND user_id = $2",
@@ -264,7 +326,7 @@ async def post_message(
             """INSERT INTO messages (session_id, role, content)
                VALUES ($1, 'user', $2::jsonb)""",
             sid,
-            json.dumps({"text": req.text, "attachments": req.attachments}),
+            json.dumps({"text": user_text, "attachments": norm_att}),
         )
 
     engine = (req.executor_engine or "native").strip().lower()
@@ -290,7 +352,7 @@ async def post_message(
             SessionWorkflowInput(
                 session_id=str(sid),
                 run_id=run_id,
-                text=req.text,
+                text=workflow_text,
                 planner_model=eff_pl,
                 executor_model=eff_ex,
                 executor_engine=engine,
@@ -300,6 +362,7 @@ async def post_message(
                 reasoner_model=_strip_model(req.reasoner_model),
                 longctx_model=_strip_model(req.longctx_model),
                 mcp_tool_models=_mcp_overrides_from_post_message(req),
+                attachments=norm_att,
             ),
             id=workflow_id,
             task_queue=settings.temporal_task_queue,

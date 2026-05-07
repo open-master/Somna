@@ -75,6 +75,12 @@ class Settings(BaseSettings):
     s3_access_key: str = Field(default="", alias="S3_ACCESS_KEY")
     s3_secret_key: str = Field(default="", alias="S3_SECRET_KEY")
 
+    # 会话附件上传上限（与 MCP Hub MCP_FS_MAX_FILE_BYTES 默认一致，均为 256MiB；若调大须两边一起调）
+    attachment_max_bytes: int = Field(
+        default=256 * 1024 * 1024,
+        alias="ATTACHMENT_MAX_BYTES",
+    )
+
     # ---- MCP Hub ----
     mcp_hub_url: str = Field(default="http://mcp-hub:8090", alias="MCP_HUB_URL")
     # Empty = emit same-origin /api/v1/... artifact URLs (Next rewrites to agent-core).

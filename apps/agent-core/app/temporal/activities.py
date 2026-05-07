@@ -38,6 +38,7 @@ async def run_session_graph_activity(req: SessionWorkflowInput) -> None:
             reasoner_model=req.reasoner_model,
             longctx_model=req.longctx_model,
             mcp_tool_models=req.mcp_tool_models,
+            attachments=list(req.attachments or []),
         )
     )
     heartbeat_task = asyncio.create_task(_heartbeat_until_done(done))

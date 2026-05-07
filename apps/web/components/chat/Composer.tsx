@@ -1,13 +1,15 @@
 "use client";
-import { useState, useCallback, type KeyboardEvent } from "react";
-import { Paperclip, Send } from "lucide-react";
+import { useState, useCallback, useRef, type KeyboardEvent } from "react";
+import { Paperclip, Send, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  type SessionAttachmentRef,
   interruptSession,
   patchSessionTitle,
   postMessage,
+  uploadSessionAttachment,
   waitUntilSessionAllowsMessage,
 } from "@/lib/api/sessions";
 import { getExecutorEngine } from "@/lib/executor-engine";
@@ -17,6 +19,9 @@ import { DEFAULT_SESSION_TITLE, isDefaultSessionTitle, titleFromUserMessage } fr
 
 export function Composer({ sessionId }: { sessionId: string }) {
   const [text, setText] = useState("");
+  const [attachments, setAttachments] = useState<SessionAttachmentRef[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
   const [sending, setSending] = useState(false);
   const pushUser = useChatStore((s) => s.pushUser);
   const rollbackLastUserMessage = useChatStore((s) => s.rollbackLastUserMessage);
@@ -26,13 +31,38 @@ export function Composer({ sessionId }: { sessionId: string }) {
 
   const [sendError, setSendError] = useState<string | null>(null);
 
+  const onFiles = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const list = e.target.files;
+      if (!list?.length) return;
+      setSendError(null);
+      setUploading(true);
+      try {
+        for (const f of Array.from(list)) {
+          const meta = await uploadSessionAttachment(sessionId, f);
+          setAttachments((prev) => [...prev, meta]);
+        }
+      } catch (err) {
+        setSendError(err instanceof Error ? err.message : "上传失败");
+      } finally {
+        setUploading(false);
+        e.target.value = "";
+      }
+    },
+    [sessionId],
+  );
+
   const send = useCallback(async () => {
     const value = text.trim();
-    if (!value || sending) return;
+    if ((!value && attachments.length === 0) || sending) return;
     setSendError(null);
     setSending(true);
-    pushUser(value);
+    const userBubble =
+      value || (attachments.length ? `「已添加 ${attachments.length} 个附件」` : "");
+    if (userBubble) pushUser(userBubble);
     setText("");
+    const pendingAtt = [...attachments];
+    setAttachments([]);
     const execEngine = getExecutorEngine();
     try {
       const active = new Set(["planning", "executing", "compacting"]);
@@ -51,7 +81,7 @@ export function Composer({ sessionId }: { sessionId: string }) {
 
       let resp: Awaited<ReturnType<typeof postMessage>>;
       try {
-        resp = await postMessage(sessionId, value, [], execEngine);
+        resp = await postMessage(sessionId, value, pendingAtt, execEngine);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         if (!msg.includes("409")) throw e;
@@ -62,7 +92,7 @@ export function Composer({ sessionId }: { sessionId: string }) {
           console.warn("send.conflict_recovery", ie);
         }
         await waitUntilSessionAllowsMessage(sessionId);
-        resp = await postMessage(sessionId, value, [], execEngine);
+        resp = await postMessage(sessionId, value, pendingAtt, execEngine);
       }
 
       setPhase("planning");
@@ -70,8 +100,9 @@ export function Composer({ sessionId }: { sessionId: string }) {
       const existing = useSessionStore.getState().sessions.find((session) => session.id === sessionId);
       const currentTitle = existing?.title ?? DEFAULT_SESSION_TITLE;
       let titleToUse = currentTitle;
+      const titleSource = value || userBubble;
       if (isDefaultSessionTitle(currentTitle)) {
-        const derived = titleFromUserMessage(value);
+        const derived = titleFromUserMessage(titleSource);
         if (!isDefaultSessionTitle(derived)) {
           titleToUse = derived;
           void patchSessionTitle(sessionId, derived).catch(() => {
@@ -103,11 +134,22 @@ export function Composer({ sessionId }: { sessionId: string }) {
     } catch (e) {
       rollbackLastUserMessage();
       setText(value);
+      setAttachments(pendingAtt);
       setSendError(e instanceof Error ? e.message : "发送失败");
     } finally {
       setSending(false);
     }
-  }, [text, sending, sessionId, pushUser, rollbackLastUserMessage, setPhase, setRunId, upsertSession]);
+  }, [
+    text,
+    attachments,
+    sending,
+    sessionId,
+    pushUser,
+    rollbackLastUserMessage,
+    setPhase,
+    setRunId,
+    upsertSession,
+  ]);
 
   const onKey = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -119,9 +161,39 @@ export function Composer({ sessionId }: { sessionId: string }) {
     [send],
   );
 
+  const canSend = (text.trim().length > 0 || attachments.length > 0) && !sending;
+
   return (
     <div className="mx-auto w-full max-w-3xl px-4 pb-4">
+      <input
+        ref={fileRef}
+        type="file"
+        className="sr-only"
+        multiple
+        onChange={(e) => void onFiles(e)}
+        aria-hidden
+      />
       <div className="rounded-2xl border bg-card shadow-sm focus-within:ring-2 focus-within:ring-ring/40 transition">
+        {attachments.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5 border-b px-3 py-2">
+            {attachments.map((a) => (
+              <span
+                key={a.s3_key}
+                className="inline-flex max-w-full items-center gap-1 rounded-md bg-muted/80 px-2 py-0.5 text-xs"
+              >
+                <span className="truncate">{a.filename}</span>
+                <button
+                  type="button"
+                  className="rounded p-0.5 hover:bg-muted"
+                  onClick={() => setAttachments((prev) => prev.filter((x) => x.id !== a.id))}
+                  aria-label={`移除 ${a.filename}`}
+                >
+                  <X className="size-3.5 opacity-70" />
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : null}
         <Textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -133,11 +205,19 @@ export function Composer({ sessionId }: { sessionId: string }) {
         <div className="flex items-center justify-between px-3 pb-2">
           <div className="flex min-w-0 flex-1 flex-col gap-0.5">
             <div className="flex items-center gap-1">
-              <Button size="icon" variant="ghost" aria-label="attach">
+              <Button
+                size="icon"
+                variant="ghost"
+                aria-label="添加附件"
+                type="button"
+                disabled={uploading || sending}
+                onClick={() => fileRef.current?.click()}
+              >
                 <Paperclip className="size-4" />
               </Button>
               <span className="text-xs text-muted-foreground">
-                Enter 发送 · Shift + Enter 换行 · 执行中也会先中断再发新任务
+                Enter 发送 · Shift + Enter 换行 · 可先上传附件再补充说明
+                {uploading ? " · 上传中…" : ""}
               </span>
             </div>
             {sendError ? <p className="pl-1 text-xs text-destructive">{sendError}</p> : null}
@@ -145,7 +225,7 @@ export function Composer({ sessionId }: { sessionId: string }) {
           <Button
             size="sm"
             onClick={() => void send()}
-            disabled={sending || !text.trim()}
+            disabled={!canSend}
             className="gap-1"
             type="button"
           >

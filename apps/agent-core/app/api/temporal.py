@@ -16,6 +16,7 @@ from app.api.deps import CurrentUser, get_current_user
 from app.config import get_settings
 from app.events.emitter import emit
 from app.graph.runtime import get_registry
+from app.services.attachments import normalize_attachment_refs
 from app.storage.postgres import get_pool
 from app.temporal.client import get_temporal_client
 from app.temporal.models import SessionWorkflowInput
@@ -206,11 +207,17 @@ async def retry_temporal_workflow(
     if session_row["status"] == "running":
         raise HTTPException(status_code=409, detail="session already has an in-flight run")
 
-    latest_text = await _latest_user_message_text(session_row["id"])
-    if not latest_text:
+    latest_text_raw, latest_atts = await _latest_user_message_payload(session_row["id"])
+    latest_text = (latest_text_raw or "").strip()
+    if not latest_text and not latest_atts:
         raise HTTPException(status_code=409, detail="session has no retryable user task")
 
     settings = get_settings()
+    sid_raw = session_row["id"]
+    sid_uuid = sid_raw if isinstance(sid_raw, uuid.UUID) else uuid.UUID(str(sid_raw))
+    norm_att = normalize_attachment_refs(sid_uuid, latest_atts, settings=settings)
+    workflow_text = latest_text or "请根据下方附件与用户意图完成任务。"
+
     new_run_id = f"run_{uuid.uuid4().hex[:12]}"
     new_workflow_id = f"session:{session_row['id']}:run:{new_run_id}"
     temporal = await get_temporal_client()
@@ -220,12 +227,13 @@ async def retry_temporal_workflow(
             SessionWorkflowInput(
                 session_id=str(session_row["id"]),
                 run_id=new_run_id,
-                text=latest_text,
+                text=workflow_text,
                 planner_model=session_row["planner_model"] or settings.agent_default_planner,
                 executor_model=session_row["executor_model"] or settings.agent_default_executor,
                 executor_engine="native",
                 task_frame_model=session_row["task_frame_model"] or settings.agent_default_taskframe,
                 mcp_tool_models=None,
+                attachments=norm_att,
             ),
             id=new_workflow_id,
             task_queue=settings.temporal_task_queue,
@@ -295,7 +303,7 @@ async def _session_row_for_workflow_id(workflow_id: str) -> Any:
         )
 
 
-async def _latest_user_message_text(session_id: Any) -> str | None:
+async def _latest_user_message_payload(session_id: Any) -> tuple[str | None, list[dict[str, Any]]]:
     pool = get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -309,17 +317,22 @@ async def _latest_user_message_text(session_id: Any) -> str | None:
             session_id,
         )
     if row is None or row["content"] is None:
-        return None
+        return None, []
     content = row["content"]
     if isinstance(content, str):
         try:
             content = json.loads(content)
         except json.JSONDecodeError:
-            return content
+            return content, []
     if isinstance(content, dict):
         text = content.get("text")
-        return text if isinstance(text, str) and text.strip() else None
-    return None
+        text_out = text if isinstance(text, str) else None
+        raw_atts = content.get("attachments")
+        atts: list[dict[str, Any]] = []
+        if isinstance(raw_atts, list):
+            atts = [a for a in raw_atts if isinstance(a, dict)]
+        return text_out, atts
+    return None, []
 
 
 async def _mark_session_stopped(session_id: Any) -> None:

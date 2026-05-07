@@ -8,6 +8,7 @@ from somna_events import SessionPhase, StatusEvent
 from app.events.emitter import emit
 from app.graph.state import SessionState
 from app.logging_setup import get_logger
+from app.services.attachments import materialize_attachments_to_sandbox
 from app.tools.client import get_client
 
 log = get_logger(__name__)
@@ -34,6 +35,25 @@ async def ingest_node(state: SessionState) -> SessionState:
     )
 
     text = state.get("user_message") or ""
+    attachments = list(state.get("attachments") or [])
+    extra_lines: list[str] = []
+    if attachments:
+        ok_rows, err_lines = await materialize_attachments_to_sandbox(
+            state["session_id"],
+            state.get("run_id"),
+            attachments,
+        )
+        if ok_rows:
+            lines = "\n".join(
+                f"- {row['filename']} → `{row['sandbox_path']}` ({row.get('mime', '')})"
+                for row in ok_rows
+            )
+            extra_lines.append("\n\n[附件已写入沙箱]\n" + lines)
+        for err in err_lines:
+            log.warning("graph.ingest.attachment_error", error=err)
+            extra_lines.append("\n[附件警告] " + err)
+
+    human_body = text + "".join(extra_lines)
     existing = list(state.get("messages") or [])
-    existing.append(HumanMessage(content=text))
+    existing.append(HumanMessage(content=human_body))
     return {"messages": existing, "sandbox_id": sandbox_id, "tool_turns": 0}

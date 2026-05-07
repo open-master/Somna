@@ -24,6 +24,15 @@ export interface Session {
   updated_at?: string;
 }
 
+/** 先 POST /attachments 上传后，随 postMessage 传入的元数据（内容在对象存储）。 */
+export interface SessionAttachmentRef {
+  id: string;
+  filename: string;
+  mime: string;
+  size: number;
+  s3_key: string;
+}
+
 export type SessionEvent = AgentEvent & { seq?: number | null };
 
 export async function listSessions(limit = 100): Promise<Session[]> {
@@ -97,10 +106,28 @@ export async function listSessionEvents(id: string, since = 0, limit = 200): Pro
   return events;
 }
 
+export async function uploadSessionAttachment(
+  id: string,
+  file: File,
+): Promise<SessionAttachmentRef> {
+  const fd = new FormData();
+  fd.append("file", file);
+  const res = await fetch(`${API_BASE}/${encodeURIComponent(id)}/attachments`, {
+    method: "POST",
+    headers: { ...authHeaders() },
+    body: fd,
+  });
+  if (res.status === 401) throw new Error("401");
+  if (res.status === 413) throw new Error("附件超过大小限制");
+  if (res.status === 503) throw new Error("附件存储未配置");
+  if (!res.ok) throw new Error(`uploadSessionAttachment: ${res.status}`);
+  return res.json() as Promise<SessionAttachmentRef>;
+}
+
 export async function postMessage(
   id: string,
   text: string,
-  attachments: unknown[] = [],
+  attachments: SessionAttachmentRef[] = [],
   executor_engine: "native" | "anthropic" = "native",
 ): Promise<{ run_id: string; queued: boolean }> {
   const m = getResolvedAgentModels();
