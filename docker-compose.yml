@@ -288,9 +288,9 @@ services:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
       DATABASE_URL: ${LITELLM_DATABASE_URL}
       STORE_MODEL_IN_DB: "True"
-      # 避免每次启动跑 prisma migrate + diff 导致长时间无监听（agent-core 连不上网关）。
-      # 全新库首次部署：可先注释本行，待 litellm healthy 后再恢复为 True。
-      DISABLE_SCHEMA_UPDATE: "True"
+      # true=跳过 Prisma 迁移（启动快；全新库会导致缺表报错）。false=允许建表/迁移（首次部署必需）。
+      # 表已存在后可在 .env 设 DISABLE_LITELLM_SCHEMA_UPDATE=true 加快后续启动。
+      DISABLE_SCHEMA_UPDATE: "${DISABLE_LITELLM_SCHEMA_UPDATE:-False}"
     volumes:
       - ./infra/litellm/config.yaml:/app/config.yaml:ro
     command: ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "1"]
@@ -308,7 +308,7 @@ services:
       interval: 20s
       timeout: 10s
       retries: 10
-      start_period: 180s
+      start_period: 240s
 
   # ==================== MCP Hub (工具服务) ====================
   mcp-hub:
