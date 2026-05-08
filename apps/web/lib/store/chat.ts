@@ -124,19 +124,22 @@ export const useChatStore = create<ChatState>((set) => ({
       };
     }),
   onToolCall: (e) =>
-    set((s) => ({
-      messages: [
-        ...s.messages,
-        {
-          kind: "tool",
-          id: e.id,
-          name: e.name,
-          args: e.args,
-          status: "running",
-          createdAt: Date.now(),
-        },
-      ],
-    })),
+    set((s) => {
+      if (s.messages.some((m) => m.kind === "tool" && m.id === e.id)) return s;
+      return {
+        messages: [
+          ...s.messages,
+          {
+            kind: "tool",
+            id: e.id,
+            name: e.name,
+            args: e.args,
+            status: "running",
+            createdAt: Date.now(),
+          },
+        ],
+      };
+    }),
   onToolResult: (e) =>
     set((s) => ({
       messages: s.messages.map((m) =>

@@ -18,11 +18,17 @@ const POLL_MS = 1_500;
 export function useEventStream(sessionId: string | null, handlers: HandlerMap) {
   const lastSeqRef = useRef(0);
   const appliedSeqRef = useRef(0);
+  /** 会话切换或 StrictMode 卸载时递增，丢弃上一 effect 未完成 bootstrap/startLive，避免回放写错 store / 污染 seq */
+  const effectGenerationRef = useRef(0);
   const handlersRef = useRef(handlers);
   handlersRef.current = handlers;
 
   useEffect(() => {
     if (!sessionId) return;
+    effectGenerationRef.current += 1;
+    const generation = effectGenerationRef.current;
+    const stale = () => generation !== effectGenerationRef.current;
+
     lastSeqRef.current = 0;
     appliedSeqRef.current = 0;
 
@@ -31,6 +37,7 @@ export function useEventStream(sessionId: string | null, handlers: HandlerMap) {
     let es: EventSource | null = null;
 
     const applyRaw = async (raw: unknown) => {
+      if (stale()) return;
       const seq = (raw as { seq?: unknown })?.seq;
       if (typeof seq === "number" && seq <= appliedSeqRef.current) return;
       await createDispatcher(handlersRef.current).handle(raw);
@@ -41,6 +48,7 @@ export function useEventStream(sessionId: string | null, handlers: HandlerMap) {
     };
 
     const startLive = () => {
+      if (stale()) return;
       const since = appliedSeqRef.current;
       es = new EventSource(
         `/api/v1/sessions/${encodeURIComponent(sessionId)}/stream?since=${since}`,
@@ -81,10 +89,12 @@ export function useEventStream(sessionId: string | null, handlers: HandlerMap) {
       };
 
       const poll = async () => {
-        if (!pollActive) return;
+        if (!pollActive || stale()) return;
         try {
           const batch = await listSessionEvents(sessionId, appliedSeqRef.current, 400);
+          if (stale()) return;
           for (const ev of batch) {
+            if (stale()) return;
             const seq = ev.seq;
             const raw = typeof seq === "number" ? { ...ev, seq } : ev;
             await applyRaw(raw);
@@ -105,9 +115,11 @@ export function useEventStream(sessionId: string | null, handlers: HandlerMap) {
           listSessionMessages(sessionId),
           listAllSessionEventPayloads(sessionId),
         ]);
+        if (stale()) return;
         users = u as PersistedUserMessage[];
         eventPayloads = ev;
       } catch {
+        if (stale()) return;
         users = [];
         eventPayloads = [];
       }
@@ -117,6 +129,7 @@ export function useEventStream(sessionId: string | null, handlers: HandlerMap) {
       let yielded = 0;
       const yieldEvery = 32;
       for (const item of merged) {
+        if (stale()) return;
         if (item.kind === "user") {
           useChatStore.getState().pushUserHydrated({
             id: item.id,
@@ -134,8 +147,10 @@ export function useEventStream(sessionId: string | null, handlers: HandlerMap) {
         yielded += 1;
         if (yielded % yieldEvery === 0) {
           await new Promise<void>((r) => setTimeout(r, 0));
+          if (stale()) return;
         }
       }
+      if (stale()) return;
       if (maxSeq > 0) {
         appliedSeqRef.current = maxSeq;
         lastSeqRef.current = maxSeq;
@@ -147,6 +162,7 @@ export function useEventStream(sessionId: string | null, handlers: HandlerMap) {
 
     return () => {
       pollActive = false;
+      effectGenerationRef.current += 1;
       if (pollId !== undefined) window.clearInterval(pollId);
       es?.close();
     };
