@@ -127,13 +127,11 @@ export const MCP_TOOL_MODEL_META: {
   },
 ];
 
-/** 视觉评审：多模态 + 通用 chat */
+/** 视觉评审：多模态 + 文本（与 Agent 列表分离，此处保留 VL） */
 export const MCP_MODEL_CHOICES_VISUAL: { value: string; label: string; group: string }[] = [
   { group: "Qwen (DashScope)", value: "qwen3-vl-plus", label: "Qwen3 VL Plus" },
   { group: "Qwen (DashScope)", value: "qwen3-vl-flash", label: "Qwen3 VL Flash" },
   { group: "Qwen (DashScope)", value: "qwen3-max", label: "Qwen3 Max" },
-  { group: "DeepSeek", value: "deepseek-v4-pro", label: "DeepSeek V4 Pro" },
-  { group: "DeepSeek", value: "deepseek-chat", label: "DeepSeek Chat" },
 ];
 
 /** 万相文生图 */

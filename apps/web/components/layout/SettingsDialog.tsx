@@ -237,7 +237,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                   <div className="space-y-5">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <p className="text-xs text-muted-foreground">
-                        默认与当前仓库 LiteLLM 配置一致；修改写入本机浏览器，随下一条消息提交。
+                        默认各角色为 DeepSeek V4 Pro；多模态模型仅在「MCP 模型配置」中选择。修改写入本机浏览器，随下一条消息提交。
                       </p>
                       <Button type="button" variant="outline" size="sm" onClick={onResetModels}>
                         恢复 Agent 模型默认

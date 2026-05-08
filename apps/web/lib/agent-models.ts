@@ -1,14 +1,14 @@
 export type AgentModelRole = "taskframe" | "planner" | "executor" | "coder" | "reasoner" | "longctx" | "cheap";
 
-/** 与 LiteLLM `model_group_alias` 默认解析一致（具体 model id，便于直连网关）。 */
+/** 前端默认（具体 model id，经网关解析）；与 LiteLLM 别名可在网关侧独立配置。 */
 export const DEFAULT_AGENT_MODELS: Record<AgentModelRole, string> = {
-  taskframe: "qwen-turbo",
-  planner: "kimi-k2-0905",
-  executor: "kimi-k2-0905",
-  coder: "deepseek-chat",
-  reasoner: "deepseek-reasoner",
-  longctx: "kimi-k2-0905",
-  cheap: "qwen-turbo",
+  taskframe: "deepseek-v4-pro",
+  planner: "deepseek-v4-pro",
+  executor: "deepseek-v4-pro",
+  coder: "deepseek-v4-pro",
+  reasoner: "deepseek-v4-pro",
+  longctx: "deepseek-v4-pro",
+  cheap: "deepseek-v4-pro",
 };
 
 const STORAGE_KEY = "somna_agent_models";
@@ -28,27 +28,19 @@ export const AGENT_ROLE_META: {
   { key: "cheap", alias: "agent-cheap", title: "摘要 / 压缩", hint: "上下文压缩与轻量调用" },
 ];
 
-/** 下拉可选模型（含 DeepSeek V4，参见 https://api-docs.deepseek.com/zh-cn/） */
+/**
+ * Agent 模型页下拉选项（文本链路为主，不含 Qwen VL；多模态仅出现在 MCP 工具配置）。
+ * DeepSeek 见 https://api-docs.deepseek.com/zh-cn/
+ */
 export const MODEL_CHOICES: { value: string; label: string; group: string }[] = [
   { group: "Kimi (Moonshot)", value: "kimi-k2-0905", label: "Kimi K2 0905" },
   { group: "Kimi (Moonshot)", value: "kimi-k2-turbo", label: "Kimi K2 Turbo" },
   { group: "Kimi (Moonshot)", value: "kimi-k2.6", label: "Kimi K2.6" },
   { group: "Qwen (DashScope)", value: "qwen3-max", label: "Qwen3 Max" },
-  { group: "Qwen (DashScope)", value: "qwen3-vl-plus", label: "Qwen3 VL Plus（多模态）" },
-  { group: "Qwen (DashScope)", value: "qwen3-vl-flash", label: "Qwen3 VL Flash（多模态）" },
   { group: "Qwen (DashScope)", value: "qwen-plus", label: "Qwen Plus" },
   { group: "Qwen (DashScope)", value: "qwen-turbo", label: "Qwen Turbo" },
   { group: "DeepSeek", value: "deepseek-v4-flash", label: "DeepSeek V4 Flash" },
   { group: "DeepSeek", value: "deepseek-v4-pro", label: "DeepSeek V4 Pro" },
-  { group: "DeepSeek", value: "deepseek-chat", label: "DeepSeek Chat (兼容)" },
-  { group: "DeepSeek", value: "deepseek-reasoner", label: "DeepSeek Reasoner (兼容)" },
-  { group: "业务别名", value: "agent-taskframe", label: "agent-taskframe（别名）" },
-  { group: "业务别名", value: "agent-planner", label: "agent-planner（别名）" },
-  { group: "业务别名", value: "agent-executor", label: "agent-executor（别名）" },
-  { group: "业务别名", value: "agent-coder", label: "agent-coder（别名）" },
-  { group: "业务别名", value: "agent-reasoner", label: "agent-reasoner（别名）" },
-  { group: "业务别名", value: "agent-longctx", label: "agent-longctx（别名）" },
-  { group: "业务别名", value: "agent-cheap", label: "agent-cheap（别名）" },
 ];
 
 function readOverrides(): Partial<Record<AgentModelRole, string>> {
