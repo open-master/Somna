@@ -56,7 +56,17 @@ from app.tools.schema import manifests_to_openai_tools, openai_tool_choice, tool
 
 log = get_logger(__name__)
 
-_MCP_TOOLS_OPTIONAL_MODEL = frozenset({"visual_critique", "wan_text2image", "wan_text2video", "minimax_tts"})
+_MCP_TOOLS_OPTIONAL_MODEL = frozenset(
+    {
+        "visual_critique",
+        "wan_text2image",
+        "wan_t2v",
+        "wan_i2v",
+        "wan_r2v",
+        "wan_video_edit",
+        "minimax_tts",
+    }
+)
 
 
 def effective_mcp_tool_models_map(state: SessionState) -> dict[str, str]:
@@ -1307,7 +1317,14 @@ def _proof_from_tool_result(
         proof.written_paths.update(
             _guess_shell_artifact_paths(cmd=cmd, stdout=stdout, preview=preview_txt)
         )
-    elif tool_name in {"wan_text2image", "wan_text2video", "minimax_tts"} and isinstance(output, dict):
+    elif tool_name in {
+        "wan_text2image",
+        "wan_t2v",
+        "wan_i2v",
+        "wan_r2v",
+        "wan_video_edit",
+        "minimax_tts",
+    } and isinstance(output, dict):
         raw_paths: list[str] = []
         paths_val = output.get("paths")
         if isinstance(paths_val, list):

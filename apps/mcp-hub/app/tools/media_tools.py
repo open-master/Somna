@@ -125,6 +125,54 @@ def _video_is_happyhorse(model: str) -> bool:
     return "happyhorse" in (model or "").lower()
 
 
+def _video_is_wan27_family(model: str) -> bool:
+    return (model or "").strip().lower().startswith("wan2.7")
+
+
+def _model_kind_error(model: str, kind: str) -> str | None:
+    """若 model 与工具类型不匹配则返回中文错误句。"""
+    m = (model or "").strip().lower()
+    if kind == "t2v":
+        if "-i2v" in m:
+            return "文生视频工具请选用 t2v 类 model（不要选图生 i2v）"
+        if "-r2v" in m:
+            return "文生视频工具请选用 t2v 类 model（不要选参考生 r2v）"
+        if "videoedit" in m or "video-edit" in m:
+            return "文生视频工具请选用 t2v 类 model（不要选视频编辑）"
+        if "t2v" not in m:
+            return "`model` 须为文生视频 id（如 wan2.2-t2v-plus、wan2.7-t2v-2026-04-25、happyhorse-1.0-t2v）"
+        return None
+    if kind == "i2v":
+        if "-i2v" not in m:
+            return "图生视频工具请选用含 -i2v 的 model（如 happyhorse-1.0-i2v、wan2.7-i2v-2026-04-25）"
+        return None
+    if kind == "r2v":
+        if "-i2v" in m:
+            return "参考生请使用 r2v 类 model，不要用 i2v"
+        if "-r2v" not in m:
+            return "参考生视频请选用含 -r2v 的 model（如 happyhorse-1.0-r2v、wan2.7-r2v）"
+        return None
+    if kind == "edit":
+        if "video-edit" not in m and "videoedit" not in m:
+            return "视频编辑请选用编辑类 model（happyhorse-1.0-video-edit 或 wan2.7-videoedit）"
+        return None
+    return None
+
+
+def _clamp_duration(
+    value: object,
+    *,
+    low: int,
+    high: int,
+    default: int,
+) -> int:
+    try:
+        d = int(value) if value is not None else default
+    except (TypeError, ValueError):
+        d = default
+    return max(low, min(high, d))
+
+
 def _extract_image_urls_from_task_output(fout: dict[str, Any]) -> list[str]:
     urls: list[str] = []
     for item in fout.get("results") or []:
@@ -291,12 +339,169 @@ class WanText2ImageTool(BaseTool):
             return ToolResult(ok=False, error=f"{type(e).__name__}: {e}")
 
 
+async def _wan_video_synthesis_invoke(
+    ctx: ToolContext,
+    args: dict[str, Any],
+    *,
+    kind: str,
+    default_model: str,
+    artifact_prefix: str,
+    log_key: str,
+) -> ToolResult:
+    settings = get_settings()
+    started = time.perf_counter()
+    key = (settings.dashscope_api_key or "").strip()
+    if not key:
+        return ToolResult(
+            ok=False,
+            error="DASHSCOPE_API_KEY is not set. Add it in .env for 万相 / Qwen.",
+        )
+    prompt = (args.get("prompt") or "").strip()
+    if not prompt:
+        return ToolResult(ok=False, error="`prompt` is required")
+
+    model = (args.get("model") or default_model).strip()
+    kind_err = _model_kind_error(model, kind)
+    if kind_err:
+        return ToolResult(ok=False, error=kind_err)
+
+    parameters: dict[str, Any] = {}
+    inp: dict[str, Any] = {"prompt": prompt}
+
+    raw_media = args.get("media")
+    if kind in {"i2v", "r2v", "edit"}:
+        if not isinstance(raw_media, list) or len(raw_media) == 0:
+            return ToolResult(
+                ok=False,
+                error="请传入非空 `media`（公网 URL；结构见 DashScope：first_frame / reference_image / video 等）",
+            )
+        inp["media"] = raw_media
+    elif raw_media is not None:
+        if not isinstance(raw_media, list):
+            return ToolResult(ok=False, error="`media` must be a JSON array")
+        inp["media"] = raw_media
+
+    audio_u = (args.get("audio_url") or "").strip()
+    if audio_u:
+        inp["audio_url"] = audio_u
+
+    mlow = model.lower()
+    neg = (args.get("negative_prompt") or "").strip()
+
+    if _video_is_happyhorse(model):
+        if "video-edit" in mlow:
+            parameters["resolution"] = (args.get("resolution") or "1080P").strip() or "1080P"
+            if args.get("watermark") is not None:
+                parameters["watermark"] = bool(args["watermark"])
+        elif "-i2v" in mlow:
+            parameters["resolution"] = (args.get("resolution") or "1080P").strip() or "1080P"
+            parameters["duration"] = _clamp_duration(args.get("duration"), low=3, high=15, default=5)
+            if args.get("watermark") is not None:
+                parameters["watermark"] = bool(args["watermark"])
+        else:
+            parameters["resolution"] = (args.get("resolution") or "720P").strip() or "720P"
+            parameters["ratio"] = (args.get("ratio") or "16:9").strip() or "16:9"
+            parameters["duration"] = _clamp_duration(args.get("duration"), low=3, high=15, default=5)
+            if args.get("watermark") is not None:
+                parameters["watermark"] = bool(args["watermark"])
+    elif _video_is_wan27_family(model):
+        if "videoedit" in mlow:
+            parameters["resolution"] = (args.get("resolution") or "720P").strip() or "720P"
+            if args.get("prompt_extend") is not None:
+                parameters["prompt_extend"] = bool(args["prompt_extend"])
+            else:
+                parameters["prompt_extend"] = True
+            if args.get("watermark") is not None:
+                parameters["watermark"] = bool(args["watermark"])
+            else:
+                parameters["watermark"] = True
+        else:
+            parameters["resolution"] = (args.get("resolution") or "720P").strip() or "720P"
+            parameters["ratio"] = (args.get("ratio") or "16:9").strip() or "16:9"
+            parameters["duration"] = _clamp_duration(args.get("duration"), low=2, high=15, default=5)
+            if args.get("prompt_extend") is not None:
+                parameters["prompt_extend"] = bool(args["prompt_extend"])
+            else:
+                parameters["prompt_extend"] = True
+            if args.get("watermark") is not None:
+                parameters["watermark"] = bool(args["watermark"])
+            if neg:
+                inp["negative_prompt"] = neg
+    else:
+        size = (args.get("size") or "").strip()
+        if size:
+            parameters["size"] = size
+        if args.get("prompt_extend") is not None:
+            parameters["prompt_extend"] = bool(args["prompt_extend"])
+        if neg:
+            inp["negative_prompt"] = neg
+
+    body = {"model": model, "input": inp, "parameters": parameters}
+    base = settings.dashscope_http_base
+    timeout = httpx.Timeout(settings.wan_request_timeout_sec)
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            created = await _dashscope_post(
+                client,
+                base,
+                key,
+                "/services/aigc/video-generation/video-synthesis",
+                body,
+            )
+            out0 = created.get("output") or {}
+            task_id = out0.get("task_id")
+            if not task_id:
+                return ToolResult(ok=False, error=f"no task_id from DashScope: {created!r}")
+
+            final = await _poll_dashscope_task(
+                client,
+                base=base,
+                api_key=key,
+                task_id=task_id,
+                poll_interval_sec=settings.wan_poll_interval_sec,
+                timeout_sec=settings.wan_poll_timeout_sec,
+            )
+            fout = final.get("output") or {}
+            video_url = fout.get("video_url")
+            if not video_url:
+                return ToolResult(
+                    ok=False,
+                    error=f"no video_url in result: {fout!r}",
+                    output={"task_id": task_id, "raw_output": fout},
+                )
+
+            raw = await _download_bytes(client, video_url, settings.wan_request_timeout_sec)
+            rel = _write_sandbox_file(
+                ctx.workdir,
+                f"artifacts/{artifact_prefix}_{_safe_slug(prompt)}_{uuid.uuid4().hex[:8]}.mp4",
+                raw,
+            )
+            ms = int((time.perf_counter() - started) * 1000)
+            return ToolResult(
+                ok=True,
+                preview=f"video → {rel}",
+                output={"path": rel, "task_id": task_id, "model": model},
+                duration_ms=ms,
+            )
+    except httpx.HTTPError as e:
+        return ToolResult(ok=False, error=f"http error: {e}")
+    except TimeoutError as e:
+        return ToolResult(ok=False, error=str(e))
+    except RuntimeError as e:
+        return ToolResult(ok=False, error=str(e))
+    except Exception as e:  # noqa: BLE001
+        log.exception("%s.failed", log_key)
+        return ToolResult(ok=False, error=f"{type(e).__name__}: {e}")
+
+
 @register
-class WanText2VideoTool(BaseTool):
-    name = "wan_text2video"
+class WanT2vTool(BaseTool):
+    name = "wan_t2v"
     description = (
-        "Generate a short video from a text prompt using Alibaba DashScope 万相 (text-to-video). "
-        "Async task + poll; downloads MP4 into the sandbox. Requires DASHSCOPE_API_KEY."
+        "阿里云 DashScope 文生视频（text-to-video）：仅用文本描述生成短视频。"
+        "选用 t2v 类 model（如 wan2.2-t2v-plus、wan2.7-t2v-2026-04-25、happyhorse-1.0-t2v）；"
+        "可选 audio_url（万相 2.7）。Requires DASHSCOPE_API_KEY。"
     )
     category = "media"
     mutates = True
@@ -304,127 +509,151 @@ class WanText2VideoTool(BaseTool):
         "type": "object",
         "required": ["prompt"],
         "properties": {
-            "prompt": {"type": "string", "description": "Video prompt (Chinese or English)."},
-            "negative_prompt": {"type": "string", "description": "Optional negative prompt."},
-            "model": {
-                "type": "string",
-                "description": "Override model id (default from MCP_WAN_T2V_MODEL).",
-            },
-            "size": {"type": "string", "description": "e.g. 832*480 (see model docs)."},
-            "prompt_extend": {
-                "type": "boolean",
-                "description": "Let the model extend/rewrite the prompt (adds latency).",
-            },
-            "resolution": {
-                "type": "string",
-                "description": "HappyHorse 等模型：如 720P（默认 720P）。",
-            },
-            "ratio": {
-                "type": "string",
-                "description": "HappyHorse：画幅如 16:9（默认 16:9）。",
-            },
-            "duration": {
-                "type": "integer",
-                "description": "HappyHorse：时长秒数 3–15（默认 5）。",
-            },
+            "prompt": {"type": "string", "description": "视频内容描述。"},
+            "negative_prompt": {"type": "string", "description": "反向提示（万相 2.x 文生视频）。"},
+            "model": {"type": "string", "description": "覆盖默认 model（默认 MCP_WAN_T2V_MODEL）。"},
+            "size": {"type": "string", "description": "万相 2.2/2.6：如 832*480。"},
+            "prompt_extend": {"type": "boolean", "description": "扩写提示词。"},
+            "resolution": {"type": "string", "description": "720P / 1080P 等。"},
+            "ratio": {"type": "string", "description": "如 16:9。"},
+            "duration": {"type": "integer", "description": "时长（秒）。"},
+            "audio_url": {"type": "string", "description": "自定义音频 URL（万相 2.7）。"},
+            "watermark": {"type": "boolean"},
         },
         "additionalProperties": False,
     }
 
     async def invoke(self, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
-        settings = get_settings()
-        started = time.perf_counter()
-        key = (settings.dashscope_api_key or "").strip()
-        if not key:
-            return ToolResult(
-                ok=False,
-                error="DASHSCOPE_API_KEY is not set. Add it in .env for 万相 / Qwen.",
-            )
-        prompt = (args.get("prompt") or "").strip()
-        if not prompt:
-            return ToolResult(ok=False, error="`prompt` is required")
+        s = get_settings()
+        return await _wan_video_synthesis_invoke(
+            ctx,
+            args,
+            kind="t2v",
+            default_model=s.wan_t2v_model,
+            artifact_prefix="wan_t2v",
+            log_key="wan_t2v",
+        )
 
-        model = (args.get("model") or settings.wan_t2v_model).strip()
-        parameters: dict[str, Any] = {}
-        inp: dict[str, Any] = {"prompt": prompt}
 
-        if _video_is_happyhorse(model):
-            dur = args.get("duration")
-            try:
-                duration = int(dur) if dur is not None else 5
-            except (TypeError, ValueError):
-                duration = 5
-            duration = max(3, min(15, duration))
-            parameters["resolution"] = (args.get("resolution") or "720P").strip() or "720P"
-            parameters["ratio"] = (args.get("ratio") or "16:9").strip() or "16:9"
-            parameters["duration"] = duration
-        else:
-            size = (args.get("size") or "").strip()
-            if size:
-                parameters["size"] = size
-            if args.get("prompt_extend") is not None:
-                parameters["prompt_extend"] = bool(args["prompt_extend"])
-            neg = (args.get("negative_prompt") or "").strip()
-            if neg:
-                inp["negative_prompt"] = neg
+@register
+class WanI2vTool(BaseTool):
+    name = "wan_i2v"
+    description = (
+        "图生视频（image-to-video）：基于首帧等图像 + 文本生成视频。"
+        "须使用含 -i2v 的 model；`media` 必填。"
+        " Requires DASHSCOPE_API_KEY。"
+    )
+    category = "media"
+    mutates = True
+    input_schema = {
+        "type": "object",
+        "required": ["prompt", "media"],
+        "properties": {
+            "prompt": {"type": "string", "description": "对动态内容的描述。"},
+            "media": {
+                "type": "array",
+                "description": "首帧等素材，如 [{\"type\":\"first_frame\",\"url\":\"https://...\"}]",
+                "items": {"type": "object"},
+            },
+            "model": {"type": "string", "description": "默认 MCP_WAN_I2V_MODEL。"},
+            "resolution": {"type": "string"},
+            "duration": {"type": "integer"},
+            "watermark": {"type": "boolean"},
+        },
+        "additionalProperties": False,
+    }
 
-        body = {"model": model, "input": inp, "parameters": parameters}
-        base = settings.dashscope_http_base
-        timeout = httpx.Timeout(settings.wan_request_timeout_sec)
+    async def invoke(self, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+        s = get_settings()
+        return await _wan_video_synthesis_invoke(
+            ctx,
+            args,
+            kind="i2v",
+            default_model=s.wan_i2v_model,
+            artifact_prefix="wan_i2v",
+            log_key="wan_i2v",
+        )
 
-        try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                created = await _dashscope_post(
-                    client,
-                    base,
-                    key,
-                    "/services/aigc/video-generation/video-synthesis",
-                    body,
-                )
-                out0 = created.get("output") or {}
-                task_id = out0.get("task_id")
-                if not task_id:
-                    return ToolResult(ok=False, error=f"no task_id from DashScope: {created!r}")
 
-                final = await _poll_dashscope_task(
-                    client,
-                    base=base,
-                    api_key=key,
-                    task_id=task_id,
-                    poll_interval_sec=settings.wan_poll_interval_sec,
-                    timeout_sec=settings.wan_poll_timeout_sec,
-                )
-                fout = final.get("output") or {}
-                video_url = fout.get("video_url")
-                if not video_url:
-                    return ToolResult(
-                        ok=False,
-                        error=f"no video_url in result: {fout!r}",
-                        output={"task_id": task_id, "raw_output": fout},
-                    )
+@register
+class WanR2vTool(BaseTool):
+    name = "wan_r2v"
+    description = (
+        "参考生视频（reference-to-video）：多参考图 + 文本，保持角色/风格一致性。"
+        "须使用 r2v 类 model；`media` 必填。"
+        " Requires DASHSCOPE_API_KEY。"
+    )
+    category = "media"
+    mutates = True
+    input_schema = {
+        "type": "object",
+        "required": ["prompt", "media"],
+        "properties": {
+            "prompt": {"type": "string", "description": "融合参考素材的叙述（可用 [Image 1] 指代）。"},
+            "media": {
+                "type": "array",
+                "description": "多张 reference_image 等，见官方文档。",
+                "items": {"type": "object"},
+            },
+            "model": {"type": "string", "description": "默认 MCP_WAN_R2V_MODEL。"},
+            "resolution": {"type": "string"},
+            "ratio": {"type": "string"},
+            "duration": {"type": "integer"},
+            "watermark": {"type": "boolean"},
+        },
+        "additionalProperties": False,
+    }
 
-                raw = await _download_bytes(client, video_url, settings.wan_request_timeout_sec)
-                rel = _write_sandbox_file(
-                    ctx.workdir,
-                    f"artifacts/wan_t2v_{_safe_slug(prompt)}_{uuid.uuid4().hex[:8]}.mp4",
-                    raw,
-                )
-                ms = int((time.perf_counter() - started) * 1000)
-                return ToolResult(
-                    ok=True,
-                    preview=f"video → {rel}",
-                    output={"path": rel, "task_id": task_id, "model": model},
-                    duration_ms=ms,
-                )
-        except httpx.HTTPError as e:
-            return ToolResult(ok=False, error=f"http error: {e}")
-        except TimeoutError as e:
-            return ToolResult(ok=False, error=str(e))
-        except RuntimeError as e:
-            return ToolResult(ok=False, error=str(e))
-        except Exception as e:  # noqa: BLE001
-            log.exception("wan_text2video.failed")
-            return ToolResult(ok=False, error=f"{type(e).__name__}: {e}")
+    async def invoke(self, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+        s = get_settings()
+        return await _wan_video_synthesis_invoke(
+            ctx,
+            args,
+            kind="r2v",
+            default_model=s.wan_r2v_model,
+            artifact_prefix="wan_r2v",
+            log_key="wan_r2v",
+        )
+
+
+@register
+class WanVideoEditTool(BaseTool):
+    name = "wan_video_edit"
+    description = (
+        "视频编辑：待编辑视频（+ 可选参考图）+ 指令，完成风格迁移、替换等。"
+        "须使用 video-edit / videoedit 类 model；`media` 须含 type=video。"
+        " Requires DASHSCOPE_API_KEY。"
+    )
+    category = "media"
+    mutates = True
+    input_schema = {
+        "type": "object",
+        "required": ["prompt", "media"],
+        "properties": {
+            "prompt": {"type": "string", "description": "编辑指令。"},
+            "media": {
+                "type": "array",
+                "description": "含一条 video，及可选 reference_image。",
+                "items": {"type": "object"},
+            },
+            "model": {"type": "string", "description": "默认 MCP_WAN_VIDEO_EDIT_MODEL。"},
+            "resolution": {"type": "string"},
+            "prompt_extend": {"type": "boolean"},
+            "watermark": {"type": "boolean"},
+        },
+        "additionalProperties": False,
+    }
+
+    async def invoke(self, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+        s = get_settings()
+        return await _wan_video_synthesis_invoke(
+            ctx,
+            args,
+            kind="edit",
+            default_model=s.wan_video_edit_model,
+            artifact_prefix="wan_video_edit",
+            log_key="wan_video_edit",
+        )
 
 
 @register

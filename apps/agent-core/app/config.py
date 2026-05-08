@@ -58,6 +58,12 @@ class Settings(BaseSettings):
     )
     agent_default_mcp_wan_t2i: str = Field(default="wan2.2-t2i-flash", alias="AGENT_DEFAULT_MCP_WAN_T2I")
     agent_default_mcp_wan_t2v: str = Field(default="wan2.2-t2v-plus", alias="AGENT_DEFAULT_MCP_WAN_T2V")
+    agent_default_mcp_wan_i2v: str = Field(default="happyhorse-1.0-i2v", alias="AGENT_DEFAULT_MCP_WAN_I2V")
+    agent_default_mcp_wan_r2v: str = Field(default="wan2.7-r2v", alias="AGENT_DEFAULT_MCP_WAN_R2V")
+    agent_default_mcp_wan_video_edit: str = Field(
+        default="wan2.7-videoedit",
+        alias="AGENT_DEFAULT_MCP_WAN_VIDEO_EDIT",
+    )
     agent_default_mcp_minimax_tts: str = Field(default="speech-2.6-hd", alias="AGENT_DEFAULT_MCP_MINIMAX_TTS")
     agent_compact_model: str = Field(default="agent-cheap", alias="AGENT_COMPACT_MODEL")
     agent_embed_model: str = Field(default="agent-embed", alias="AGENT_EMBED_MODEL")

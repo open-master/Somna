@@ -97,7 +97,10 @@ async def test_search_mock_when_provider_forced(ctx):
 
 async def test_media_tools_registered():
     assert registry.get("wan_text2image") is not None
-    assert registry.get("wan_text2video") is not None
+    assert registry.get("wan_t2v") is not None
+    assert registry.get("wan_i2v") is not None
+    assert registry.get("wan_r2v") is not None
+    assert registry.get("wan_video_edit") is not None
     assert registry.get("minimax_tts") is not None
 
 
@@ -115,8 +118,8 @@ async def test_wan_text2image_requires_key(ctx):
         settings.dashscope_api_key = old
 
 
-async def test_wan_text2video_empty_prompt(ctx):
-    tool = registry.get("wan_text2video")
+async def test_wan_t2v_empty_prompt(ctx):
+    tool = registry.get("wan_t2v")
     assert tool is not None
     res = await tool.invoke(ctx, {"prompt": ""})
     assert res.ok is False
@@ -230,11 +233,11 @@ async def test_wan_text2image_wan22_uses_text2image_synthesis(ctx, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_wan_text2video_happyhorse_sends_resolution_ratio_duration(ctx, monkeypatch):
+async def test_wan_t2v_happyhorse_sends_resolution_ratio_duration(ctx, monkeypatch):
     """HappyHorse 文生视频应传 resolution / ratio / duration，不传万相 size。"""
     import app.tools.media_tools as mt
 
-    tool = registry.get("wan_text2video")
+    tool = registry.get("wan_t2v")
     assert tool is not None
     settings = get_settings()
     old_k = settings.dashscope_api_key
@@ -280,6 +283,95 @@ async def test_wan_text2video_happyhorse_sends_resolution_ratio_duration(ctx, mo
         assert b0["parameters"]["ratio"] == "16:9"
         assert b0["parameters"]["duration"] == 8
         assert "size" not in b0["parameters"]
+    finally:
+        settings.dashscope_api_key = old_k
+
+
+@pytest.mark.asyncio
+async def test_wan_t2v_wan27_t2v_uses_resolution_not_size(ctx, monkeypatch):
+    """万相 2.7 文生视频使用 resolution/ratio/duration，不传老版万相 size。"""
+    import app.tools.media_tools as mt
+
+    tool = registry.get("wan_t2v")
+    assert tool is not None
+    settings = get_settings()
+    old_k = settings.dashscope_api_key
+    settings.dashscope_api_key = "sk-test"
+    try:
+        bodies: list[dict] = []
+
+        async def fake_post(client, base, key, path, body):
+            bodies.append(body)
+            return {"output": {"task_id": "task-w27"}}
+
+        async def fake_poll(_client, **_kw):
+            return {
+                "output": {
+                    "task_status": "SUCCEEDED",
+                    "video_url": "http://example.test/b.mp4",
+                }
+            }
+
+        async def fake_download(client, url, timeout_sec):
+            return b"\x00\x00\x00\x18ftypmp42"
+
+        monkeypatch.setattr(mt, "_dashscope_post", fake_post)
+        monkeypatch.setattr(mt, "_poll_dashscope_task", fake_poll)
+        monkeypatch.setattr(mt, "_download_bytes", fake_download)
+
+        res = await tool.invoke(
+            ctx,
+            {
+                "prompt": "一只猫",
+                "model": "wan2.7-t2v-2026-04-25",
+                "resolution": "720P",
+                "ratio": "16:9",
+                "duration": 10,
+            },
+        )
+        assert res.ok is True
+        assert bodies
+        b0 = bodies[0]
+        assert b0["model"] == "wan2.7-t2v-2026-04-25"
+        assert b0["input"] == {"prompt": "一只猫"}
+        assert b0["parameters"]["resolution"] == "720P"
+        assert b0["parameters"]["ratio"] == "16:9"
+        assert b0["parameters"]["duration"] == 10
+        assert b0["parameters"].get("prompt_extend") is True
+        assert "size" not in b0["parameters"]
+    finally:
+        settings.dashscope_api_key = old_k
+
+
+@pytest.mark.asyncio
+async def test_wan_i2v_requires_media(ctx):
+    tool = registry.get("wan_i2v")
+    assert tool is not None
+    settings = get_settings()
+    old_k = settings.dashscope_api_key
+    settings.dashscope_api_key = "sk-test"
+    try:
+        res = await tool.invoke(ctx, {"prompt": "动效", "model": "wan2.7-i2v-2026-04-25"})
+        assert res.ok is False
+        assert "media" in (res.error or "")
+    finally:
+        settings.dashscope_api_key = old_k
+
+
+@pytest.mark.asyncio
+async def test_wan_t2v_rejects_i2v_model(ctx):
+    tool = registry.get("wan_t2v")
+    assert tool is not None
+    settings = get_settings()
+    old_k = settings.dashscope_api_key
+    settings.dashscope_api_key = "sk-test"
+    try:
+        res = await tool.invoke(
+            ctx,
+            {"prompt": "x", "model": "wan2.7-i2v-2026-04-25"},
+        )
+        assert res.ok is False
+        assert "文生" in (res.error or "") or "t2v" in (res.error or "").lower()
     finally:
         settings.dashscope_api_key = old_k
 

@@ -677,7 +677,7 @@ def test_proof_from_media_tools_record_written_paths():
     assert "artifacts/wan_t2i_test_ab12cd34_0.png" in img.written_paths
 
     vid = exe._proof_from_tool_result(
-        tool_name="wan_text2video",
+        tool_name="wan_t2v",
         args={"prompt": "x"},
         result=ToolResult(
             ok=True,

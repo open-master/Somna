@@ -11,7 +11,10 @@ def default_mcp_tool_models(settings: Settings) -> dict[str, str]:
     return {
         "visual_critique": settings.agent_default_visual_critique,
         "wan_text2image": settings.agent_default_mcp_wan_t2i,
-        "wan_text2video": settings.agent_default_mcp_wan_t2v,
+        "wan_t2v": settings.agent_default_mcp_wan_t2v,
+        "wan_i2v": settings.agent_default_mcp_wan_i2v,
+        "wan_r2v": settings.agent_default_mcp_wan_r2v,
+        "wan_video_edit": settings.agent_default_mcp_wan_video_edit,
         "minimax_tts": settings.agent_default_mcp_minimax_tts,
     }
 
