@@ -1,0 +1,54 @@
+# ============================================================
+#  生产：Nginx 反代 + Let's Encrypt（可选叠加）
+#  用法:
+#   docker compose -f docker-compose.yml -f docker-compose.nginx.yml up -d --build
+#  首次 TLS（webroot：`.env` 填 CERTBOT_EMAIL；certbot 须加 `--profile tls`；安全组放行 80）:
+#   docker compose -f docker-compose.yml -f docker-compose.nginx.yml --profile tls run --rm certbot certonly \
+#     --webroot -w /var/www/certbot \
+#     -d somna-ai.com -d www.somna-ai.com \
+#     --email "${CERTBOT_EMAIL}" --agree-tos --no-eff-email
+#   docker compose -f docker-compose.yml -f docker-compose.nginx.yml restart nginx
+#  续期后重载（cron 示例；renew 同样加 `--profile tls`）:
+#   docker compose -f docker-compose.yml -f docker-compose.nginx.yml --profile tls run --rm certbot renew --webroot -w /var/www/certbot
+#   docker compose -f docker-compose.yml -f docker-compose.nginx.yml exec nginx nginx -s reload
+# ============================================================
+
+volumes:
+  certbot-www:
+  certbot-conf:
+
+services:
+  nginx:
+    build:
+      context: ./infra/nginx
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      TLS_DOMAIN: ${TLS_DOMAIN:-somna-ai.com}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - certbot-www:/var/www/certbot
+      - certbot-conf:/etc/letsencrypt:ro
+    depends_on:
+      web:
+        condition: service_healthy
+    networks:
+      - default
+
+  web:
+    ports: !override []
+    expose:
+      - "3000"
+
+  certbot:
+    image: certbot/certbot:v3.3.0
+    volumes:
+      - certbot-www:/var/www/certbot
+      - certbot-conf:/etc/letsencrypt
+    # 不随 `up` 启动；执行: docker compose ... --profile tls run --rm certbot certonly|renew ...
+    profiles:
+      - tls

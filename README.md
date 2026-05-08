@@ -118,6 +118,14 @@ docker compose -f docker-compose.yml down
 
 > **说明：** 默认合并 **`docker-compose.override.yml`**（常见用途：关闭本机 `redis` / `litellm` 的宿主机端口映射，避免与已有进程冲突；容器网络内服务名访问不受影响）。若不需要，请使用上文 `-f docker-compose.yml` 单文件方式。
 
+#### 生产：Nginx 反代 + HTTPS（可选）
+
+叠加上 **`docker-compose.nginx.yml`** 可对 **80 / 443** 暴露 Nginx，内部反代 **`web:3000`**，并用 certbot（**`--profile tls`**）签发 Let's Encrypt。配置 **`TLS_DOMAIN`**、**`CERTBOT_EMAIL`** 及 **`AUTH_URL` 等** 说明见 **[`docs/deployment-nginx-https.md`](docs/deployment-nginx-https.md)**。
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.nginx.yml up -d --build
+```
+
 #### 方式二：Make（封装了上述 Compose 命令）
 
 ```bash
@@ -168,12 +176,14 @@ Somna/
 │   ├── litellm/          LiteLLM config.yaml
 │   ├── postgres/init/    PG 初始化 SQL
 │   ├── mysql/init/       MySQL 初始化 SQL
+│   ├── nginx/            生产 Nginx 镜像与 TLS 模板（见 deployment-nginx-https.md）
 │   └── ...
 ├── docs/
 │   ├── prd.md            产品需求
 │   ├── architecture.md   架构设计
 │   ├── ui-design.md      前端布局（Manus 风格）
 │   ├── runbook.md        运维手册
+│   ├── deployment-nginx-https.md  生产 Nginx + HTTPS（Compose 叠加）
 │   └── adr/              架构决策记录
 └── scripts/
     ├── bootstrap.sh      一键准备
@@ -186,6 +196,7 @@ Somna/
 - [架构设计](docs/architecture.md)
 - [前端布局（Manus 风格）](docs/ui-design.md)
 - [运维手册](docs/runbook.md)
+- [生产 Nginx + HTTPS](docs/deployment-nginx-https.md)
 - [架构决策记录 ADR](docs/adr/)
 
 ## 里程碑
