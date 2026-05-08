@@ -2,7 +2,7 @@
 
 仓库提供可选叠加编排 **`docker-compose.nginx.yml`**：在 **`docker-compose.yml`** 全套服务之上增加 **Nginx**（端口 **80 / 443**），将公网流量反代到内部 **`web:3000`**（Next.js），并使用 **Let's Encrypt**（certbot webroot）签发证书。
 
-- **域名示例**：`somna-ai.com`、`www.somna-ai.com`（Nginx 模板中已写死 `server_name`；若改用其他域名，需同步修改 `infra/nginx/templates/*.conf`。）
+- **域名示例**：`somna-ai.com`、`www.somna-ai.com`（模板中已写死 `server_name`；若改用其他域名，需同步修改 `infra/nginx/templates/` 下各 conf，并重新构建 nginx 镜像。）
 - **证书目录名**：与 certbot **`certonly` 时 `-d` 的第一个域名** 一致（默认与 **`TLS_DOMAIN`** 一致）。
 
 ## 前置条件

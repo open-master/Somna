@@ -5,11 +5,12 @@ LE="/etc/letsencrypt/live/$TLS_DOMAIN"
 
 rm -f /etc/nginx/conf.d/*.conf
 
+TPL=/etc/nginx/somna-templates
 if [ -f "$LE/fullchain.pem" ] && [ -f "$LE/privkey.pem" ]; then
-  cp /etc/nginx/templates/http-redirect.conf /etc/nginx/conf.d/00-http.conf
-  envsubst '${TLS_DOMAIN}' < /etc/nginx/templates/https.conf.template > /etc/nginx/conf.d/01-https.conf
+  cp "$TPL/http-redirect.conf" /etc/nginx/conf.d/00-http.conf
+  envsubst '${TLS_DOMAIN}' < "$TPL/https.conf.template" > /etc/nginx/conf.d/01-https.conf
 else
-  cp /etc/nginx/templates/http-proxy.conf /etc/nginx/conf.d/00-http.conf
+  cp "$TPL/http-proxy.conf" /etc/nginx/conf.d/00-http.conf
 fi
 
 exec /docker-entrypoint.sh "$@"
