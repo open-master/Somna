@@ -296,12 +296,19 @@ services:
     command: ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "1"]
     ports:
       - "4000:4000"
+    # 官方镜像往往未带 curl，用 curl 探活会长期 unhealthy，拖住 agent-core / web / nginx
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4000/health/liveliness"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=9)",
+        ]
       interval: 20s
       timeout: 10s
       retries: 10
-      start_period: 120s
+      start_period: 180s
 
   # ==================== MCP Hub (工具服务) ====================
   mcp-hub:
