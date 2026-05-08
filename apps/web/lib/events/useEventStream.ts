@@ -114,6 +114,8 @@ export function useEventStream(sessionId: string | null, handlers: HandlerMap) {
 
       const merged = mergeUserMessagesAndEvents(users, eventPayloads);
       let maxSeq = 0;
+      let yielded = 0;
+      const yieldEvery = 32;
       for (const item of merged) {
         if (item.kind === "user") {
           useChatStore.getState().pushUserHydrated({
@@ -128,6 +130,10 @@ export function useEventStream(sessionId: string | null, handlers: HandlerMap) {
         await createDispatcher(handlersRef.current).handle(item.raw);
         if (typeof raw.seq === "number") {
           maxSeq = Math.max(maxSeq, raw.seq);
+        }
+        yielded += 1;
+        if (yielded % yieldEvery === 0) {
+          await new Promise<void>((r) => setTimeout(r, 0));
         }
       }
       if (maxSeq > 0) {

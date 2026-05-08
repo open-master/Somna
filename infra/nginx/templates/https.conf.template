@@ -1,7 +1,8 @@
 # envsubst 变量：TLS_DOMAIN（与 certbot -d 的首个域名一致，证书目录名）
 server {
     listen 443 ssl;
-    http2 on;
+    # 不显式启用 HTTP/2：部分环境下浏览器经 HTTP/2 + 反代时，EventSource(SSE) 易出现挂起或无事件，
+    # 前端会表现为顶部仍「空闲」而侧栏会话状态来自列表接口（可能显示「执行中」）。
     server_name somna-ai.com www.somna-ai.com;
 
     ssl_certificate     /etc/letsencrypt/live/${TLS_DOMAIN}/fullchain.pem;
