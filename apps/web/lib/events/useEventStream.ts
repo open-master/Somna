@@ -13,6 +13,7 @@ const POLL_MS = 1_500;
  * Subscribe to a session's SSE stream.
  *
  * - **Bootstrap**：拉取 DB 用户消息 + 全量 events，按 `created_at` 交错回放后，再以最大 seq 连接 SSE，避免与库表重复。
+ *   （Bootstrap 回放时暂不逐条应用 `screenshot`，只在结束时应用最后一张，以免观察区预览图连环换 src 刷屏拉取 artifacts。）
  * - **HTTP poll fallback**：轮询 `GET /events?since=`，与原先一致。
  */
 export function useEventStream(sessionId: string | null, handlers: HandlerMap) {
@@ -128,6 +129,9 @@ export function useEventStream(sessionId: string | null, handlers: HandlerMap) {
       let maxSeq = 0;
       let yielded = 0;
       const yieldEvery = 32;
+      /** 历史里每条 screenshot 都走 handler 会令 Dock/屏幕预览的 <img> 随 latest 连变，刷屏请求 artifacts/content */
+      let lastScreenshot: unknown | null = null;
+
       for (const item of merged) {
         if (stale()) return;
         if (item.kind === "user") {
@@ -139,10 +143,14 @@ export function useEventStream(sessionId: string | null, handlers: HandlerMap) {
           });
           continue;
         }
-        const raw = item.raw as { seq?: number };
-        await createDispatcher(handlersRef.current).handle(item.raw);
+        const raw = item.raw as { seq?: number; type?: string };
         if (typeof raw.seq === "number") {
           maxSeq = Math.max(maxSeq, raw.seq);
+        }
+        if (raw.type === "screenshot") {
+          lastScreenshot = item.raw;
+        } else {
+          await createDispatcher(handlersRef.current).handle(item.raw);
         }
         yielded += 1;
         if (yielded % yieldEvery === 0) {
@@ -151,6 +159,9 @@ export function useEventStream(sessionId: string | null, handlers: HandlerMap) {
         }
       }
       if (stale()) return;
+      if (lastScreenshot) {
+        await createDispatcher(handlersRef.current).handle(lastScreenshot);
+      }
       if (maxSeq > 0) {
         appliedSeqRef.current = maxSeq;
         lastSeqRef.current = maxSeq;
