@@ -4,7 +4,6 @@ import { Copy, FileText, Folder, Upload, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -241,9 +240,6 @@ function SkillPreviewDialog({
   skill: SkillDetail | null;
   onClose: () => void;
 }) {
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
-
   const [selectedPath, setSelectedPath] = useState("SKILL.md");
   const files = useMemo(() => normalizeSkillFiles(skill?.files), [skill?.files]);
   const skillMdStr = asMarkdownString(skill?.skill_md, "");
@@ -283,11 +279,11 @@ function SkillPreviewDialog({
     }
   }
 
-  if (!mounted || !skill) return null;
+  if (!skill) return null;
 
   const visLabel = VISIBILITY_LABEL[skill.visibility] ?? skill.visibility ?? "";
 
-  const panel = (
+  return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-3" role="presentation">
       <button
         type="button"
@@ -424,8 +420,6 @@ function SkillPreviewDialog({
       </div>
     </div>
   );
-
-  return createPortal(panel, document.body);
 }
 
 export function SettingsSkillManagement({ isAdmin, currentUserId }: { isAdmin: boolean; currentUserId: string | null }) {
