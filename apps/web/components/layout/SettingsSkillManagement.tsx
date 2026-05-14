@@ -49,8 +49,10 @@ function SkillCard({
 }) {
   const [busy, setBusy] = useState(false);
   const canShare = mine && skill.visibility !== "official";
+  const isSystemSkill = skill.visibility === "official" && skill.name === "skill-creator";
 
   async function toggleEnabled() {
+    if (isSystemSkill) return;
     setBusy(true);
     try {
       await setSkillEnabled(skill.id, !skill.enabled);
@@ -110,14 +112,15 @@ function SkillCard({
           }}
           className={cn(
             "h-6 w-11 shrink-0 rounded-full border p-0.5 transition",
-            skill.enabled ? "border-primary bg-primary" : "border-border bg-muted",
+            skill.enabled || isSystemSkill ? "border-primary bg-primary" : "border-border bg-muted",
           )}
-          aria-label={skill.enabled ? "停用技能" : "启用技能"}
+          title={isSystemSkill ? "系统默认启用，不能关闭" : undefined}
+          aria-label={skill.enabled || isSystemSkill ? "停用技能" : "启用技能"}
         >
           <span
             className={cn(
               "block size-4 rounded-full bg-background shadow transition",
-              skill.enabled ? "translate-x-5" : "translate-x-0",
+              skill.enabled || isSystemSkill ? "translate-x-5" : "translate-x-0",
             )}
           />
         </button>
@@ -258,10 +261,10 @@ function SkillPreviewDialog({
 
   useEffect(() => {
     if (!skill) return;
-    const keys = Object.keys(files);
+    const keys = Object.keys(normalizeSkillFiles(skill.files));
     if (keys.includes("SKILL.md")) setSelectedPath("SKILL.md");
     else if (keys.length > 0) setSelectedPath([...keys].sort((a, b) => a.localeCompare(b))[0]!);
-  }, [skill?.id, skill, files]);
+  }, [skill?.id]);
 
   useEffect(() => {
     if (!skill) return;
@@ -297,6 +300,7 @@ function SkillPreviewDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="skill-preview-title"
+        onClick={(e) => e.stopPropagation()}
       >
               <aside className="hidden w-56 shrink-0 border-r bg-muted/30 sm:block">
                 <div className="border-b px-3 py-3">
@@ -313,7 +317,10 @@ function SkillPreviewDialog({
                     <button
                       key={path}
                       type="button"
-                      onClick={() => setSelectedPath(path)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedPath(path);
+                      }}
                       className={cn(
                         "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left",
                         safeSelected === path ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:bg-muted",
@@ -334,7 +341,10 @@ function SkillPreviewDialog({
                           <button
                             key={path}
                             type="button"
-                            onClick={() => setSelectedPath(path)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedPath(path);
+                            }}
                             className={cn(
                               "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs",
                               safeSelected === path

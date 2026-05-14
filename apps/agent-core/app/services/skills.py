@@ -319,6 +319,89 @@ def _ensure_required_generated_files(files: dict[str, str], *, raw_text: str) ->
     return out
 
 
+def _task_should_have_script(text: str) -> bool:
+    lowered = (text or "").lower()
+    keywords = (
+        "video",
+        "audio",
+        "subtitle",
+        "ffmpeg",
+        "pdf",
+        "excel",
+        "xlsx",
+        "csv",
+        "json",
+        "api",
+        "batch",
+        "convert",
+        "extract",
+        "clean",
+        "transform",
+        "image",
+        "speech",
+        "字幕",
+        "视频",
+        "音频",
+        "文件",
+        "批量",
+        "转换",
+        "提取",
+        "清洗",
+        "表格",
+        "接口",
+    )
+    return any(k in lowered for k in keywords)
+
+
+def _ensure_script_helper(files: dict[str, str], *, raw_text: str) -> dict[str, str]:
+    out = dict(files)
+    if any(path.startswith("scripts/") for path in out):
+        return out
+    if not _task_should_have_script(raw_text):
+        return out
+    out["scripts/helper.py"] = '''#!/usr/bin/env python3
+"""Reusable helper for this skill.
+
+This script is intentionally conservative. Customize the TODO sections for the
+specific workflow before execution.
+"""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Skill helper script")
+    parser.add_argument("input", help="Input file or directory")
+    parser.add_argument("--output", default="output", help="Output file or directory")
+    args = parser.parse_args()
+
+    input_path = Path(args.input)
+    output_path = Path(args.output)
+    if not input_path.exists():
+        raise SystemExit(f"Input not found: {input_path}")
+
+    # TODO: Replace with deterministic workflow logic for this skill.
+    print(f"Input: {input_path}")
+    print(f"Output: {output_path}")
+    print("TODO: implement helper logic")
+
+
+if __name__ == "__main__":
+    main()
+'''
+    skill_md = out.get("SKILL.md", "")
+    if skill_md and "scripts/helper.py" not in skill_md:
+        out["SKILL.md"] = (
+            skill_md.rstrip()
+            + "\n\n## Script Helpers\n\n"
+            + "- For deterministic file/media/data operations, adapt and run `scripts/helper.py` in the sandbox after reviewing its TODOs.\n"
+        )
+    return out
+
+
 def _extract_json_object(text: str) -> dict[str, Any]:
     raw = (text or "").strip()
     if raw.startswith("```"):
@@ -376,6 +459,7 @@ Use this skill when the user asks for work similar to:
         "references/workflow.md": f"# Workflow\n\nSource task:\n\n> {raw_text[:1000] or 'N/A'}\n\nUse the checklist in SKILL.md and adapt it to the user's current constraints.\n",
         "references/output-patterns.md": "# Output Patterns\n\n- Keep the final response concise.\n- Mention produced artifacts and verification steps.\n- Ask for confirmation only when a real decision remains.\n",
     }
+    files = _ensure_script_helper(files, raw_text=raw_text)
     return validate_skill_package(files)
 
 
@@ -413,7 +497,9 @@ Requirements:
 - Give the skill a meaningful English name based on the task, not a random id or email.
 - SKILL.md body should be concise and under 500 lines.
 - Use progressive disclosure: put detailed workflow in references/workflow.md and final answer templates in references/output-patterns.md.
-- Do not include executable scripts unless the source task clearly requires a stable script.
+- Include executable helper scripts when the source task involves deterministic file/media/data/API/batch operations.
+  Examples that SHOULD include scripts/: video/subtitle/audio processing, PDF/Excel/CSV/JSON processing, batch conversion, data cleaning, API request wrappers.
+  Scripts must be safe templates or reusable helpers, and SKILL.md must explain when to review and run them.
 - LICENSE.txt should state this is user-generated Somna skill content and should be reviewed before sharing.
 - Content may be Chinese when useful, but name must be English slug.
 
@@ -442,6 +528,7 @@ Assistant result summary:
         raise ValueError("LLM skill payload missing files")
     normalized = {str(k): str(v) for k, v in files.items() if v is not None}
     normalized = _ensure_required_generated_files(normalized, raw_text=raw_text)
+    normalized = _ensure_script_helper(normalized, raw_text=raw_text)
     return validate_skill_package(normalized)
 
 
@@ -536,11 +623,14 @@ async def list_my_skills(user: CurrentUser) -> list[dict[str, Any]]:
             """
             SELECT s.id, s.owner_user_id, u.email AS owner_email, s.name, s.title, s.description,
                    s.visibility, s.source, s.status, s.version, s.metadata, s.created_at, s.updated_at,
-                   COALESCE(us.enabled, false) AS enabled
+                   CASE WHEN s.name = 'skill-creator' AND s.visibility = 'official'
+                        THEN true ELSE COALESCE(us.enabled, false) END AS enabled
             FROM skills s
             LEFT JOIN users u ON u.id = s.owner_user_id
             LEFT JOIN user_skills us ON us.skill_id = s.id AND us.user_id = $1
-            WHERE s.owner_user_id = $1 OR us.user_id = $1
+            WHERE s.owner_user_id = $1
+               OR us.user_id = $1
+               OR (s.name = 'skill-creator' AND s.visibility = 'official' AND s.status = 'active')
             ORDER BY s.updated_at DESC
             """,
             user.id,
@@ -555,8 +645,10 @@ async def list_market_skills(user: CurrentUser) -> list[dict[str, Any]]:
             """
             SELECT s.id, s.owner_user_id, u.email AS owner_email, s.name, s.title, s.description,
                    s.visibility, s.source, s.status, s.version, s.metadata, s.created_at, s.updated_at,
-                   (us.user_id IS NOT NULL) AS installed,
-                   COALESCE(us.enabled, false) AS enabled
+                   CASE WHEN s.name = 'skill-creator' AND s.visibility = 'official'
+                        THEN true ELSE (us.user_id IS NOT NULL) END AS installed,
+                   CASE WHEN s.name = 'skill-creator' AND s.visibility = 'official'
+                        THEN true ELSE COALESCE(us.enabled, false) END AS enabled
             FROM skills s
             LEFT JOIN users u ON u.id = s.owner_user_id
             LEFT JOIN user_skills us ON us.skill_id = s.id AND us.user_id = $1
@@ -580,8 +672,10 @@ async def get_skill_detail(skill_id: uuid.UUID, user: CurrentUser) -> dict[str, 
         row = await conn.fetchrow(
             """
             SELECT s.*, u.email AS owner_email,
-                   (us.user_id IS NOT NULL) AS installed,
-                   COALESCE(us.enabled, false) AS enabled
+                   CASE WHEN s.name = 'skill-creator' AND s.visibility = 'official'
+                        THEN true ELSE (us.user_id IS NOT NULL) END AS installed,
+                   CASE WHEN s.name = 'skill-creator' AND s.visibility = 'official'
+                        THEN true ELSE COALESCE(us.enabled, false) END AS enabled
             FROM skills s
             LEFT JOIN users u ON u.id = s.owner_user_id
             LEFT JOIN user_skills us ON us.skill_id = s.id AND us.user_id = $2
@@ -604,7 +698,7 @@ async def set_skill_enabled(skill_id: uuid.UUID, user: CurrentUser, enabled: boo
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
-            SELECT id FROM skills
+            SELECT id, name, visibility FROM skills
             WHERE id = $1 AND status = 'active'
               AND (owner_user_id = $2 OR visibility IN ('shared','official'))
             """,
@@ -613,6 +707,8 @@ async def set_skill_enabled(skill_id: uuid.UUID, user: CurrentUser, enabled: boo
         )
         if row is None:
             raise HTTPException(status_code=404, detail="skill not found")
+        if row["name"] == "skill-creator" and row["visibility"] == "official":
+            return await get_skill_detail(skill_id, user)
         await conn.execute(
             """
             INSERT INTO user_skills (user_id, skill_id, enabled)
@@ -686,9 +782,13 @@ async def format_enabled_skills_for_prompt(
         rows = await conn.fetch(
             """
             SELECT s.name, s.title, s.description, s.visibility, s.skill_md, s.files
-            FROM user_skills us
-            JOIN skills s ON s.id = us.skill_id
-            WHERE us.user_id = $1 AND us.enabled = true AND s.status = 'active'
+            FROM skills s
+            LEFT JOIN user_skills us ON us.skill_id = s.id AND us.user_id = $1
+            WHERE s.status = 'active'
+              AND (
+                (us.user_id = $1 AND us.enabled = true)
+                OR (s.name = 'skill-creator' AND s.visibility = 'official')
+              )
             ORDER BY s.updated_at DESC
             LIMIT 40
             """,
