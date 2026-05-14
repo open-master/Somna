@@ -3,16 +3,14 @@
 import { Copy, FileText, Folder, Upload, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
 import {
-  createSkill,
   deleteSkill,
   getSkill,
   listSkills,
@@ -418,11 +416,10 @@ export function SettingsSkillManagement({ isAdmin, currentUserId }: { isAdmin: b
   const [market, setMarket] = useState<SkillRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
-  const [skillMd, setSkillMd] = useState("");
-  const [file, setFile] = useState<File | null>(null);
   const [visibility, setVisibility] = useState<"private" | "shared">("private");
-  const [creating, setCreating] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [preview, setPreview] = useState<SkillDetail | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -452,44 +449,74 @@ export function SettingsSkillManagement({ isAdmin, currentUserId }: { isAdmin: b
     }
   }
 
-  async function submit() {
-    setCreating(true);
+  async function submitUpload(nextFile: File | null) {
+    if (!nextFile) return;
+    setUploading(true);
     try {
-      if (file) {
-        await uploadSkill(file, visibility);
-        setFile(null);
-      } else {
-        await createSkill(skillMd, visibility);
-        setSkillMd("");
-      }
+      await uploadSkill(nextFile, visibility);
       await reload();
       setTab("mine");
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : "创建 Skill 失败");
+      window.alert(e instanceof Error ? e.message : "上传 Skill 失败");
     } finally {
-      setCreating(false);
+      setUploading(false);
     }
   }
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <Input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="搜索技能"
-          className="h-9 max-w-xs rounded-lg"
-        />
-        <p className="text-xs text-muted-foreground">
-          管理 Claude 标准 Skill；管理员创建或上传的 Skill 会自动标记为官方。
-        </p>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".skill,.zip,.md"
+        className="sr-only"
+        onChange={(e) => {
+          const picked = e.target.files?.[0] ?? null;
+          if (picked) void submitUpload(picked);
+          e.currentTarget.value = "";
+        }}
+      />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="搜索技能"
+            className="h-9 max-w-xs rounded-lg"
+          />
+          <p className="text-xs text-muted-foreground">
+            管理 Claude 标准 Skill；管理员创建或上传的 Skill 会自动标记为官方。
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {!isAdmin ? (
+            <select
+              value={visibility}
+              onChange={(e) => setVisibility(e.target.value as "private" | "shared")}
+              className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+            >
+              <option value="private">私有</option>
+              <option value="shared">共享</option>
+            </select>
+          ) : (
+            <Badge variant="success">官方</Badge>
+          )}
+          <Button
+            type="button"
+            size="sm"
+            disabled={uploading}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <Upload className="mr-2 size-4" />
+            {uploading ? "上传中…" : "上传技能"}
+          </Button>
+        </div>
       </div>
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="max-w-md">
           <TabsTrigger value="mine">我的技能</TabsTrigger>
           <TabsTrigger value="market">技能市场</TabsTrigger>
-          <TabsTrigger value="create">创建/上传</TabsTrigger>
         </TabsList>
 
         <TabsContent value="mine" className="space-y-3">
@@ -525,47 +552,6 @@ export function SettingsSkillManagement({ isAdmin, currentUserId }: { isAdmin: b
           </div>
         </TabsContent>
 
-        <TabsContent value="create" className="space-y-3">
-          <div className="rounded-xl border bg-muted/20 p-4">
-            <p className="text-sm font-medium">上传 Claude 标准 Skill</p>
-            <p className="mt-1 text-xs text-muted-foreground">支持单个 SKILL.md 或包含 SKILL.md 的 .zip 包。</p>
-            <div className="mt-3 flex flex-wrap items-center gap-3">
-              <Input
-                type="file"
-                accept=".md,.zip"
-                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-                className="max-w-sm"
-              />
-              {!isAdmin ? (
-                <select
-                  value={visibility}
-                  onChange={(e) => setVisibility(e.target.value as "private" | "shared")}
-                  className="h-10 rounded-md border border-input bg-background px-2 text-sm"
-                >
-                  <option value="private">私有</option>
-                  <option value="shared">共享</option>
-                </select>
-              ) : (
-                <Badge variant="success">管理员上传将成为官方 Skill</Badge>
-              )}
-            </div>
-          </div>
-
-          <div className="rounded-xl border bg-muted/20 p-4">
-            <p className="text-sm font-medium">或粘贴 SKILL.md</p>
-            <Textarea
-              value={skillMd}
-              onChange={(e) => setSkillMd(e.target.value)}
-              placeholder={"---\nname: example-skill\ndescription: ...\n---\n\n# Example Skill\n\n## Instructions\n..."}
-              className="mt-3 min-h-[220px] font-mono text-xs"
-            />
-          </div>
-
-          <Button type="button" disabled={creating || (!file && !skillMd.trim())} onClick={() => void submit()}>
-            <Upload className="mr-2 size-4" />
-            {creating ? "保存中…" : isAdmin ? "保存为官方 Skill" : "保存 Skill"}
-          </Button>
-        </TabsContent>
       </Tabs>
 
       <SkillPreviewDialog skill={preview} onClose={() => setPreview(null)} />

@@ -71,16 +71,17 @@ async def upload_skill_package(
 ) -> dict:
     name = file.filename or "skill"
     body = await file.read()
-    if name.lower().endswith(".zip"):
+    lowered = name.lower()
+    if lowered.endswith((".zip", ".skill")):
         package = package_from_zip(body)
-    elif name == "SKILL.md" or name.lower().endswith(".md"):
+    elif name == "SKILL.md" or lowered.endswith(".md"):
         try:
             skill_md = body.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise HTTPException(status_code=400, detail="SKILL.md 必须是 UTF-8 文本") from exc
         package = package_from_markdown(skill_md)
     else:
-        raise HTTPException(status_code=400, detail="仅支持 .zip 或 SKILL.md")
+        raise HTTPException(status_code=400, detail="仅支持 .skill、.zip 或 SKILL.md")
     return await create_skill(user=user, package=package, visibility=visibility, source="upload")
 
 
