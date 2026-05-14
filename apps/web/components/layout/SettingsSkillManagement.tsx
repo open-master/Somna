@@ -1,10 +1,10 @@
 "use client";
 
-import * as Dialog from "@radix-ui/react-dialog";
 import { Copy, FileText, Folder, Upload, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -90,18 +90,7 @@ function SkillCard({
   }
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      className="w-full rounded-xl border bg-background p-3 text-left shadow-sm transition hover:border-primary/40 hover:shadow-md"
-      onClick={() => onPreview(skill)}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onPreview(skill);
-        }
-      }}
-    >
+    <div className="w-full cursor-pointer rounded-xl border bg-background p-3 text-left shadow-sm transition hover:border-primary/40 hover:shadow-md" onClick={() => onPreview(skill)}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -220,6 +209,22 @@ function groupedFiles(files: Record<string, string>): { dirs: Record<string, str
   return { dirs, roots };
 }
 
+function normalizeSkillFiles(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof v === "string") out[k] = v;
+    else if (v != null) out[k] = typeof v === "object" ? JSON.stringify(v, null, 2) : String(v);
+  }
+  return out;
+}
+
+function asMarkdownString(value: unknown, fallback: string): string {
+  if (typeof value === "string") return value;
+  if (value == null) return fallback;
+  return String(value);
+}
+
 function SkillPreviewDialog({
   skill,
   onClose,
@@ -227,18 +232,39 @@ function SkillPreviewDialog({
   skill: SkillDetail | null;
   onClose: () => void;
 }) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
   const [selectedPath, setSelectedPath] = useState("SKILL.md");
-  const files = skill?.files ?? {};
+  const files = useMemo(() => normalizeSkillFiles(skill?.files), [skill?.files]);
+  const skillMdStr = asMarkdownString(skill?.skill_md, "");
   const filePaths = Object.keys(files);
-  const safeSelected = selectedPath in files ? selectedPath : "SKILL.md";
-  const selectedContent = files[safeSelected] ?? skill?.skill_md ?? "";
+  const safeSelected =
+    selectedPath in files
+      ? selectedPath
+      : "SKILL.md" in files
+        ? "SKILL.md"
+        : filePaths[0] ?? "SKILL.md";
+  const selectedContent = asMarkdownString(files[safeSelected] ?? skillMdStr, skillMdStr);
   const isSkillMd = safeSelected === "SKILL.md";
-  const parsed = splitSkillMarkdown(selectedContent);
+  const parsed = isSkillMd ? splitSkillMarkdown(selectedContent) : { yaml: "", body: selectedContent };
   const tree = groupedFiles(files);
 
   useEffect(() => {
-    if (skill) setSelectedPath("SKILL.md");
-  }, [skill?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!skill) return;
+    const keys = Object.keys(files);
+    if (keys.includes("SKILL.md")) setSelectedPath("SKILL.md");
+    else if (keys.length > 0) setSelectedPath([...keys].sort((a, b) => a.localeCompare(b))[0]!);
+  }, [skill?.id, skill, files]);
+
+  useEffect(() => {
+    if (!skill) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [skill, onClose]);
 
   async function copyCurrent() {
     try {
@@ -248,13 +274,24 @@ function SkillPreviewDialog({
     }
   }
 
-  return (
-    <Dialog.Root open={!!skill} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[70] bg-black/45 backdrop-blur-[2px]" />
-        <Dialog.Content className="fixed left-[50%] top-[50%] z-[71] flex h-[min(760px,calc(100vh-1.5rem))] w-[min(1120px,calc(100vw-1.5rem))] translate-x-[-50%] translate-y-[-50%] overflow-hidden rounded-2xl border bg-background shadow-2xl outline-none">
-          {skill ? (
-            <>
+  if (!mounted || !skill) return null;
+
+  const visLabel = VISIBILITY_LABEL[skill.visibility] ?? skill.visibility ?? "";
+
+  const panel = (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-3" role="presentation">
+      <button
+        type="button"
+        className="absolute inset-0 bg-black/45 backdrop-blur-[2px]"
+        aria-label="关闭预览"
+        onClick={onClose}
+      />
+      <div
+        className="relative flex h-[min(760px,calc(100vh-1.5rem))] w-[min(1120px,calc(100vw-1.5rem))] overflow-hidden rounded-2xl border bg-background shadow-2xl outline-none"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="skill-preview-title"
+      >
               <aside className="hidden w-56 shrink-0 border-r bg-muted/30 sm:block">
                 <div className="border-b px-3 py-3">
                   <div className="flex items-center gap-2">
@@ -312,21 +349,21 @@ function SkillPreviewDialog({
               <div className="flex min-w-0 flex-1 flex-col">
                 <header className="flex items-start justify-between gap-3 border-b px-5 py-3">
                   <div className="min-w-0">
-                    <Dialog.Title className="truncate text-base font-semibold">{safeSelected}</Dialog.Title>
-                    <Dialog.Description className="mt-1 truncate text-xs text-muted-foreground">
-                      {VISIBILITY_LABEL[skill.visibility]} · {filePaths.length} 个文件 · {skill.description}
-                    </Dialog.Description>
+                    <h2 id="skill-preview-title" className="truncate text-base font-semibold">
+                      {safeSelected}
+                    </h2>
+                    <p className="mt-1 truncate text-xs text-muted-foreground">
+                      {visLabel} · {filePaths.length} 个文件 · {skill.description}
+                    </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
                     <Button type="button" size="sm" variant="outline" onClick={() => void copyCurrent()}>
                       <Copy className="mr-1.5 size-3.5" />
                       复制
                     </Button>
-                    <Dialog.Close asChild>
-                      <Button type="button" size="icon" variant="ghost" aria-label="关闭">
-                        <X className="size-4" />
-                      </Button>
-                    </Dialog.Close>
+                    <Button type="button" size="icon" variant="ghost" aria-label="关闭" onClick={onClose}>
+                      <X className="size-4" />
+                    </Button>
                   </div>
                 </header>
 
@@ -368,12 +405,11 @@ function SkillPreviewDialog({
                   )}
                 </main>
               </div>
-            </>
-          ) : null}
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+      </div>
+    </div>
   );
+
+  return createPortal(panel, document.body);
 }
 
 export function SettingsSkillManagement({ isAdmin, currentUserId }: { isAdmin: boolean; currentUserId: string | null }) {
