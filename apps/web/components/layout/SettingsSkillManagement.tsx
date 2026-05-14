@@ -291,18 +291,18 @@ function SkillPreviewDialog({
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-3" role="presentation">
       <button
         type="button"
-        className="absolute inset-0 bg-black/45 backdrop-blur-[2px]"
+        className="absolute inset-0 z-0 bg-black/45 backdrop-blur-[2px]"
         aria-label="关闭预览"
         onClick={onClose}
       />
       <div
-        className="relative flex h-[min(760px,calc(100vh-1.5rem))] w-[min(1120px,calc(100vw-1.5rem))] overflow-hidden rounded-2xl border bg-background shadow-2xl outline-none"
+        className="relative z-10 flex h-[min(760px,calc(100vh-1.5rem))] w-[min(1120px,calc(100vw-1.5rem))] min-h-0 overflow-hidden rounded-2xl border bg-background shadow-2xl outline-none"
         role="dialog"
         aria-modal="true"
         aria-labelledby="skill-preview-title"
         onClick={(e) => e.stopPropagation()}
       >
-              <aside className="hidden w-56 shrink-0 border-r bg-muted/30 sm:block">
+              <aside className="hidden h-full min-h-0 w-56 shrink-0 flex-col border-r bg-muted/30 sm:flex">
                 <div className="border-b px-3 py-3">
                   <div className="flex items-center gap-2">
                     <FileText className="size-4 text-muted-foreground" />
@@ -312,7 +312,7 @@ function SkillPreviewDialog({
                     </div>
                   </div>
                 </div>
-                <div className="space-y-1 p-2 text-sm">
+                <div className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2 text-sm">
                   {tree.roots.map((path) => (
                     <button
                       key={path}
@@ -362,8 +362,8 @@ function SkillPreviewDialog({
                 </div>
               </aside>
 
-              <div className="flex min-w-0 flex-1 flex-col">
-                <header className="flex items-start justify-between gap-3 border-b px-5 py-3">
+              <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
+                <header className="shrink-0 flex items-start justify-between gap-3 border-b px-5 py-3">
                   <div className="min-w-0">
                     <h2 id="skill-preview-title" className="truncate text-base font-semibold">
                       {safeSelected}
@@ -383,7 +383,7 @@ function SkillPreviewDialog({
                   </div>
                 </header>
 
-                <main className="min-h-0 flex-1 overflow-auto px-5 py-5">
+                <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5">
                   {isSkillMd ? (
                     <article className="mx-auto max-w-3xl">
                       {parsed.yaml ? (
