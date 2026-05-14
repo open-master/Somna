@@ -26,6 +26,7 @@ from app.llm.client import get_async_anthropic
 from app.logging_setup import get_logger
 from app.memory import format_memories, search_memories
 from app.prompts.loader import build_system_prompt
+from app.services.skills import format_enabled_skills_for_prompt
 from app.tools.schema import (
     anthropic_tool_choice,
     manifests_to_anthropic_tools,
@@ -220,7 +221,11 @@ async def execute_anthropic_node(state: SessionState) -> SessionState:
         user_id=state.get("user_id"),
     )
     memory_block = format_memories(memories)
-    extra_context = _compose_executor_extra_context(memory_block, state.get("task_frame"))
+    skill_block = await format_enabled_skills_for_prompt(
+        user_id=state.get("user_id"),
+        query=user_message,
+    )
+    extra_context = _compose_executor_extra_context(memory_block, state.get("task_frame"), skill_block)
 
     system_prompt = build_system_prompt(
         session_id=str(session_id),

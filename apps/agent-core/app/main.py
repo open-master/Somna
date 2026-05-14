@@ -13,12 +13,14 @@ from app.api.auth import router as auth_router
 from app.api.admin_users import router as admin_users_router
 from app.api.health import router as health_router
 from app.api.sessions import router as sessions_router
+from app.api.skills import router as skills_router
 from app.api.stream import router as stream_router
 from app.api.temporal import router as temporal_router
 from app.config import get_settings
 from app.graph.runtime import get_registry
 from app.graph.session_graph import close_graph, get_compiled_graph
 from app.logging_setup import get_logger, setup_logging
+from app.services.skills import ensure_skill_tables
 from app.storage.nats_client import close_nats, init_nats
 from app.storage.postgres import close_pool, init_pool
 from app.storage.redis_client import close_redis, init_redis
@@ -55,6 +57,7 @@ async def lifespan(app: FastAPI):
     log.info("agent-core.start", env=settings.env, service=settings.service_name)
 
     await init_pool()
+    await ensure_skill_tables()
     await init_redis()
     await init_nats()
     # Warm up the graph so the first request doesn't pay the setup cost
@@ -107,6 +110,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_router)
     app.include_router(admin_users_router)
     app.include_router(sessions_router)
+    app.include_router(skills_router)
     app.include_router(stream_router)
     app.include_router(temporal_router)
 

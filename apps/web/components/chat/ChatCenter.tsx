@@ -5,6 +5,7 @@ import { useChatStore } from "@/lib/store/chat";
 import { useUiStore } from "@/lib/store/ui";
 
 import { Composer } from "./Composer";
+import { CreateSkillFromSessionCard } from "./CreateSkillFromSessionCard";
 import { DeliverablesHub } from "./DeliverablesHub";
 import { MessageList } from "./MessageList";
 import { PlannerTimeline } from "./PlannerTimeline";
@@ -38,6 +39,7 @@ export function ChatCenter({ sessionId }: { sessionId: string }) {
           </div>
         </div>
       ) : null}
+      {hasConversation ? <CreateSkillFromSessionCard sessionId={sessionId} /> : null}
       <Composer sessionId={sessionId} />
     </div>
   );

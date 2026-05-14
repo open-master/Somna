@@ -18,6 +18,7 @@ import {
 } from "@/lib/agent-models";
 
 import { SettingsUserManagement } from "@/components/layout/SettingsUserManagement";
+import { SettingsSkillManagement } from "@/components/layout/SettingsSkillManagement";
 import {
   DEFAULT_MCP_TOOL_MODELS,
   MCP_TOOL_MODEL_META,
@@ -34,7 +35,7 @@ import {
   setExecutorEngine,
 } from "@/lib/executor-engine";
 
-type SettingsSection = "mode" | "models" | "mcp_tools" | "users";
+type SettingsSection = "mode" | "models" | "mcp_tools" | "skills" | "users";
 
 export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const [section, setSection] = useState<SettingsSection>("mode");
@@ -93,7 +94,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
         <Dialog.Content
           className={cn(
             "fixed left-[50%] top-[50%] z-50 flex translate-x-[-50%] translate-y-[-50%]",
-            section === "users"
+            section === "users" || section === "skills"
               ? "h-[min(900px,calc(100vh-1.5rem))] w-[min(1120px,calc(100vw-1.5rem))]"
               : "h-[min(640px,calc(100vh-2rem))] w-[min(760px,calc(100vw-2rem))]",
             "overflow-hidden rounded-2xl border bg-background shadow-lg outline-none",
@@ -133,6 +134,16 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                 >
                   MCP 模型配置
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setSection("skills")}
+                  className={cn(
+                    "w-full rounded-lg px-2 py-2 text-left text-sm transition",
+                    section === "skills" ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:bg-muted/80",
+                  )}
+                >
+                  技能管理
+                </button>
                 {isAdmin ? (
                   <button
                     type="button"
@@ -158,7 +169,9 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                         ? "Agent 模型配置"
                         : section === "mcp_tools"
                           ? "MCP 模型配置"
-                          : "用户管理"}
+                          : section === "skills"
+                            ? "技能管理"
+                            : "用户管理"}
                   </Dialog.Title>
                   <Dialog.Description className="mt-1 text-sm text-muted-foreground">
                     {section === "mode" ? (
@@ -183,6 +196,8 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                         按工具名指定默认 <code className="rounded bg-muted px-1 text-xs">model</code>；调用时若 LLM
                         未传参则使用此处（经会话提交到 agent-core）。
                       </>
+                    ) : section === "skills" ? (
+                      <>管理 Claude 标准 Skill；启用后会在匹配任务中自动注入执行上下文。</>
                     ) : (
                       <>查看与维护已注册用户信息；仅「活跃」用户可登录。</>
                     )}
@@ -196,7 +211,9 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
               </div>
 
               <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-                {section === "users" && isAdmin ? (
+                {section === "skills" ? (
+                  <SettingsSkillManagement isAdmin={isAdmin} currentUserId={meProfile?.id ?? null} />
+                ) : section === "users" && isAdmin ? (
                   <SettingsUserManagement currentUserId={meProfile?.id ?? null} />
                 ) : section === "users" ? (
                   <p className="text-sm text-muted-foreground">仅管理员可访问用户管理。</p>
@@ -343,7 +360,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
               </div>
 
               <p className="border-t px-5 py-3 text-xs text-muted-foreground">
-                Agent 运行模式、Agent 模型配置与 MCP 模型配置保存在本机浏览器；发送下一条消息时生效。
+                Agent 运行模式、Agent 模型配置与 MCP 模型配置保存在本机浏览器；技能管理在服务端保存并影响后续任务。
                 {isAdmin ? " 用户管理在服务端即时生效。" : ""}
               </p>
             </div>

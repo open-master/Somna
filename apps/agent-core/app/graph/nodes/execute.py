@@ -51,6 +51,7 @@ from app.llm.client import get_async_openai
 from app.logging_setup import get_logger
 from app.memory import format_memories, search_memories
 from app.prompts.loader import build_system_prompt
+from app.services.skills import format_enabled_skills_for_prompt
 from app.tools.client import get_client
 from app.tools.schema import manifests_to_openai_tools, openai_tool_choice, tool_manifest_cache
 
@@ -132,10 +133,13 @@ def _merge_proof(base: _ExecutionProof, delta: _ExecutionProof) -> _ExecutionPro
 def _compose_executor_extra_context(
     memory_block: str | None,
     task_frame: dict[str, Any] | None,
+    skill_block: str | None = None,
 ) -> str | None:
     parts: list[str] = []
     if memory_block and str(memory_block).strip():
         parts.append(f"### 用户长期记忆（来自 mem0）\n{memory_block.strip()}")
+    if skill_block and str(skill_block).strip():
+        parts.append(f"### 已启用 Skills（Claude 标准 Skill）\n{skill_block.strip()}")
     block = format_task_frame_block(task_frame).strip()
     if block and block != "(无)":
         parts.append(f"### 任务定调（phase A framing，供对齐范围与交付）\n{block}")
@@ -440,7 +444,11 @@ async def execute_node(state: SessionState) -> SessionState:
         user_id=state.get("user_id"),
     )
     memory_block = format_memories(memories)
-    extra_context = _compose_executor_extra_context(memory_block, state.get("task_frame"))
+    skill_block = await format_enabled_skills_for_prompt(
+        user_id=state.get("user_id"),
+        query=user_message,
+    )
+    extra_context = _compose_executor_extra_context(memory_block, state.get("task_frame"), skill_block)
 
     system_prompt = build_system_prompt(
         session_id=str(session_id),
