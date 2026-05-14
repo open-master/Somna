@@ -20,7 +20,7 @@ from app.config import get_settings
 from app.graph.runtime import get_registry
 from app.graph.session_graph import close_graph, get_compiled_graph
 from app.logging_setup import get_logger, setup_logging
-from app.services.skills import ensure_skill_tables
+from app.services.skills import ensure_skill_tables, seed_builtin_skills
 from app.storage.nats_client import close_nats, init_nats
 from app.storage.postgres import close_pool, init_pool
 from app.storage.redis_client import close_redis, init_redis
@@ -58,6 +58,7 @@ async def lifespan(app: FastAPI):
 
     await init_pool()
     await ensure_skill_tables()
+    await seed_builtin_skills()
     await init_redis()
     await init_nats()
     # Warm up the graph so the first request doesn't pay the setup cost

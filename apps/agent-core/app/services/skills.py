@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import io
 import json
 import re
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 import uuid
 import zipfile
 from typing import Any
@@ -28,6 +28,7 @@ _MAX_SKILL_FILES = 80
 _MAX_SKILL_PACKAGE_BYTES = 2_000_000
 _MAX_PROMPT_SKILLS = 4
 _MAX_SKILL_PROMPT_CHARS = 12_000
+_BUILTIN_SKILLS_DIR = Path(__file__).resolve().parents[1] / "builtin_skills"
 
 
 async def ensure_skill_tables() -> None:
@@ -90,6 +91,68 @@ async def ensure_skill_tables() -> None:
             EXCEPTION WHEN duplicate_object THEN NULL; END $$
             """
         )
+
+
+def _read_builtin_skill_files(skill_name: str) -> dict[str, str]:
+    root = _BUILTIN_SKILLS_DIR / skill_name
+    files: dict[str, str] = {}
+    if not root.exists():
+        return files
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(root).as_posix()
+        files[rel] = path.read_text(encoding="utf-8")
+    return files
+
+
+async def seed_builtin_skills() -> None:
+    """Upsert built-in official skills used by system workflows."""
+    files = _read_builtin_skill_files("skill-creator")
+    if not files:
+        log.warning("skill.builtin.missing", name="skill-creator")
+        return
+    package = validate_skill_package(files)
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        existing = await conn.fetchval(
+            "SELECT id FROM skills WHERE name = $1 AND visibility = 'official' ORDER BY updated_at DESC LIMIT 1",
+            package.name,
+        )
+        if existing:
+            await conn.execute(
+                """
+                UPDATE skills
+                SET owner_user_id = NULL,
+                    title = $2,
+                    description = $3,
+                    visibility = 'official',
+                    source = 'official',
+                    status = 'active',
+                    skill_md = $4,
+                    files = $5::jsonb,
+                    updated_at = now()
+                WHERE id = $1
+                """,
+                existing,
+                package.title,
+                package.description,
+                package.skill_md,
+                json.dumps(package.files, ensure_ascii=False),
+            )
+        else:
+            await conn.execute(
+                """
+                INSERT INTO skills (owner_user_id, name, title, description, visibility, source, status, version, skill_md, files)
+                VALUES (NULL, $1, $2, $3, 'official', 'official', 'active', 1, $4, $5::jsonb)
+                """,
+                package.name,
+                package.title,
+                package.description,
+                package.skill_md,
+                json.dumps(package.files, ensure_ascii=False),
+            )
+    log.info("skill.builtin.seeded", name=package.name)
 
 
 @dataclass(frozen=True)
@@ -164,6 +227,13 @@ def validate_skill_package(files: dict[str, str]) -> SkillPackage:
     if len(skill_md.encode("utf-8")) > _MAX_SKILL_MD_BYTES:
         raise HTTPException(status_code=400, detail="SKILL.md 超过大小限制")
     meta = _parse_simple_frontmatter(skill_md)
+    allowed = {"name", "description", "license", "allowed-tools", "metadata"}
+    unexpected = set(meta) - allowed
+    if unexpected:
+        raise HTTPException(
+            status_code=400,
+            detail=f"SKILL.md frontmatter 包含非标准字段: {', '.join(sorted(unexpected))}",
+        )
     name = (meta.get("name") or "").strip()
     description = (meta.get("description") or "").strip()
     if not _NAME_RE.match(name):
@@ -203,6 +273,50 @@ def package_from_zip(data: bytes) -> SkillPackage:
     except zipfile.BadZipFile as exc:
         raise HTTPException(status_code=400, detail="无法读取 zip Skill 包") from exc
     return validate_skill_package(files)
+
+
+def _coerce_files(value: Any, *, skill_md: str | None = None) -> dict[str, str]:
+    files: dict[str, str] = {}
+    raw = value
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            raw = {}
+    if isinstance(raw, dict):
+        for key, item in raw.items():
+            if item is None:
+                continue
+            files[str(key)] = item if isinstance(item, str) else json.dumps(item, ensure_ascii=False)
+    if skill_md and "SKILL.md" not in files:
+        files["SKILL.md"] = skill_md
+    return files
+
+
+def _ensure_required_generated_files(files: dict[str, str], *, raw_text: str) -> dict[str, str]:
+    out = dict(files)
+    skill_md = out.get("SKILL.md", "")
+    if skill_md:
+        meta = _parse_simple_frontmatter(skill_md)
+        name = meta.get("name") or "somna-workflow"
+        description = meta.get("description") or (
+            "Reusable workflow distilled from a Somna task. Use for similar future tasks."
+        )
+        body = _FRONTMATTER_RE.sub("", skill_md, count=1).lstrip()
+        out["SKILL.md"] = f"---\nname: {name}\ndescription: {description}\n---\n\n{body}".strip() + "\n"
+    out.setdefault(
+        "LICENSE.txt",
+        "Generated by Somna for the current user. Review before sharing or publishing.\n",
+    )
+    out.setdefault(
+        "references/workflow.md",
+        f"# Workflow\n\nSource task:\n\n> {raw_text[:1000] or 'N/A'}\n\nFollow SKILL.md first. Use this file for details that are too long for the main skill instructions.\n",
+    )
+    out.setdefault(
+        "references/output-patterns.md",
+        "# Output Patterns\n\n- Keep the final answer concise and useful.\n- Mention artifacts, files, or actions completed.\n- Include verification results when available.\n- Ask for confirmation only when a real decision remains.\n",
+    )
+    return out
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
@@ -268,8 +382,19 @@ Use this skill when the user asks for work similar to:
 async def _llm_generated_package(raw_text: str, assistant_text: str) -> SkillPackage:
     settings = get_settings()
     client = get_async_openai()
+    creator_files = _read_builtin_skill_files("skill-creator")
+    creator_context = "\n\n".join(
+        f"===== {path} =====\n{content[:6000]}"
+        for path, content in sorted(creator_files.items())
+        if path == "SKILL.md" or path.startswith("references/")
+    )
     prompt = f"""
 You create Claude-compatible Skill packages for Somna.
+The ONLY authority for how to create skills is the built-in official `skill-creator` below.
+Follow its process: understand examples, plan reusable resources, create SKILL.md, references, optional scripts/templates, validate.
+
+Official skill-creator package:
+{creator_context}
 
 Return ONLY valid JSON in this exact shape:
 {{
@@ -316,6 +441,7 @@ Assistant result summary:
     if not isinstance(files, dict):
         raise ValueError("LLM skill payload missing files")
     normalized = {str(k): str(v) for k, v in files.items() if v is not None}
+    normalized = _ensure_required_generated_files(normalized, raw_text=raw_text)
     return validate_skill_package(normalized)
 
 
@@ -469,7 +595,7 @@ async def get_skill_detail(skill_id: uuid.UUID, user: CurrentUser) -> dict[str, 
         raise HTTPException(status_code=404, detail="skill not found")
     out = _row_to_dict(row, installed=bool(row["installed"]), enabled=bool(row["enabled"]))
     out["skill_md"] = row["skill_md"]
-    out["files"] = row["files"] or {}
+    out["files"] = _coerce_files(row["files"], skill_md=row["skill_md"])
     return out
 
 

@@ -208,9 +208,17 @@ function groupedFiles(files: Record<string, string>): { dirs: Record<string, str
 }
 
 function normalizeSkillFiles(raw: unknown): Record<string, string> {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  let value = raw;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value) as unknown;
+    } catch {
+      return {};
+    }
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
     if (typeof v === "string") out[k] = v;
     else if (v != null) out[k] = typeof v === "object" ? JSON.stringify(v, null, 2) : String(v);
   }
