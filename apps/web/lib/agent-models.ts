@@ -1,4 +1,4 @@
-export type AgentModelRole = "taskframe" | "planner" | "executor" | "coder" | "reasoner" | "longctx" | "cheap";
+export type AgentModelRole = "taskframe" | "planner" | "executor" | "coder" | "reasoner" | "longctx" | "cheap" | "skill";
 
 /** 前端默认（具体 model id，经网关解析）；与 LiteLLM 别名可在网关侧独立配置。 */
 export const DEFAULT_AGENT_MODELS: Record<AgentModelRole, string> = {
@@ -9,6 +9,7 @@ export const DEFAULT_AGENT_MODELS: Record<AgentModelRole, string> = {
   reasoner: "deepseek-v4-pro",
   longctx: "deepseek-v4-pro",
   cheap: "deepseek-v4-pro",
+  skill: "deepseek-v4-pro",
 };
 
 const STORAGE_KEY = "somna_agent_models";
@@ -26,6 +27,7 @@ export const AGENT_ROLE_META: {
   { key: "reasoner", alias: "agent-reasoner", title: "强推理", hint: "复杂推理与反思" },
   { key: "longctx", alias: "agent-longctx", title: "长文档", hint: "长上下文场景（预留）" },
   { key: "cheap", alias: "agent-cheap", title: "摘要 / 压缩", hint: "上下文压缩与轻量调用" },
+  { key: "skill", alias: "agent-skill", title: "技能选择", hint: "判断本轮任务是否使用 Skill 及加载哪些资源" },
 ];
 
 /**
@@ -66,6 +68,7 @@ export function getResolvedAgentModels(): Record<AgentModelRole, string> {
     reasoner: (o.reasoner?.trim() || DEFAULT_AGENT_MODELS.reasoner) as string,
     longctx: (o.longctx?.trim() || DEFAULT_AGENT_MODELS.longctx) as string,
     cheap: (o.cheap?.trim() || DEFAULT_AGENT_MODELS.cheap) as string,
+    skill: (o.skill?.trim() || DEFAULT_AGENT_MODELS.skill) as string,
   };
 }
 

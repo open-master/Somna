@@ -37,6 +37,8 @@ async def run_session_graph_activity(req: SessionWorkflowInput) -> None:
             coder_model=req.coder_model,
             reasoner_model=req.reasoner_model,
             longctx_model=req.longctx_model,
+            skill_model=req.skill_model,
+            skill_mode=req.skill_mode,
             mcp_tool_models=req.mcp_tool_models,
             attachments=list(req.attachments or []),
         )

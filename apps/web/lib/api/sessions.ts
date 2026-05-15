@@ -3,6 +3,7 @@ import { parseAgentEvent, type AgentEvent } from "@somna/event-schema";
 import { getResolvedAgentModels } from "@/lib/agent-models";
 import { authHeaders } from "@/lib/auth/cookie";
 import { getResolvedMcpToolModels } from "@/lib/mcp-tool-models";
+import { getSkillMode } from "@/lib/skill-settings";
 
 /** 解析 FastAPI 等返回的 JSON `detail`，避免把整段 JSON 显示给用户。 */
 async function readApiErrorMessage(res: Response, fallback: string): Promise<string> {
@@ -216,6 +217,8 @@ export async function postMessage(
       coder_model: m.coder,
       reasoner_model: m.reasoner,
       longctx_model: m.longctx,
+      skill_model: m.skill,
+      skill_mode: getSkillMode(),
       mcp_tool_models: mcp,
     }),
   });

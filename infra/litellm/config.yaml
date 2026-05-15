@@ -172,12 +172,14 @@ router_settings:
     agent-reasoner:  deepseek-reasoner   # 强推理
     agent-longctx:   kimi-k2-0905        # 长文档 (256K)
     agent-cheap:     qwen-turbo          # 摘要 / 分类 / compact
+    agent-skill:     deepseek-v4-pro     # Skill 语义选择（严格 JSON，默认走 DeepSeek V4 Pro）
     agent-embed:     qwen3-embedding     # 主 embedding
     agent-rerank:    bge-reranker-v2-m3  # 重排
 
   fallbacks:
     # 别名在部分错误路径下会被当作 model_group；显式兜底到真实模型，避免 “No fallback for agent-executor”
     - agent-taskframe:   [qwen-turbo, deepseek-v4-flash]
+    - agent-skill:       [deepseek-v4-pro, deepseek-v4-flash, qwen-plus]
     - agent-executor:    [kimi-k2-0905]
     - agent-planner:     [kimi-k2-0905]
     - kimi-k2-0905:      [kimi-k2-turbo, kimi-k2.6, qwen3-max, deepseek-chat]

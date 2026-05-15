@@ -17,5 +17,7 @@ class SessionWorkflowInput:
     coder_model: str | None = None
     reasoner_model: str | None = None
     longctx_model: str | None = None
+    skill_model: str | None = None
+    skill_mode: str = "auto"
     mcp_tool_models: dict[str, str] | None = None
     attachments: list[dict[str, Any]] = field(default_factory=list)

@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     agent_default_coder: str = Field(default="agent-coder", alias="AGENT_DEFAULT_CODER")
     agent_default_reasoner: str = Field(default="agent-reasoner", alias="AGENT_DEFAULT_REASONER")
     agent_default_longctx: str = Field(default="agent-longctx", alias="AGENT_DEFAULT_LONGCTX")
+    agent_default_skill: str = Field(default="agent-skill", alias="AGENT_DEFAULT_SKILL")
     agent_default_visual_critique: str = Field(
         default="qwen3-vl-plus",
         alias="AGENT_DEFAULT_VISUAL_CRITIQUE",

@@ -822,6 +822,55 @@ async def format_enabled_skills_for_prompt(
     )
 
 
+async def list_enabled_skill_candidates(*, user_id: str | None) -> list[dict[str, Any]]:
+    """Return all user-enabled active Skill packages for LLM routing.
+
+    This intentionally does not score or filter by query. The skill router is
+    the only component that decides whether a skill applies to the current task.
+    """
+    if not user_id:
+        return []
+    try:
+        uid = uuid.UUID(str(user_id))
+    except ValueError:
+        return []
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT s.id, s.name, s.title, s.description, s.visibility, s.version, s.skill_md, s.files
+            FROM skills s
+            LEFT JOIN user_skills us ON us.skill_id = s.id AND us.user_id = $1
+            WHERE s.status = 'active'
+              AND (
+                (us.user_id = $1 AND us.enabled = true)
+                OR (s.name = 'skill-creator' AND s.visibility = 'official')
+              )
+            ORDER BY
+              CASE WHEN s.visibility = 'official' THEN 0 ELSE 1 END,
+              s.updated_at DESC
+            LIMIT 80
+            """,
+            uid,
+        )
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        files = _coerce_files(row["files"], skill_md=row["skill_md"])
+        out.append(
+            {
+                "id": str(row["id"]),
+                "name": row["name"],
+                "title": row["title"],
+                "description": row["description"],
+                "visibility": row["visibility"],
+                "version": row["version"],
+                "skill_md": row["skill_md"],
+                "files": files,
+            }
+        )
+    return out
+
+
 async def generate_skill_from_session(session_id: uuid.UUID, user: CurrentUser) -> SkillPackage:
     pool = get_pool()
     async with pool.acquire() as conn:

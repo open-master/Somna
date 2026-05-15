@@ -40,7 +40,7 @@ from app.llm.client import anthropic_subprocess_env
 from app.logging_setup import get_logger
 from app.memory import format_memories, search_memories
 from app.prompts.loader import build_system_prompt
-from app.services.skills import format_enabled_skills_for_prompt
+from app.services.skill_router import route_skills_for_task
 from app.tools.client import get_client, ToolManifest
 from app.tools.schema import tool_manifest_cache
 
@@ -299,10 +299,19 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
         user_id=state.get("user_id"),
     )
     memory_block = format_memories(memories)
-    skill_block = await format_enabled_skills_for_prompt(
+    skill_route = await route_skills_for_task(
         user_id=state.get("user_id"),
-        query=user_message,
+        user_message=user_message,
+        task_frame=state.get("task_frame") if isinstance(state.get("task_frame"), dict) else None,
+        plan=state.get("plan") if isinstance(state.get("plan"), dict) else None,
+        skill_mode=state.get("skill_mode"),
+        skill_model=state.get("skill_model"),
     )
+    state["selected_skills"] = [
+        {"id": item.id, "name": item.name, "reason": item.reason, "load_files": item.load_files}
+        for item in skill_route.selected
+    ]
+    skill_block = skill_route.prompt_block
     extra_context = _compose_executor_extra_context(memory_block, state.get("task_frame"), skill_block)
 
     system_prompt = build_system_prompt(
@@ -350,6 +359,8 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
         session_id=str(session_id),
         executor_model=exec_alias,
         coder_model=coder_alias,
+        skill_model=(state.get("skill_model") or settings.agent_default_skill).strip(),
+        selected_skills=state.get("selected_skills") or [],
         n_msgs=len(working_messages),
         tools=len(manifests),
         effective_autonomy=_eff_auto,

@@ -19,6 +19,7 @@ import {
   type SkillDetail,
   type SkillRow,
 } from "@/lib/api/skills";
+import { getSkillMode, setSkillMode, type SkillMode } from "@/lib/skill-settings";
 import { cn } from "@/lib/utils/cn";
 
 const VISIBILITY_LABEL: Record<string, string> = {
@@ -431,6 +432,7 @@ export function SettingsSkillManagement({ isAdmin, currentUserId }: { isAdmin: b
   const [visibility, setVisibility] = useState<"private" | "shared">("private");
   const [uploading, setUploading] = useState(false);
   const [preview, setPreview] = useState<SkillDetail | null>(null);
+  const [skillMode, setLocalSkillMode] = useState<SkillMode>("auto");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const reload = useCallback(async () => {
@@ -449,6 +451,15 @@ export function SettingsSkillManagement({ isAdmin, currentUserId }: { isAdmin: b
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  useEffect(() => {
+    setLocalSkillMode(getSkillMode());
+  }, []);
+
+  function updateSkillMode(next: SkillMode) {
+    setSkillMode(next);
+    setLocalSkillMode(next);
+  }
 
   const visibleMine = useMemo(() => filterSkills(mine, query), [mine, query]);
   const visibleMarket = useMemo(() => filterSkills(market, query), [market, query]);
@@ -501,6 +512,14 @@ export function SettingsSkillManagement({ isAdmin, currentUserId }: { isAdmin: b
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <label className="flex items-center gap-2 rounded-md border bg-background px-2 py-1.5 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={skillMode === "auto"}
+              onChange={(e) => updateSkillMode(e.target.checked ? "auto" : "off")}
+            />
+            任务执行时使用 Skill
+          </label>
           {!isAdmin ? (
             <select
               value={visibility}

@@ -118,6 +118,8 @@ class PostMessageReq(BaseModel):
     coder_model: str | None = None
     reasoner_model: str | None = None
     longctx_model: str | None = None
+    skill_model: str | None = None
+    skill_mode: str = "auto"
     # 浏览器「MCP 工具」页：按工具名的默认 model（与 LiteLLM 角色分离）
     mcp_tool_models: dict[str, str] | None = None
     task_frame_model: str | None = None
@@ -425,6 +427,8 @@ async def post_message(
                 coder_model=_strip_model(req.coder_model),
                 reasoner_model=_strip_model(req.reasoner_model),
                 longctx_model=_strip_model(req.longctx_model),
+                skill_model=_strip_model(req.skill_model),
+                skill_mode="off" if (req.skill_mode or "").strip().lower() == "off" else "auto",
                 mcp_tool_models=_mcp_overrides_from_post_message(req),
                 attachments=norm_att,
             ),
