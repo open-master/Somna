@@ -9,6 +9,7 @@ import re
 from pathlib import Path, PurePosixPath
 import uuid
 import zipfile
+from collections import defaultdict
 from typing import Any
 
 from fastapi import HTTPException
@@ -28,6 +29,10 @@ _MAX_SKILL_FILES = 80
 _MAX_SKILL_PACKAGE_BYTES = 2_000_000
 _MAX_PROMPT_SKILLS = 4
 _MAX_SKILL_PROMPT_CHARS = 12_000
+_MAX_ASSISTANT_TEXT_FOR_SKILL_GEN = 14_000
+_SCRIPT_PATH_IN_DOCS_RE = re.compile(
+    r"\bscripts/[a-zA-Z0-9][a-zA-Z0-9_./\-]*\.(?:py|sh)\b",
+)
 _BUILTIN_SKILLS_DIR = Path(__file__).resolve().parents[1] / "builtin_skills"
 
 
@@ -339,6 +344,15 @@ def _task_should_have_script(text: str) -> bool:
         "transform",
         "image",
         "speech",
+        "python",
+        "script",
+        "ppt",
+        "pptx",
+        "powerpoint",
+        "presentation",
+        "slide",
+        "wordcloud",
+        "code",
         "字幕",
         "视频",
         "音频",
@@ -349,6 +363,9 @@ def _task_should_have_script(text: str) -> bool:
         "清洗",
         "表格",
         "接口",
+        "词云",
+        "演示",
+        "幻灯片",
     )
     return any(k in lowered for k in keywords)
 
@@ -399,6 +416,208 @@ if __name__ == "__main__":
             + "\n\n## Script Helpers\n\n"
             + "- For deterministic file/media/data operations, adapt and run `scripts/helper.py` in the sandbox after reviewing its TODOs.\n"
         )
+    return out
+
+
+def _merge_message_deltas_for_latest_run(rows: list[Any]) -> str:
+    """Prefer the assistant stream from the run that produced the latest delta (by event id).
+
+    Old behavior: last 200 events by id DESC mixed chunks from unrelated runs. Grouping by
+    ``run_id`` keeps one coherent assistant turn for skill generation context.
+    """
+    groups: dict[str | None, list[tuple[int, str]]] = defaultdict(list)
+    for row in rows:
+        payload = row["payload"]
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+        if not isinstance(payload, dict):
+            continue
+        text = payload.get("text")
+        if not isinstance(text, str) or not text:
+            continue
+        rid = payload.get("run_id")
+        key: str | None = str(rid).strip() if rid is not None and str(rid).strip() else None
+        groups[key].append((int(row["id"]), text))
+
+    if not groups:
+        return ""
+
+    best_items: list[tuple[int, str]] | None = None
+    best_peak = -1
+    for items in groups.values():
+        if not items:
+            continue
+        peak = max(t[0] for t in items)
+        if peak > best_peak:
+            best_peak = peak
+            best_items = items
+
+    if not best_items:
+        return ""
+
+    best_items = sorted(best_items, key=lambda t: t[0])
+    merged = "".join(t[1] for t in best_items)
+    if len(merged) > _MAX_ASSISTANT_TEXT_FOR_SKILL_GEN:
+        merged = merged[-_MAX_ASSISTANT_TEXT_FOR_SKILL_GEN :]
+    return merged.strip()
+
+
+def _collect_script_references_from_package_files(files: dict[str, str]) -> set[str]:
+    """Paths like scripts/foo.py mentioned in Markdown docs (ghost reference detection)."""
+    found: set[str] = set()
+    for path, body in files.items():
+        if not isinstance(body, str):
+            continue
+        if not (path.endswith(".md") or path == "SKILL.md" or path.startswith("references/")):
+            continue
+        for m in _SCRIPT_PATH_IN_DOCS_RE.finditer(body):
+            found.add(m.group(0))
+    return found
+
+
+def _missing_script_paths_in_package(files: dict[str, str]) -> list[str]:
+    refs = _collect_script_references_from_package_files(files)
+    return sorted(p for p in refs if p not in files)
+
+
+def _minimal_script_stub(rel_path: str) -> str:
+    base = rel_path.rsplit("/", 1)[-1]
+    if base.endswith(".sh"):
+        return f"""#!/usr/bin/env bash
+# Auto-generated stub: documentation references `{rel_path}` but the file was missing.
+# Replace with a real implementation or delete the reference from the Skill docs.
+set -euo pipefail
+echo "TODO: implement {rel_path}" >&2
+exit 1
+"""
+    return f'''#!/usr/bin/env python3
+"""Auto-generated stub: `{rel_path}` is referenced in this Skill\'s docs but was missing.
+
+Replace with the real workflow logic from the session, or remove the reference from
+references/workflow.md / SKILL.md.
+"""
+
+from __future__ import annotations
+
+import argparse
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Stub for {base}")
+    parser.add_argument("args", nargs="*", help="Arguments (customize after implementing)")
+    _ = parser.parse_args()
+    raise SystemExit(
+        "This file is a placeholder; implement the script or update the Skill documentation."
+    )
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+def _ensure_referenced_scripts_stub_only(files: dict[str, str]) -> dict[str, str]:
+    out = dict(files)
+    for p in _missing_script_paths_in_package(out):
+        out.setdefault(p, _minimal_script_stub(p))
+    return out
+
+
+async def _llm_patch_missing_script_files(
+    files: dict[str, str],
+    missing: list[str],
+    raw_text: str,
+    assistant_text: str,
+) -> dict[str, str]:
+    if not missing:
+        return {}
+    settings = get_settings()
+    client = get_async_openai()
+    ctx_parts = [
+        (files.get("references/workflow.md") or "")[:4000],
+        (files.get("SKILL.md") or "")[:2500],
+    ]
+    ctx = "\n\n---\n\n".join(x for x in ctx_parts if x).strip()[:6000]
+    keys = ", ".join(f'"{m}"' for m in missing)
+    prompt = f"""Skill docs reference these script paths but the package has no file content for them: {keys}
+
+Documentation context (excerpt):
+{ctx}
+
+User task (short): {(raw_text or '')[:1800]}
+
+Assistant summary from the run (short): {(assistant_text or '')[:1800]}
+
+Return ONLY valid JSON with this shape:
+{{"files": {{"scripts/example.py": "full UTF-8 file content …"}}}}
+
+Rules:
+- Include every listed path as a key under "files".
+- Each value is the full file (Python uses #!/usr/bin/env python3 when .py).
+- Templates must be safe: no network exfiltration; use argparse; clear TODOs where logic is unknown.
+""".strip()
+    resp = await client.chat.completions.create(
+        model=settings.agent_default_coder,
+        messages=[
+            {"role": "system", "content": "You fill missing Skill script files. Return strict JSON only."},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.1,
+        response_format={"type": "json_object"},
+    )
+    text = resp.choices[0].message.content or ""
+    payload = _extract_json_object(text)
+    out_files = payload.get("files")
+    if not isinstance(out_files, dict):
+        return {}
+    patched: dict[str, str] = {}
+    missing_set = set(missing)
+    for k, v in out_files.items():
+        if not isinstance(v, str) or not v.strip():
+            continue
+        raw = str(k).strip().replace("\\", "/")
+        candidates = [raw]
+        if not raw.startswith("scripts/"):
+            candidates.append(f"scripts/{raw.lstrip('/')}")
+        target: str | None = None
+        for c in candidates:
+            if c in missing_set:
+                target = c
+                break
+        if target is None:
+            base = raw.split("/")[-1]
+            for m in missing_set:
+                if m.endswith(f"/{base}"):
+                    target = m
+                    break
+        if target is not None:
+            body = v.strip()
+            patched[target] = body + ("" if body.endswith("\n") else "\n")
+    return patched
+
+
+async def _ensure_referenced_scripts_resolved(
+    files: dict[str, str],
+    *,
+    raw_text: str,
+    assistant_text: str,
+) -> dict[str, str]:
+    missing = _missing_script_paths_in_package(files)
+    if not missing:
+        return files
+    log.info("skill.generate.ghost_script_refs", count=len(missing), paths=missing)
+    out = dict(files)
+    try:
+        patch = await _llm_patch_missing_script_files(out, missing, raw_text, assistant_text)
+        for k, v in patch.items():
+            out[k] = v
+    except Exception as exc:  # noqa: BLE001
+        log.warning("skill.generate.script_llm_patch_failed", error=str(exc))
+    for p in _missing_script_paths_in_package(out):
+        out.setdefault(p, _minimal_script_stub(p))
     return out
 
 
@@ -460,6 +679,7 @@ Use this skill when the user asks for work similar to:
         "references/output-patterns.md": "# Output Patterns\n\n- Keep the final response concise.\n- Mention produced artifacts and verification steps.\n- Ask for confirmation only when a real decision remains.\n",
     }
     files = _ensure_script_helper(files, raw_text=raw_text)
+    files = _ensure_referenced_scripts_stub_only(files)
     return validate_skill_package(files)
 
 
@@ -480,13 +700,14 @@ Follow its process: understand examples, plan reusable resources, create SKILL.m
 Official skill-creator package:
 {creator_context}
 
-Return ONLY valid JSON in this exact shape:
+Return ONLY valid JSON in this exact shape (add keys under "files" for every script you mention):
 {{
   "files": {{
     "SKILL.md": "...",
     "LICENSE.txt": "...",
     "references/workflow.md": "...",
-    "references/output-patterns.md": "..."
+    "references/output-patterns.md": "...",
+    "scripts/optional_helper.py": "..."
   }}
 }}
 
@@ -498,8 +719,9 @@ Requirements:
 - SKILL.md body should be concise and under 500 lines.
 - Use progressive disclosure: put detailed workflow in references/workflow.md and final answer templates in references/output-patterns.md.
 - Include executable helper scripts when the source task involves deterministic file/media/data/API/batch operations.
-  Examples that SHOULD include scripts/: video/subtitle/audio processing, PDF/Excel/CSV/JSON processing, batch conversion, data cleaning, API request wrappers.
+  Examples that SHOULD include scripts/: video/subtitle/audio processing, PDF/Excel/CSV/JSON processing, batch conversion, data cleaning, API request wrappers, slides/PPT pipelines.
   Scripts must be safe templates or reusable helpers, and SKILL.md must explain when to review and run them.
+- CRITICAL: Any path like scripts/*.py or scripts/*.sh that you mention in SKILL.md or references/*.md MUST also appear as a real entry in "files" with full file content. Do not reference scripts that are not included.
 - LICENSE.txt should state this is user-generated Somna skill content and should be reviewed before sharing.
 - Content may be Chinese when useful, but name must be English slug.
 
@@ -507,7 +729,7 @@ Source user task:
 {raw_text[:4000]}
 
 Assistant result summary:
-{assistant_text[:3000]}
+{assistant_text[:8000]}
 """.strip()
     resp = await client.chat.completions.create(
         model=settings.agent_default_coder,
@@ -529,6 +751,9 @@ Assistant result summary:
     normalized = {str(k): str(v) for k, v in files.items() if v is not None}
     normalized = _ensure_required_generated_files(normalized, raw_text=raw_text)
     normalized = _ensure_script_helper(normalized, raw_text=raw_text)
+    normalized = await _ensure_referenced_scripts_resolved(
+        normalized, raw_text=raw_text, assistant_text=assistant_text
+    )
     return validate_skill_package(normalized)
 
 
@@ -885,13 +1110,17 @@ async def generate_skill_from_session(session_id: uuid.UUID, user: CurrentUser) 
             """,
             session_id,
         )
-        assistant_events = await conn.fetch(
+        delta_rows = await conn.fetch(
             """
-            SELECT payload
-            FROM events
-            WHERE session_id = $1 AND type = 'message.delta'
-            ORDER BY id DESC
-            LIMIT 200
+            SELECT id, payload
+            FROM (
+                SELECT id, payload
+                FROM events
+                WHERE session_id = $1 AND type = 'message.delta'
+                ORDER BY id DESC
+                LIMIT 12000
+            ) sub
+            ORDER BY id ASC
             """,
             session_id,
         )
@@ -905,17 +1134,7 @@ async def generate_skill_from_session(session_id: uuid.UUID, user: CurrentUser) 
                 content = {}
         if isinstance(content, dict):
             raw_text = str(content.get("text") or "")
-    deltas: list[str] = []
-    for row in reversed(assistant_events):
-        payload = row["payload"]
-        if isinstance(payload, str):
-            try:
-                payload = json.loads(payload)
-            except json.JSONDecodeError:
-                payload = {}
-        if isinstance(payload, dict) and isinstance(payload.get("text"), str):
-            deltas.append(payload["text"])
-    assistant_text = "".join(deltas).strip()
+    assistant_text = _merge_message_deltas_for_latest_run(list(delta_rows))
     try:
         return await _llm_generated_package(raw_text, assistant_text)
     except Exception as exc:  # noqa: BLE001
