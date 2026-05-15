@@ -17,6 +17,7 @@ from app.graph.user_turn import last_human_turn_text
 from app.llm.client import get_async_openai
 from app.logging_setup import get_logger
 from app.prompts.loader import load_template, render
+from app.services.skills import list_enabled_skill_candidates
 
 log = get_logger(__name__)
 
@@ -231,6 +232,22 @@ def format_task_frame_ui_summary(frame: dict[str, Any] | None) -> str:
     return "任务定调：将进入任务规划与工具执行。"
 
 
+async def _format_enabled_skills_for_framing(state: SessionState) -> str:
+    if (state.get("skill_mode") or "auto").strip().lower() == "off":
+        return "（Skill 自动使用已关闭）"
+    candidates = await list_enabled_skill_candidates(user_id=state.get("user_id"))
+    if not candidates:
+        return "（当前用户没有可用于任务执行的已启用 Skill）"
+    lines: list[str] = []
+    for item in candidates[:30]:
+        name = str(item.get("name") or "").strip()
+        desc = str(item.get("description") or "").strip()
+        visibility = str(item.get("visibility") or "").strip()
+        if name:
+            lines.append(f"- `{name}` ({visibility}): {desc[:240]}")
+    return "\n".join(lines) or "（当前用户没有可用于任务执行的已启用 Skill）"
+
+
 async def _emit_task_frame_ui(session_id, run_id: str | None, frame: dict[str, Any]) -> None:
     await emit(
         TaskFrameEvent(
@@ -283,7 +300,13 @@ async def task_frame_node(state: SessionState) -> SessionState:
 
     prior = _prior_messages_for_framing(list(state.get("messages") or []))
     conv_ctx = format_conversation_context_for_framing(prior)
-    prompt = render(template, user_message=user_message, conversation_context=conv_ctx)
+    enabled_skills_context = await _format_enabled_skills_for_framing(state)
+    prompt = render(
+        template,
+        user_message=user_message,
+        conversation_context=conv_ctx,
+        enabled_skills_context=enabled_skills_context,
+    )
     await emit(
         StatusEvent(
             session_id=session_id,

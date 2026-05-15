@@ -525,52 +525,53 @@ export function SettingsSkillManagement({ isAdmin, currentUserId }: { isAdmin: b
           e.currentTarget.value = "";
         }}
       />
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+      <div className="space-y-2">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <Input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="搜索技能"
-            className="h-9 max-w-xs rounded-lg"
+            className="h-9 w-full max-w-xs rounded-lg"
           />
-          <p className="text-xs text-muted-foreground">
-            管理 Claude 标准 Skill；管理员创建或上传的 Skill 会自动标记为官方。
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-2 rounded-md border bg-background px-2.5 py-1.5 text-xs text-muted-foreground shadow-sm">
-            <span>任务执行时使用 Skill</span>
-            <SkillToggle
-              checked={skillMode === "auto"}
-              onClick={(e) => {
-                e.stopPropagation();
-                updateSkillMode(skillMode === "auto" ? "off" : "auto");
-              }}
-              label={skillMode === "auto" ? "关闭任务执行时使用 Skill" : "开启任务执行时使用 Skill"}
-            />
-          </div>
-          {!isAdmin ? (
-            <select
-              value={visibility}
-              onChange={(e) => setVisibility(e.target.value as "private" | "shared")}
-              className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+          <div className="flex h-9 items-center gap-2">
+            <div className="flex h-9 items-center gap-2 rounded-md border bg-background px-2.5 text-xs text-muted-foreground shadow-sm">
+              <span>任务执行时使用 Skill</span>
+              <SkillToggle
+                checked={skillMode === "auto"}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  updateSkillMode(skillMode === "auto" ? "off" : "auto");
+                }}
+                label={skillMode === "auto" ? "关闭任务执行时使用 Skill" : "开启任务执行时使用 Skill"}
+              />
+            </div>
+            {!isAdmin ? (
+              <select
+                value={visibility}
+                onChange={(e) => setVisibility(e.target.value as "private" | "shared")}
+                className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+              >
+                <option value="private">私有</option>
+                <option value="shared">共享</option>
+              </select>
+            ) : (
+              <Badge variant="success">官方</Badge>
+            )}
+            <Button
+              type="button"
+              size="sm"
+              className="h-9"
+              disabled={uploading}
+              onClick={() => fileInputRef.current?.click()}
             >
-              <option value="private">私有</option>
-              <option value="shared">共享</option>
-            </select>
-          ) : (
-            <Badge variant="success">官方</Badge>
-          )}
-          <Button
-            type="button"
-            size="sm"
-            disabled={uploading}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <Upload className="mr-2 size-4" />
-            {uploading ? "上传中…" : "上传技能"}
-          </Button>
+              <Upload className="mr-2 size-4" />
+              {uploading ? "上传中…" : "上传技能"}
+            </Button>
+          </div>
         </div>
+        <p className="text-xs text-muted-foreground">
+          管理 Claude 标准 Skill；管理员创建或上传的 Skill 会自动标记为官方。
+        </p>
       </div>
 
       <Tabs value={tab} onValueChange={setTab}>
