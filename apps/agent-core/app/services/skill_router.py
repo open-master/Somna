@@ -135,9 +135,13 @@ async def route_skills_for_task(
 ) -> SkillRouteResult:
     if (skill_mode or "auto").strip().lower() == "off":
         return SkillRouteResult(selected=[], prompt_block=None)
+    if not user_id:
+        log.info("skill.router.skipped", reason="missing_user_id")
+        return SkillRouteResult(selected=[], prompt_block=None)
 
     candidates = await list_enabled_skill_candidates(user_id=user_id)
     if not candidates:
+        log.info("skill.router.skipped", reason="no_enabled_candidates", user_id=user_id)
         return SkillRouteResult(selected=[], prompt_block=None)
 
     candidates_by_id = {item["id"]: item for item in candidates}
@@ -148,7 +152,8 @@ You are Somna's Skill Router. Decide whether the executor should use any enabled
 
 Rules:
 - Use semantic fit only. Do not select a skill just because a keyword overlaps.
-- It is valid and often correct to return an empty selected array.
+- When the user asks to create an artifact, transform content, run a workflow, or perform a deliverable that directly matches a skill description, select that skill.
+- Return an empty selected array only when no enabled skill would materially improve the task.
 - Select `skill-creator` only for tasks about creating, editing, validating, packaging, or explaining Claude/Somna Skills.
 - Prefer one highly relevant skill. Use multiple skills only when their scopes are clearly complementary.
 - Choose which files to load for each selected skill. Always include SKILL.md plus any references/scripts that are genuinely needed.

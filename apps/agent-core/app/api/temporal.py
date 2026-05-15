@@ -227,6 +227,7 @@ async def retry_temporal_workflow(
             SessionWorkflowInput(
                 session_id=str(session_row["id"]),
                 run_id=new_run_id,
+                user_id=str(session_row["user_id"]),
                 text=workflow_text,
                 planner_model=session_row["planner_model"] or settings.agent_default_planner,
                 executor_model=session_row["executor_model"] or settings.agent_default_executor,

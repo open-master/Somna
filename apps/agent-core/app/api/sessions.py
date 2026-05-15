@@ -418,6 +418,7 @@ async def post_message(
             SessionWorkflowInput(
                 session_id=str(sid),
                 run_id=run_id,
+                user_id=str(user.id),
                 text=workflow_text,
                 planner_model=eff_pl,
                 executor_model=eff_ex,

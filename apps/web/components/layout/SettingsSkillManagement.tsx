@@ -3,7 +3,7 @@
 import { Copy, FileText, Folder, Upload, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -32,6 +32,43 @@ function SkillBadge({ skill }: { skill: SkillRow }) {
   if (skill.visibility === "official") return <Badge variant="success">官方</Badge>;
   if (skill.visibility === "shared") return <Badge variant="secondary">共享</Badge>;
   return <Badge variant="outline">私有</Badge>;
+}
+
+function SkillToggle({
+  checked,
+  disabled,
+  onClick,
+  label,
+  title,
+}: {
+  checked: boolean;
+  disabled?: boolean;
+  onClick: (event: MouseEvent<HTMLButtonElement>) => void;
+  label: string;
+  title?: string;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(
+        "h-6 w-11 shrink-0 rounded-full border p-0.5 transition",
+        checked ? "border-primary bg-primary" : "border-border bg-muted",
+        disabled ? "cursor-not-allowed opacity-70" : "hover:shadow-sm",
+      )}
+      title={title}
+      aria-label={label}
+      aria-pressed={checked}
+    >
+      <span
+        className={cn(
+          "block size-4 rounded-full bg-background shadow transition",
+          checked ? "translate-x-5" : "translate-x-0",
+        )}
+      />
+    </button>
+  );
 }
 
 function SkillCard({
@@ -103,27 +140,16 @@ function SkillCard({
             {skill.owner_email ? `作者：${skill.owner_email}` : "作者未知"} · v{skill.version}
           </p>
         </div>
-        <button
-          type="button"
+        <SkillToggle
           disabled={busy}
+          checked={skill.enabled || isSystemSkill}
           onClick={(e) => {
             e.stopPropagation();
             void toggleEnabled();
           }}
-          className={cn(
-            "h-6 w-11 shrink-0 rounded-full border p-0.5 transition",
-            skill.enabled || isSystemSkill ? "border-primary bg-primary" : "border-border bg-muted",
-          )}
           title={isSystemSkill ? "系统默认启用，不能关闭" : undefined}
-          aria-label={skill.enabled || isSystemSkill ? "停用技能" : "启用技能"}
-        >
-          <span
-            className={cn(
-              "block size-4 rounded-full bg-background shadow transition",
-              skill.enabled || isSystemSkill ? "translate-x-5" : "translate-x-0",
-            )}
-          />
-        </button>
+          label={skill.enabled || isSystemSkill ? "停用技能" : "启用技能"}
+        />
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
         <Button
@@ -512,14 +538,17 @@ export function SettingsSkillManagement({ isAdmin, currentUserId }: { isAdmin: b
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <label className="flex items-center gap-2 rounded-md border bg-background px-2 py-1.5 text-xs text-muted-foreground">
-            <input
-              type="checkbox"
+          <div className="flex items-center gap-2 rounded-md border bg-background px-2.5 py-1.5 text-xs text-muted-foreground shadow-sm">
+            <span>任务执行时使用 Skill</span>
+            <SkillToggle
               checked={skillMode === "auto"}
-              onChange={(e) => updateSkillMode(e.target.checked ? "auto" : "off")}
+              onClick={(e) => {
+                e.stopPropagation();
+                updateSkillMode(skillMode === "auto" ? "off" : "auto");
+              }}
+              label={skillMode === "auto" ? "关闭任务执行时使用 Skill" : "开启任务执行时使用 Skill"}
             />
-            任务执行时使用 Skill
-          </label>
+          </div>
           {!isAdmin ? (
             <select
               value={visibility}

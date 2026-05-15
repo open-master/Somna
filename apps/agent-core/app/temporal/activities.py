@@ -28,6 +28,7 @@ async def run_session_graph_activity(req: SessionWorkflowInput) -> None:
         run_session_graph(
             session_id=UUID(req.session_id),
             run_id=req.run_id,
+            user_id=req.user_id,
             text=req.text,
             planner_model=req.planner_model,
             executor_model=req.executor_model,

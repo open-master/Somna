@@ -8,6 +8,7 @@ from typing import Any
 class SessionWorkflowInput:
     session_id: str
     run_id: str
+    user_id: str | None
     text: str
     planner_model: str | None
     executor_model: str | None

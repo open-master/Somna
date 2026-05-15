@@ -27,6 +27,7 @@ def cancel_status(reason: str) -> tuple[SessionPhase, str]:
 async def run_session_graph(
     session_id: UUID,
     run_id: str,
+    user_id: str | None,
     text: str,
     planner_model: str | None,
     executor_model: str | None,
@@ -52,6 +53,7 @@ async def run_session_graph(
             payload = {
                 "session_id": session_id,
                 "run_id": run_id,
+                "user_id": user_id,
                 "user_message": text,
                 "attachments": list(attachments or []),
                 "planner_model": planner_model or settings.agent_default_planner,
