@@ -47,6 +47,7 @@ from app.graph.nodes.execute import (
     _proof_from_execution_summary,
     _run_tool_calls,
     _summarize_execution,
+    _with_fresh_system_prompt,
     effective_mcp_tool_models_map,
 )
 
@@ -253,8 +254,7 @@ async def execute_anthropic_node(state: SessionState) -> SessionState:
     )
 
     working_messages: list = list(state.get("messages") or [])
-    if not any(isinstance(m, SystemMessage) for m in working_messages):
-        working_messages = [SystemMessage(content=system_prompt)] + working_messages
+    working_messages = _with_fresh_system_prompt(working_messages, system_prompt)
 
     system_merged, body_chain = _merge_system_prompt(working_messages)
     if not system_merged.strip():

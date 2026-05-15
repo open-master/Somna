@@ -148,6 +148,22 @@ def _compose_executor_extra_context(
     return "\n\n".join(parts) if parts else None
 
 
+def _with_fresh_system_prompt(working_messages: list, system_prompt: str) -> list:
+    """Ensure executor system context is present even when planner added a SystemMessage."""
+    kept = [
+        m
+        for m in working_messages
+        if not (
+            isinstance(m, SystemMessage)
+            and (
+                "你是 **Somna**" in _content_str(m.content)
+                or "## Skill 与工具的区别" in _content_str(m.content)
+            )
+        )
+    ]
+    return [SystemMessage(content=system_prompt)] + kept
+
+
 async def _emit_skill_debug_event(session_id, run_id: str | None, skill_route: SkillRouteResult) -> None:
     await emit(
         SkillDebugEvent(
@@ -498,8 +514,7 @@ async def execute_node(state: SessionState) -> SessionState:
 
     # Compose initial messages: system + history.
     working_messages: list = list(state.get("messages") or [])
-    if not any(isinstance(m, SystemMessage) for m in working_messages):
-        working_messages = [SystemMessage(content=system_prompt)] + working_messages
+    working_messages = _with_fresh_system_prompt(working_messages, system_prompt)
 
     _tf = state.get("task_frame") if isinstance(state.get("task_frame"), dict) else None
     _eff_auto = effective_autonomy_level(_tf)
