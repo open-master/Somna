@@ -82,6 +82,35 @@ def _normalize_load_files(raw: Any, files: dict[str, str]) -> list[str]:
     return selected[:12]
 
 
+def _skill_routing_hints(
+    *,
+    candidates: list[dict[str, Any]],
+    user_message: str,
+    task_frame: dict[str, Any] | None,
+) -> list[dict[str, str]]:
+    """Surface LLM task-framing conclusions as explicit hints for the router.
+
+    The router still makes the final LLM decision. This prevents a strong
+    task-frame signal from being buried inside a large JSON blob.
+    """
+    frame_text = json.dumps(task_frame or {}, ensure_ascii=False, default=str)
+    haystack = f"{user_message}\n{frame_text}".lower()
+    hints: list[dict[str, str]] = []
+    for item in candidates:
+        name = str(item.get("name") or "").strip()
+        if not name or name.lower() not in haystack:
+            continue
+        hints.append(
+            {
+                "id": str(item["id"]),
+                "name": name,
+                "description": str(item.get("description") or "")[:500],
+                "reason": "The current user request or Task Frame explicitly names this enabled skill.",
+            }
+        )
+    return hints[:6]
+
+
 def _render_skill_block(
     candidates_by_id: dict[str, dict[str, Any]],
     selected: list[SelectedSkill],
@@ -146,12 +175,18 @@ async def route_skills_for_task(
 
     candidates_by_id = {item["id"]: item for item in candidates}
     manifest = _candidate_manifest(candidates)
+    routing_hints = _skill_routing_hints(
+        candidates=candidates,
+        user_message=user_message,
+        task_frame=task_frame,
+    )
     model = (skill_model or get_settings().agent_default_skill).strip()
     prompt = f"""
 You are Somna's Skill Router. Decide whether the executor should use any enabled Claude Skills for the current task.
 
 Rules:
 - Use semantic fit only. Do not select a skill just because a keyword overlaps.
+- If Task Framing already identifies an enabled skill as matching the task, treat that as a strong prior and select it unless it is clearly inconsistent with the actual user request.
 - When the user asks to create an artifact, transform content, run a workflow, or perform a deliverable that directly matches a skill description, select that skill.
 - Return an empty selected array only when no enabled skill would materially improve the task.
 - Select `skill-creator` only for tasks about creating, editing, validating, packaging, or explaining Claude/Somna Skills.
@@ -171,6 +206,9 @@ Return ONLY valid JSON:
 
 Enabled skill manifest:
 {_compact_json(manifest, limit=20_000)}
+
+Strong routing hints from Task Framing:
+{_compact_json(routing_hints, limit=4000)}
 
 Current user request:
 {user_message[:4000]}
@@ -243,6 +281,7 @@ Plan:
         "skill.router.selected",
         model=model,
         user_id=user_id,
+        routing_hints=routing_hints,
         selected_skills=[{"id": item.id, "name": item.name, "files": item.load_files} for item in selected],
     )
     return SkillRouteResult(selected=selected, prompt_block=_render_skill_block(candidates_by_id, selected))
