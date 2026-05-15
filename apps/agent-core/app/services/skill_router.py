@@ -82,6 +82,25 @@ def _normalize_load_files(raw: Any, files: dict[str, str]) -> list[str]:
     return selected[:12]
 
 
+def _default_load_files(files: dict[str, str]) -> list[str]:
+    """Load enough context when a Task Frame explicitly names a Skill."""
+    selected: list[str] = []
+    if "SKILL.md" in files:
+        selected.append("SKILL.md")
+    for prefix in ("references/", "scripts/", "templates/"):
+        for path in sorted(files):
+            if path.startswith(prefix) and path not in selected:
+                selected.append(path)
+            if len(selected) >= 12:
+                return selected
+    for path in sorted(files):
+        if path not in selected:
+            selected.append(path)
+        if len(selected) >= 12:
+            break
+    return selected
+
+
 def _skill_routing_hints(
     *,
     candidates: list[dict[str, Any]],
@@ -280,6 +299,28 @@ Plan:
                 load_files=_normalize_load_files(raw.get("load_files"), files),
             )
         )
+
+    selected_ids = {item.id for item in selected}
+    for hint in reversed(routing_hints):
+        sid = hint.get("id")
+        candidate = candidates_by_id.get(sid or "")
+        if not sid or sid in selected_ids or not candidate:
+            continue
+        files = candidate.get("files") if isinstance(candidate.get("files"), dict) else {}
+        selected.insert(
+            0,
+            SelectedSkill(
+                id=sid,
+                name=str(candidate["name"]),
+                reason=(
+                    "Task Frame explicitly named this enabled Skill; "
+                    "it is loaded even if the router response omitted it."
+                ),
+                load_files=_default_load_files(files),
+            ),
+        )
+        selected_ids.add(sid)
+    selected = selected[:6]
 
     log.info(
         "skill.router.selected",
