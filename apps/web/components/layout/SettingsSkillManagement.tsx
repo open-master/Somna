@@ -19,7 +19,13 @@ import {
   type SkillDetail,
   type SkillRow,
 } from "@/lib/api/skills";
-import { getSkillMode, setSkillMode, type SkillMode } from "@/lib/skill-settings";
+import {
+  getShowSkillDebugInChat,
+  getSkillMode,
+  setShowSkillDebugInChat,
+  setSkillMode,
+  type SkillMode,
+} from "@/lib/skill-settings";
 import { cn } from "@/lib/utils/cn";
 
 const VISIBILITY_LABEL: Record<string, string> = {
@@ -459,6 +465,7 @@ export function SettingsSkillManagement({ isAdmin, currentUserId }: { isAdmin: b
   const [uploading, setUploading] = useState(false);
   const [preview, setPreview] = useState<SkillDetail | null>(null);
   const [skillMode, setLocalSkillMode] = useState<SkillMode>("auto");
+  const [showSkillDebugInChat, setLocalShowSkillDebug] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const reload = useCallback(async () => {
@@ -480,11 +487,17 @@ export function SettingsSkillManagement({ isAdmin, currentUserId }: { isAdmin: b
 
   useEffect(() => {
     setLocalSkillMode(getSkillMode());
+    setLocalShowSkillDebug(getShowSkillDebugInChat());
   }, []);
 
   function updateSkillMode(next: SkillMode) {
     setSkillMode(next);
     setLocalSkillMode(next);
+  }
+
+  function updateShowSkillDebugInChat(next: boolean) {
+    setShowSkillDebugInChat(next);
+    setLocalShowSkillDebug(next);
   }
 
   const visibleMine = useMemo(() => filterSkills(mine, query), [mine, query]);
@@ -533,7 +546,7 @@ export function SettingsSkillManagement({ isAdmin, currentUserId }: { isAdmin: b
             placeholder="搜索技能"
             className="h-9 w-full max-w-xs rounded-lg"
           />
-          <div className="flex h-9 items-center gap-2">
+          <div className="flex h-9 flex-wrap items-center gap-2">
             <div className="flex h-9 items-center gap-2 rounded-md border bg-background px-2.5 text-xs text-muted-foreground shadow-sm">
               <span>任务执行时使用 Skill</span>
               <SkillToggle
@@ -543,6 +556,19 @@ export function SettingsSkillManagement({ isAdmin, currentUserId }: { isAdmin: b
                   updateSkillMode(skillMode === "auto" ? "off" : "auto");
                 }}
                 label={skillMode === "auto" ? "关闭任务执行时使用 Skill" : "开启任务执行时使用 Skill"}
+              />
+            </div>
+            <div className="flex h-9 items-center gap-2 rounded-md border bg-background px-2.5 text-xs text-muted-foreground shadow-sm">
+              <span className="max-w-[10rem] leading-tight sm:max-w-none">聊天页显示 Skill 板块</span>
+              <SkillToggle
+                checked={showSkillDebugInChat}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  updateShowSkillDebugInChat(!showSkillDebugInChat);
+                }}
+                label={
+                  showSkillDebugInChat ? "隐藏聊天页 Skill 板块" : "显示聊天页 Skill 板块"
+                }
               />
             </div>
             {!isAdmin ? (

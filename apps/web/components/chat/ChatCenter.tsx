@@ -1,6 +1,9 @@
 "use client";
+import { useEffect, useState } from "react";
+
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { LiveComputerDock } from "@/components/live/LiveComputerDock";
+import { getShowSkillDebugInChat, subscribeShowSkillDebugInChat } from "@/lib/skill-settings";
 import { useChatStore } from "@/lib/store/chat";
 import { useUiStore } from "@/lib/store/ui";
 
@@ -16,6 +19,12 @@ export function ChatCenter({ sessionId }: { sessionId: string }) {
   const messages = useChatStore((s) => s.messages);
   const hasConversation = messages.length > 0;
   const liveExpanded = useUiStore((s) => s.liveComputerExpanded);
+  const [showSkillDebug, setShowSkillDebug] = useState(true);
+
+  useEffect(() => {
+    setShowSkillDebug(getShowSkillDebugInChat());
+    return subscribeShowSkillDebugInChat(() => setShowSkillDebug(getShowSkillDebugInChat()));
+  }, []);
 
   return (
     <div className="flex flex-1 min-h-0 flex-col bg-[linear-gradient(180deg,transparent,hsl(var(--muted)/0.28))]">
@@ -25,7 +34,7 @@ export function ChatCenter({ sessionId }: { sessionId: string }) {
           <div className="mx-auto w-full max-w-3xl space-y-2 px-4 py-2">
             <TaskFrameBanner />
             <PlannerTimeline />
-            <SkillDebugPanel />
+            {showSkillDebug ? <SkillDebugPanel /> : null}
             <DeliverablesHub sessionId={sessionId} />
           </div>
         </div>
