@@ -464,6 +464,7 @@ async def execute_node(state: SessionState) -> SessionState:
         user_id=state.get("user_id"),
         manifests=manifests,
         extra_context=extra_context,
+        enabled_skill_names=[item.name for item in skill_route.selected],
     )
 
     # Compose initial messages: system + history.

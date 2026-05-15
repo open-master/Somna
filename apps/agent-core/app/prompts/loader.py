@@ -58,11 +58,14 @@ def build_system_prompt(
     user_id: str | None,
     manifests: Iterable[ToolManifest] = (),
     extra_context: str | None = None,
+    enabled_skill_names: Iterable[str] = (),
 ) -> str:
     """Compose the system prompt shown to the executor each turn."""
     template = load_template("system", "v1")
     now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
     tools_block = _format_tools_list(manifests)
+    names = [str(n).strip() for n in enabled_skill_names if str(n).strip()]
+    skill_names_block = ", ".join(f"`{n}`" for n in names) if names else "(本轮未加载任何 Skill)"
 
     rendered = render(
         template,
@@ -70,6 +73,7 @@ def build_system_prompt(
         user_id=user_id or "(匿名)",
         now_iso=now_iso,
         tools_list=f"\n{tools_block}",
+        enabled_skill_names=skill_names_block,
     )
     if extra_context:
         rendered = f"{rendered}\n\n## 补充上下文\n{extra_context.strip()}\n"

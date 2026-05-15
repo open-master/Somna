@@ -147,8 +147,12 @@ def _render_skill_block(
     if not blocks:
         return None
     return (
-        "以下 Skill 由 `agent-skill` 根据当前任务语义选择。只使用这些已加载的 Skill；"
-        "若其中包含脚本，必须先阅读脚本内容并在合适的沙盒工具中显式运行。\n\n"
+        "以下 Skill 由 `agent-skill` 根据当前任务语义选择，**已加载到本轮上下文，必须遵循其工作流来执行任务**。\n"
+        "重要约定：\n"
+        "- Skill **不是** MCP 工具，因此**不会**出现在「可用工具」列表里，也**不能**被 `tool_call` 直接调用。\n"
+        "- 不要因为「工具列表里没有这个名字」就告诉用户「我没有这个 skill」；正确做法是阅读下方 SKILL.md，再用现有工具按其步骤完成任务。\n"
+        "- 若 Skill 的 `scripts/` 中有脚本：把脚本内容当作模板，结合本任务数据落地到沙盒，再用 `shell` 工具执行；不要假设有内置 sub-agent。\n"
+        "- 若你判断已加载 Skill 与用户实际诉求确实不匹配，请明确说明「跳过哪个 Skill、为什么」，再绕开。\n\n"
         + "\n\n---\n\n".join(blocks)
     )
 
