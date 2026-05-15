@@ -34,6 +34,9 @@ class SessionState(TypedDict, total=False):
     skill_mode: str
     mcp_tool_models: dict[str, str]
     selected_skills: list[dict[str, Any]]
+    skill_prompt_block: str | None
+    skill_candidate_count: int
+    skill_route_resolved: bool
     skip_planner: bool
     # executor loop: native = OpenAI /v1; anthropic = LiteLLM /anthropic/v1 (same aliases)
     executor_engine: str

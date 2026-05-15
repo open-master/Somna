@@ -13,7 +13,7 @@ from typing import Any
 from uuid import uuid4
 
 from langchain_core.messages import SystemMessage
-from somna_events import PlanUpdateEvent, SessionPhase, StatusEvent, TodoItem, TodoStatus
+from somna_events import PlanUpdateEvent, SessionPhase, SkillDebugEvent, StatusEvent, TodoItem, TodoStatus
 
 from app.config import get_settings
 from app.events.emitter import emit
@@ -24,6 +24,7 @@ from app.llm.client import get_async_openai
 from app.logging_setup import get_logger
 from app.memory import format_memories, search_memories
 from app.prompts.loader import load_template, render
+from app.services.skill_router import route_skills_for_task, selected_skills_payload, SkillRouteResult
 from app.tools.schema import tool_manifest_cache
 
 log = get_logger(__name__)
@@ -47,6 +48,17 @@ def _completed_todos_block(plan: dict[str, Any] | None) -> str:
         if text:
             lines.append(f"- {text}")
     return "\n".join(lines) or "(无)"
+
+
+async def _emit_skill_debug_event(session_id, run_id: str | None, skill_route: SkillRouteResult) -> None:
+    await emit(
+        SkillDebugEvent(
+            session_id=session_id,
+            run_id=run_id,
+            candidate_count=skill_route.candidate_count,
+            selected_skills=selected_skills_payload(skill_route),
+        )
+    )
 
 
 def _parse_plan(raw: str) -> dict[str, Any] | None:
@@ -99,10 +111,27 @@ async def plan_node(state: SessionState) -> SessionState:
     user_message = state.get("user_message") or ""
 
     manifests = list(tool_manifest_cache().values())
+    skill_route = await route_skills_for_task(
+        user_id=state.get("user_id"),
+        user_message=user_message,
+        task_frame=state.get("task_frame") if isinstance(state.get("task_frame"), dict) else None,
+        plan=state.get("plan") if isinstance(state.get("plan"), dict) else None,
+        skill_mode=state.get("skill_mode"),
+        skill_model=state.get("skill_model"),
+    )
+    selected_skills = selected_skills_payload(skill_route)
+    skill_update = {
+        "selected_skills": selected_skills,
+        "skill_prompt_block": skill_route.prompt_block,
+        "skill_candidate_count": skill_route.candidate_count,
+        "skill_route_resolved": True,
+    }
+    await _emit_skill_debug_event(session_id, run_id, skill_route)
+
     template = load_template("planner", "v1")
     if not template:
         log.warning("graph.plan.template_missing")
-        return {"plan": None}
+        return {"plan": None, **skill_update}
 
     memories = await search_memories(
         user_message,
@@ -119,6 +148,7 @@ async def plan_node(state: SessionState) -> SessionState:
         retrieved_memories=memory_block,
         completed_todos=_completed_todos_block(state.get("plan")),
         tools_list=_format_tools_line(manifests),
+        selected_skills_context=skill_route.prompt_block or "(本轮未加载任何 Skill)",
     )
     reflection = state.get("reflection")
     if isinstance(reflection, dict) and str(reflection.get("reason") or "").strip():
@@ -147,18 +177,18 @@ async def plan_node(state: SessionState) -> SessionState:
         )
     except Exception as exc:  # noqa: BLE001
         log.warning("graph.plan.llm_failed", error=str(exc), model=planner_model)
-        return {"plan": None}
+        return {"plan": None, **skill_update}
 
     raw = (resp.choices[0].message.content or "").strip()
     parsed = _parse_plan(raw)
     if not parsed:
         log.warning("graph.plan.unparseable", raw_preview=raw[:200])
-        return {"plan": None}
+        return {"plan": None, **skill_update}
 
     todos = _coerce_todos(parsed.get("todos"))
     if not todos:
         log.info("graph.plan.empty", reasoning=parsed.get("reasoning"))
-        return {"plan": None}
+        return {"plan": None, **skill_update}
 
     plan_id = f"plan_{uuid4().hex[:8]}"
     plan_obj = {
@@ -205,7 +235,7 @@ async def plan_node(state: SessionState) -> SessionState:
 
     plan_path = await persist_plan_pointer(state, plan_obj)
 
-    return {"plan": plan_obj, "plan_path": plan_path, "messages": new_messages}
+    return {"plan": plan_obj, "plan_path": plan_path, "messages": new_messages, **skill_update}
 
 
 # ------------------------------------------------------------------

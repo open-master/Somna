@@ -52,8 +52,8 @@ from app.llm.client import get_async_openai
 from app.logging_setup import get_logger
 from app.memory import format_memories, search_memories
 from app.prompts.loader import build_system_prompt
-from app.services.skill_router import route_skills_for_task
-from app.services.skill_router import SkillRouteResult
+from app.services.skill_router import route_result_from_payload, route_skills_for_task
+from app.services.skill_router import selected_skills_payload, SkillRouteResult
 from app.tools.client import get_client
 from app.tools.schema import manifests_to_openai_tools, openai_tool_choice, tool_manifest_cache
 
@@ -181,6 +181,25 @@ async def _emit_skill_debug_event(session_id, run_id: str | None, skill_route: S
                 for item in skill_route.selected
             ],
         )
+    )
+
+
+async def _route_or_reuse_skills(state: SessionState) -> SkillRouteResult:
+    if state.get("skill_route_resolved"):
+        cached = route_result_from_payload(
+            selected_skills=state.get("selected_skills"),
+            prompt_block=state.get("skill_prompt_block"),
+            candidate_count=state.get("skill_candidate_count"),
+        )
+        if cached is not None:
+            return cached
+    return await route_skills_for_task(
+        user_id=state.get("user_id"),
+        user_message=state.get("user_message") or "",
+        task_frame=state.get("task_frame") if isinstance(state.get("task_frame"), dict) else None,
+        plan=state.get("plan") if isinstance(state.get("plan"), dict) else None,
+        skill_mode=state.get("skill_mode"),
+        skill_model=state.get("skill_model"),
     )
 
 
@@ -482,24 +501,11 @@ async def execute_node(state: SessionState) -> SessionState:
         user_id=state.get("user_id"),
     )
     memory_block = format_memories(memories)
-    skill_route = await route_skills_for_task(
-        user_id=state.get("user_id"),
-        user_message=user_message,
-        task_frame=state.get("task_frame") if isinstance(state.get("task_frame"), dict) else None,
-        plan=state.get("plan") if isinstance(state.get("plan"), dict) else None,
-        skill_mode=state.get("skill_mode"),
-        skill_model=state.get("skill_model"),
-    )
-    state["selected_skills"] = [
-        {
-            "id": item.id,
-            "name": item.name,
-            "reason": item.reason,
-            "load_files": item.load_files,
-            "forced": item.forced,
-        }
-        for item in skill_route.selected
-    ]
+    skill_route = await _route_or_reuse_skills(state)
+    state["selected_skills"] = selected_skills_payload(skill_route)
+    state["skill_prompt_block"] = skill_route.prompt_block
+    state["skill_candidate_count"] = skill_route.candidate_count
+    state["skill_route_resolved"] = True
     await _emit_skill_debug_event(session_id, run_id, skill_route)
     skill_block = skill_route.prompt_block
     extra_context = _compose_executor_extra_context(memory_block, state.get("task_frame"), skill_block)

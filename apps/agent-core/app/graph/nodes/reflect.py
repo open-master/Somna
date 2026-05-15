@@ -13,6 +13,7 @@ from app.config import get_settings
 from app.events.emitter import emit
 from app.graph.autonomy_policy import effective_autonomy_level
 from app.graph.nodes.plan import mark_progress
+from app.graph.nodes.task_frame import deliverable_type_implies_artifact
 from app.graph.state import SessionState
 from app.llm.client import get_async_openai
 from app.logging_setup import get_logger
@@ -81,6 +82,45 @@ def _artifact_block(plan: dict[str, Any] | None, execution_summary: dict[str, An
     return "\n".join(lines) or "(无)"
 
 
+def _selected_skills_block(state: SessionState) -> str:
+    rows = state.get("selected_skills") or []
+    if not isinstance(rows, list) or not rows:
+        return "(本轮未选中 Skill)"
+    lines: list[str] = []
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        files = item.get("load_files") if isinstance(item.get("load_files"), list) else []
+        file_text = ", ".join(str(x) for x in files[:8] if isinstance(x, str)) or "无"
+        forced = "；Task Frame 强制注入" if item.get("forced") else ""
+        lines.append(f"- {name}{forced}；注入文件：{file_text}")
+    return "\n".join(lines) or "(本轮未选中 Skill)"
+
+
+def _has_artifact_evidence(summary: dict[str, Any]) -> bool:
+    for key in ("written_paths", "verified_paths"):
+        paths = summary.get(key) or []
+        if isinstance(paths, list) and any(isinstance(p, str) and p.strip() for p in paths):
+            return True
+    return False
+
+
+def _should_block_skill_finalize(state: SessionState) -> tuple[bool, str, str]:
+    if not (state.get("selected_skills") or []):
+        return False, "", ""
+    pending = _pending_todos(state.get("plan"))
+    if pending:
+        return True, "已选中 Skill，但仍有未完成 TODO", str(pending[0].get("text") or "")
+    tf = state.get("task_frame") if isinstance(state.get("task_frame"), dict) else {}
+    summary = state.get("execution_summary") or {}
+    if deliverable_type_implies_artifact(str(tf.get("deliverable_type") or "")) and not _has_artifact_evidence(summary):
+        return True, "已选中 Skill 且任务要求交付文件，但缺少产物证据", "继续按 Skill workflow 生成并验证交付文件"
+    return False, "", ""
+
+
 def _pending_todos(plan: dict[str, Any] | None) -> list[dict[str, Any]]:
     return [
         t
@@ -107,6 +147,9 @@ def _fallback_decision(state: SessionState) -> dict[str, Any]:
         if "多步计划" in reason or "步骤" in reason:
             return {"decision": "replan", "reason": reason, "focus": "基于当前结果重新拆解剩余步骤"}
         return {"decision": "continue_execute", "reason": reason, "focus": "补齐缺失的真实执行和验证"}
+    blocked, block_reason, focus = _should_block_skill_finalize(state)
+    if blocked:
+        return {"decision": "continue_execute", "reason": block_reason, "focus": focus}
     if not (state.get("assistant_text") or "").strip():
         return {"decision": "continue_execute", "reason": "当前没有形成有效回答", "focus": "继续执行并形成有效结论"}
     pending = _pending_todos(plan)
@@ -186,6 +229,7 @@ async def reflect_node(state: SessionState) -> SessionState:
         current_todos=_todo_block(state.get("plan")),
         completed_todos=_todo_block(state.get("plan"), status="done"),
         artifacts=_artifact_block(state.get("plan"), summary),
+        selected_skills_context=_selected_skills_block(state),
         execution_summary=json.dumps(summary, ensure_ascii=False, indent=2)[:4000] if summary else "(无)",
         compact_memory=state.get("compact_memory") or "(无)",
         effective_autonomy=eff_a,
@@ -226,7 +270,17 @@ async def reflect_node(state: SessionState) -> SessionState:
     reason = str(decision.get("reason") or "").strip()
     focus = str(decision.get("focus") or "").strip()
 
+    blocked, block_reason, block_focus = _should_block_skill_finalize(state)
+    if route == "finalize" and blocked:
+        route = "continue_execute"
+        reason = block_reason
+        focus = block_focus
+
     route, reason, focus = _coerce_route_for_high_autonomy(state, route, reason, focus)
+    if route == "finalize" and blocked:
+        route = "continue_execute"
+        reason = block_reason
+        focus = block_focus
 
     if reflections >= _MAX_REFLECTIONS and route != "finalize":
         route = "finalize"

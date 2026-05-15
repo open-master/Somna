@@ -81,6 +81,9 @@ def _normalize_load_files(raw: Any, files: dict[str, str]) -> list[str]:
                 selected.append(path)
     if "SKILL.md" in files and "SKILL.md" not in selected:
         selected.insert(0, "SKILL.md")
+    for path in _default_load_files(files):
+        if path not in selected:
+            selected.append(path)
     return selected[:12]
 
 
@@ -176,6 +179,54 @@ def _render_skill_block(
         "- 若你判断已加载 Skill 与用户实际诉求确实不匹配，请明确说明「跳过哪个 Skill、为什么」，再绕开。\n\n"
         + "\n\n---\n\n".join(blocks)
     )
+
+
+def selected_skills_payload(route: SkillRouteResult) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": item.id,
+            "name": item.name,
+            "reason": item.reason,
+            "load_files": item.load_files,
+            "forced": item.forced,
+        }
+        for item in route.selected
+    ]
+
+
+def route_result_from_payload(
+    *,
+    selected_skills: Any,
+    prompt_block: str | None,
+    candidate_count: Any,
+) -> SkillRouteResult | None:
+    if not isinstance(selected_skills, list):
+        return None
+    selected: list[SelectedSkill] = []
+    for raw in selected_skills:
+        if not isinstance(raw, dict):
+            continue
+        sid = str(raw.get("id") or "").strip()
+        name = str(raw.get("name") or "").strip()
+        if not sid or not name:
+            continue
+        files_raw = raw.get("load_files")
+        selected.append(
+            SelectedSkill(
+                id=sid,
+                name=name,
+                reason=str(raw.get("reason") or "").strip(),
+                load_files=[str(x) for x in files_raw if isinstance(x, str)] if isinstance(files_raw, list) else [],
+                forced=bool(raw.get("forced")),
+            )
+        )
+    if not selected and not prompt_block and candidate_count is None:
+        return None
+    try:
+        count = int(candidate_count or 0)
+    except (TypeError, ValueError):
+        count = 0
+    return SkillRouteResult(selected=selected, prompt_block=prompt_block, candidate_count=count)
 
 
 async def route_skills_for_task(
