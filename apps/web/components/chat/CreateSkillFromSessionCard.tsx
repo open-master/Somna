@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { createSkillFromSession, type SkillRow } from "@/lib/api/skills";
+import { createSkillFromSession, listSkills, type SkillRow } from "@/lib/api/skills";
 import { meRequest } from "@/lib/api/auth";
 import { useSessionStore } from "@/lib/store/session";
 
@@ -26,12 +26,41 @@ export function CreateSkillFromSessionCard({ sessionId }: { sessionId: string })
   async function create() {
     setCreating(true);
     setError(null);
+    let snapshotOk = false;
+    const idsBefore = new Set<string>();
+    try {
+      const existing = await listSkills("my");
+      for (const r of existing) idsBefore.add(r.id);
+      snapshotOk = true;
+    } catch {
+      /* 无快照时不做「响应丢失」恢复，避免误判别人的 Skill */
+    }
     try {
       const me = await meRequest();
       const visibility = me?.role === "admin" ? "shared" : "private";
       setCreated(await createSkillFromSession(sessionId, visibility));
     } catch (e) {
-      setError(e instanceof Error ? e.message : "创建 Skill 失败");
+      const msg = e instanceof Error ? e.message : "创建 Skill 失败";
+      /* 后端常已写库成功，但代理/网关超时导致浏览器收到 5xx；用技能 id 快照对齐 */
+      if (snapshotOk) {
+        try {
+          const after = await listSkills("my");
+          const newcomers = after.filter((r) => !idsBefore.has(r.id));
+          if (newcomers.length > 0) {
+            const candidate = [...newcomers].sort((a, b) =>
+              (b.updated_at ?? "").localeCompare(a.updated_at ?? ""),
+            )[0];
+            if (candidate) {
+              setCreated(candidate);
+              setError(null);
+              return;
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+      setError(msg);
     } finally {
       setCreating(false);
     }
