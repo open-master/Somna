@@ -9,6 +9,7 @@ import { CreateSkillFromSessionCard } from "./CreateSkillFromSessionCard";
 import { DeliverablesHub } from "./DeliverablesHub";
 import { MessageList } from "./MessageList";
 import { PlannerTimeline } from "./PlannerTimeline";
+import { SkillDebugPanel } from "./SkillDebugPanel";
 import { TaskFrameBanner } from "./TaskFrameBanner";
 
 export function ChatCenter({ sessionId }: { sessionId: string }) {
@@ -24,6 +25,7 @@ export function ChatCenter({ sessionId }: { sessionId: string }) {
           <div className="mx-auto w-full max-w-3xl space-y-2 px-4 py-2">
             <TaskFrameBanner />
             <PlannerTimeline />
+            <SkillDebugPanel />
             <DeliverablesHub sessionId={sessionId} />
           </div>
         </div>

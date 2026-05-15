@@ -52,6 +52,7 @@ from app.graph.nodes.execute import (
     _content_str,
     _delivery_recovery_tool_name,
     _detect_shell_recovery,
+    _emit_skill_debug_event,
     _invoke_tool_with_events,
     _merge_proof,
     _missing_delivery_reason,
@@ -308,9 +309,16 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
         skill_model=state.get("skill_model"),
     )
     state["selected_skills"] = [
-        {"id": item.id, "name": item.name, "reason": item.reason, "load_files": item.load_files}
+        {
+            "id": item.id,
+            "name": item.name,
+            "reason": item.reason,
+            "load_files": item.load_files,
+            "forced": item.forced,
+        }
         for item in skill_route.selected
     ]
+    await _emit_skill_debug_event(session_id, run_id, skill_route)
     skill_block = skill_route.prompt_block
     extra_context = _compose_executor_extra_context(memory_block, state.get("task_frame"), skill_block)
 

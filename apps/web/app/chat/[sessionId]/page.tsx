@@ -12,6 +12,7 @@ import { useChatStore } from "@/lib/store/chat";
 import { useLiveStore } from "@/lib/store/live";
 import { usePlanStore } from "@/lib/store/plan";
 import { useSessionStore } from "@/lib/store/session";
+import { useSkillDebugStore } from "@/lib/store/skillDebug";
 import { useTaskFrameStore } from "@/lib/store/taskFrame";
 
 /** 与会话行 `sessions.status` 对齐：`done` 仅表示本轮 run 结束，会话仍 `active`，可继续发消息。 */
@@ -48,6 +49,7 @@ export default function ChatSessionPage() {
   const chatClear = useChatStore((s) => s.clear);
   const planClear = usePlanStore((s) => s.clear);
   const liveClear = useLiveStore((s) => s.clear);
+  const skillDebugClear = useSkillDebugStore((s) => s.clear);
   const taskFrameClear = useTaskFrameStore((s) => s.clear);
 
   useEffect(() => {
@@ -56,6 +58,7 @@ export default function ChatSessionPage() {
     chatClear();
     planClear();
     liveClear();
+    skillDebugClear();
     taskFrameClear();
     void getSession(sessionId).then((s) =>
       upsert({
@@ -72,13 +75,14 @@ export default function ChatSessionPage() {
       setPhase("idle");
       setRunId(null);
     };
-  }, [sessionId, setCurrent, chatClear, planClear, liveClear, taskFrameClear, upsert, setPhase, setRunId]);
+  }, [sessionId, setCurrent, chatClear, planClear, liveClear, skillDebugClear, taskFrameClear, upsert, setPhase, setRunId]);
 
   const handlers = useMemo<HandlerMap>(() => {
     const chat = useChatStore.getState();
     const plan = usePlanStore.getState();
     const live = useLiveStore.getState();
     const session = useSessionStore.getState();
+    const skillDebug = useSkillDebugStore.getState();
     const taskFrame = useTaskFrameStore.getState();
     return {
       "message.delta": (e) => { chat.onMessageDelta(e); live.track(e); },
@@ -89,6 +93,10 @@ export default function ChatSessionPage() {
       "plan.update": (e) => { plan.onPlanUpdate(e); live.track(e); },
       "task.frame": (e) => {
         taskFrame.fromEvent(e);
+        live.track(e);
+      },
+      "skill.debug": (e) => {
+        skillDebug.fromEvent(e);
         live.track(e);
       },
       screenshot: (e) => { live.onScreenshot(e); live.track(e); },

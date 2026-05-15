@@ -61,6 +61,14 @@ class TodoItem(BaseModel):
     parent_id: Optional[str] = None
 
 
+class SkillDebugItem(BaseModel):
+    id: str
+    name: str
+    reason: str = ""
+    load_files: List[str] = Field(default_factory=list)
+    forced: bool = Field(default=False, description="True when Task Frame explicitly named this enabled Skill")
+
+
 # =====================================================================
 # Base event
 # =====================================================================
@@ -137,6 +145,14 @@ class TaskFrameEvent(BaseEvent):
     detail: str = Field(default="", description="定调要点（多行），可折叠展示")
 
 
+class SkillDebugEvent(BaseEvent):
+    """Skill 路由调试信息，帮助确认候选、选中、强制注入与加载文件。"""
+
+    type: Literal["skill.debug"] = "skill.debug"
+    candidate_count: int = 0
+    selected_skills: List[SkillDebugItem] = Field(default_factory=list)
+
+
 class StatusEvent(BaseEvent):
     type: Literal["status"] = "status"
     phase: SessionPhase
@@ -176,6 +192,7 @@ AgentEvent = Annotated[
         ArtifactEvent,
         PlanUpdateEvent,
         TaskFrameEvent,
+        SkillDebugEvent,
         StatusEvent,
         TokenUsageEvent,
         InterruptAckEvent,

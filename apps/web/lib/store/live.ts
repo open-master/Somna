@@ -185,6 +185,8 @@ function summarize(e: AgentEvent): string {
       return `${e.todos.length} todos`;
     case "task.frame":
       return e.summary.slice(0, 120);
+    case "skill.debug":
+      return `${e.candidate_count} candidates, ${e.selected_skills.length} selected`;
     case "status":
       return `${e.phase}${e.message ? ": " + e.message : ""}`;
     case "token.usage":

@@ -47,6 +47,15 @@ export const todoItemSchema = z.object({
 });
 export type TodoItem = z.infer<typeof todoItemSchema>;
 
+export const skillDebugItemSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  reason: z.string().default(""),
+  load_files: z.array(z.string()).default([]),
+  forced: z.boolean().default(false),
+});
+export type SkillDebugItem = z.infer<typeof skillDebugItemSchema>;
+
 // =============================================================
 // Base + concrete events
 // =============================================================
@@ -137,6 +146,15 @@ export const taskFrameSchema = z
   })
   .passthrough();
 
+export const skillDebugSchema = z
+  .object({
+    type: z.literal("skill.debug"),
+    candidate_count: z.number().int().default(0),
+    selected_skills: z.array(skillDebugItemSchema).default([]),
+    ...baseFields,
+  })
+  .passthrough();
+
 export const statusSchema = z
   .object({
     type: z.literal("status"),
@@ -187,6 +205,7 @@ export const agentEventSchema = z.discriminatedUnion("type", [
   artifactSchema,
   planUpdateSchema,
   taskFrameSchema,
+  skillDebugSchema,
   statusSchema,
   tokenUsageSchema,
   interruptAckSchema,
@@ -202,6 +221,7 @@ export type ScreenshotEvent = z.infer<typeof screenshotSchema>;
 export type ArtifactEvent = z.infer<typeof artifactSchema>;
 export type PlanUpdateEvent = z.infer<typeof planUpdateSchema>;
 export type TaskFrameEvent = z.infer<typeof taskFrameSchema>;
+export type SkillDebugEvent = z.infer<typeof skillDebugSchema>;
 export type StatusEvent = z.infer<typeof statusSchema>;
 export type TokenUsageEvent = z.infer<typeof tokenUsageSchema>;
 export type InterruptAckEvent = z.infer<typeof interruptAckSchema>;
@@ -217,6 +237,7 @@ export type AgentEventMap = {
   artifact: ArtifactEvent;
   "plan.update": PlanUpdateEvent;
   "task.frame": TaskFrameEvent;
+  "skill.debug": SkillDebugEvent;
   status: StatusEvent;
   "token.usage": TokenUsageEvent;
   "interrupt.ack": InterruptAckEvent;

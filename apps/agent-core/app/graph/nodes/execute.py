@@ -33,6 +33,7 @@ from somna_events import (
     ArtifactEvent,
     MessageDeltaEvent,
     ScreenshotEvent,
+    SkillDebugEvent,
     ToolCallEvent,
     ToolResultEvent,
     TokenUsageEvent,
@@ -52,6 +53,7 @@ from app.logging_setup import get_logger
 from app.memory import format_memories, search_memories
 from app.prompts.loader import build_system_prompt
 from app.services.skill_router import route_skills_for_task
+from app.services.skill_router import SkillRouteResult
 from app.tools.client import get_client
 from app.tools.schema import manifests_to_openai_tools, openai_tool_choice, tool_manifest_cache
 
@@ -144,6 +146,26 @@ def _compose_executor_extra_context(
     if block and block != "(无)":
         parts.append(f"### 任务定调（phase A framing，供对齐范围与交付）\n{block}")
     return "\n\n".join(parts) if parts else None
+
+
+async def _emit_skill_debug_event(session_id, run_id: str | None, skill_route: SkillRouteResult) -> None:
+    await emit(
+        SkillDebugEvent(
+            session_id=session_id,
+            run_id=run_id,
+            candidate_count=skill_route.candidate_count,
+            selected_skills=[
+                {
+                    "id": item.id,
+                    "name": item.name,
+                    "reason": item.reason,
+                    "load_files": item.load_files,
+                    "forced": item.forced,
+                }
+                for item in skill_route.selected
+            ],
+        )
+    )
 
 
 def _goal_requires_real_artifact(
@@ -453,9 +475,16 @@ async def execute_node(state: SessionState) -> SessionState:
         skill_model=state.get("skill_model"),
     )
     state["selected_skills"] = [
-        {"id": item.id, "name": item.name, "reason": item.reason, "load_files": item.load_files}
+        {
+            "id": item.id,
+            "name": item.name,
+            "reason": item.reason,
+            "load_files": item.load_files,
+            "forced": item.forced,
+        }
         for item in skill_route.selected
     ]
+    await _emit_skill_debug_event(session_id, run_id, skill_route)
     skill_block = skill_route.prompt_block
     extra_context = _compose_executor_extra_context(memory_block, state.get("task_frame"), skill_block)
 

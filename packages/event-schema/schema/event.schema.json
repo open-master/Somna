@@ -477,6 +477,112 @@
       "title": "SessionPhase",
       "type": "string"
     },
+    "SkillDebugEvent": {
+      "description": "Skill 路由调试信息，帮助确认候选、选中、强制注入与加载文件。",
+      "properties": {
+        "type": {
+          "const": "skill.debug",
+          "default": "skill.debug",
+          "title": "Type",
+          "type": "string"
+        },
+        "v": {
+          "default": "1",
+          "description": "schema version",
+          "title": "V",
+          "type": "string"
+        },
+        "session_id": {
+          "format": "uuid",
+          "title": "Session Id",
+          "type": "string"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Agent run identifier",
+          "title": "Run Id"
+        },
+        "seq": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "monotonic seq per session",
+          "title": "Seq"
+        },
+        "ts": {
+          "format": "date-time",
+          "title": "Ts",
+          "type": "string"
+        },
+        "candidate_count": {
+          "default": 0,
+          "title": "Candidate Count",
+          "type": "integer"
+        },
+        "selected_skills": {
+          "items": {
+            "$ref": "#/$defs/SkillDebugItem"
+          },
+          "title": "Selected Skills",
+          "type": "array"
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "title": "SkillDebugEvent",
+      "type": "object"
+    },
+    "SkillDebugItem": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "reason": {
+          "default": "",
+          "title": "Reason",
+          "type": "string"
+        },
+        "load_files": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Load Files",
+          "type": "array"
+        },
+        "forced": {
+          "default": false,
+          "description": "True when Task Frame explicitly named this enabled Skill",
+          "title": "Forced",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "title": "SkillDebugItem",
+      "type": "object"
+    },
     "StatusEvent": {
       "properties": {
         "type": {
@@ -982,6 +1088,7 @@
       "message.delta": "#/$defs/MessageDeltaEvent",
       "plan.update": "#/$defs/PlanUpdateEvent",
       "screenshot": "#/$defs/ScreenshotEvent",
+      "skill.debug": "#/$defs/SkillDebugEvent",
       "status": "#/$defs/StatusEvent",
       "task.frame": "#/$defs/TaskFrameEvent",
       "thinking.delta": "#/$defs/ThinkingDeltaEvent",
@@ -1015,6 +1122,9 @@
     },
     {
       "$ref": "#/$defs/TaskFrameEvent"
+    },
+    {
+      "$ref": "#/$defs/SkillDebugEvent"
     },
     {
       "$ref": "#/$defs/StatusEvent"

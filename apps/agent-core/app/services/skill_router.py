@@ -25,12 +25,14 @@ class SelectedSkill:
     name: str
     reason: str = ""
     load_files: list[str] = field(default_factory=list)
+    forced: bool = False
 
 
 @dataclass(frozen=True)
 class SkillRouteResult:
     selected: list[SelectedSkill]
     prompt_block: str | None
+    candidate_count: int = 0
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
@@ -297,6 +299,7 @@ Plan:
                 name=str(candidate["name"]),
                 reason=str(raw.get("reason") or "").strip()[:500],
                 load_files=_normalize_load_files(raw.get("load_files"), files),
+                forced=False,
             )
         )
 
@@ -317,6 +320,7 @@ Plan:
                     "it is loaded even if the router response omitted it."
                 ),
                 load_files=_default_load_files(files),
+                forced=True,
             ),
         )
         selected_ids.add(sid)
@@ -327,6 +331,13 @@ Plan:
         model=model,
         user_id=user_id,
         routing_hints=routing_hints,
-        selected_skills=[{"id": item.id, "name": item.name, "files": item.load_files} for item in selected],
+        selected_skills=[
+            {"id": item.id, "name": item.name, "files": item.load_files, "forced": item.forced}
+            for item in selected
+        ],
     )
-    return SkillRouteResult(selected=selected, prompt_block=_render_skill_block(candidates_by_id, selected))
+    return SkillRouteResult(
+        selected=selected,
+        prompt_block=_render_skill_block(candidates_by_id, selected),
+        candidate_count=len(candidates),
+    )
