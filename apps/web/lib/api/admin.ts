@@ -8,7 +8,17 @@ const ADMIN_USERS_BASE =
 async function readErr(res: Response, fb: string): Promise<string> {
   try {
     const t = await res.text();
-    if (t) return t;
+    if (t) {
+      try {
+        const parsed: unknown = JSON.parse(t);
+        if (parsed && typeof parsed === "object" && "detail" in parsed) {
+          return String((parsed as { detail: unknown }).detail);
+        }
+      } catch {
+        /* keep the original response text */
+      }
+      return t;
+    }
   } catch {
     /* ignore */
   }
@@ -65,4 +75,13 @@ export async function adminDeleteUser(id: string): Promise<void> {
     headers: { ...authHeaders() },
   });
   if (!res.ok) throw new Error(await readErr(res, `adminDeleteUser: ${res.status}`));
+}
+
+export async function adminResetUserPassword(id: string, newPassword: string): Promise<void> {
+  const res = await fetch(`${ADMIN_USERS_BASE}/${encodeURIComponent(id)}/password`, {
+    method: "PUT",
+    headers: { "content-type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ new_password: newPassword }),
+  });
+  if (!res.ok) throw new Error(await readErr(res, `adminResetUserPassword: ${res.status}`));
 }

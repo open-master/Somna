@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -14,6 +15,7 @@ from app.storage.postgres import get_pool
 
 log = get_logger(__name__)
 router = APIRouter(prefix="/v1/admin/users", tags=["admin-users"])
+AdminDep = Annotated[CurrentUser, Depends(require_admin)]
 
 
 class AdminUserRow(BaseModel):
@@ -38,13 +40,17 @@ class AdminUserPatch(BaseModel):
     account_status: str | None = None
 
 
+class AdminUserPasswordReset(BaseModel):
+    new_password: str = Field(min_length=6, max_length=256)
+
+
 def _normalize_role(value: object | None) -> str:
     r = str(value or "user")
     return r if r in ("user", "admin") else "user"
 
 
 @router.get("", response_model=list[AdminUserRow])
-async def list_users(_admin: CurrentUser = Depends(require_admin)) -> list[AdminUserRow]:
+async def list_users(_admin: AdminDep) -> list[AdminUserRow]:
     del _admin
     pool = get_pool()
     async with pool.acquire() as conn:
@@ -76,7 +82,7 @@ async def list_users(_admin: CurrentUser = Depends(require_admin)) -> list[Admin
 @router.post("", response_model=AdminUserRow, status_code=201)
 async def create_user(
     req: AdminUserCreate,
-    admin: CurrentUser = Depends(require_admin),
+    admin: AdminDep,
 ) -> AdminUserRow:
     del admin
     email = normalize_email(req.email)
@@ -118,11 +124,12 @@ async def create_user(
         has_google=bool(row["has_google"]),
     )
 
+
 @router.patch("/{user_id}", response_model=AdminUserRow)
 async def patch_user(
     user_id: uuid.UUID,
     req: AdminUserPatch,
-    admin: CurrentUser = Depends(require_admin),
+    admin: AdminDep,
 ) -> AdminUserRow:
     if req.role is None and req.account_status is None:
         raise HTTPException(status_code=400, detail="no fields to update")
@@ -168,10 +175,37 @@ async def patch_user(
     )
 
 
+@router.put("/{user_id}/password", status_code=204)
+async def reset_user_password(
+    user_id: uuid.UUID,
+    req: AdminUserPasswordReset,
+    admin: AdminDep,
+) -> None:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            UPDATE users
+            SET password_hash = $2, updated_at = now()
+            WHERE id = $1
+            RETURNING email
+            """,
+            user_id,
+            hash_password(req.new_password),
+        )
+    if row is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    log.info(
+        "admin.user_password_reset",
+        target_user_id=str(user_id),
+        admin_id=str(admin.id),
+    )
+
+
 @router.delete("/{user_id}", status_code=204)
 async def delete_user(
     user_id: uuid.UUID,
-    admin: CurrentUser = Depends(require_admin),
+    admin: AdminDep,
 ) -> None:
     if user_id == admin.id:
         raise HTTPException(status_code=400, detail="cannot delete yourself")

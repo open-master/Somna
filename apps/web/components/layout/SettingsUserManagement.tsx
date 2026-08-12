@@ -1,5 +1,7 @@
 "use client";
 
+import * as Dialog from "@radix-ui/react-dialog";
+import { KeyRound, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -9,6 +11,7 @@ import {
   adminDeleteUser,
   adminListUsers,
   adminPatchUser,
+  adminResetUserPassword,
   type AdminUserRow,
 } from "@/lib/api/admin";
 import { cn } from "@/lib/utils/cn";
@@ -21,11 +24,13 @@ function UserRow({
   currentUserId,
   onUpdated,
   onDeleted,
+  onResetPassword,
 }: {
   row: AdminUserRow;
   currentUserId: string | null;
   onUpdated: () => void;
   onDeleted: () => void;
+  onResetPassword: (user: AdminUserRow) => void;
 }) {
   const [role, setRole] = useState(row.role);
   const [status, setStatus] = useState(row.account_status);
@@ -119,6 +124,15 @@ function UserRow({
           <Button
             type="button"
             size="sm"
+            variant="outline"
+            onClick={() => onResetPassword(row)}
+          >
+            <KeyRound className="size-3.5" />
+            重置密码
+          </Button>
+          <Button
+            type="button"
+            size="sm"
             variant="destructive"
             disabled={deleting || isSelf}
             title={isSelf ? "不可删除自己" : undefined}
@@ -132,6 +146,105 @@ function UserRow({
   );
 }
 
+function ResetPasswordDialog({
+  user,
+  onClose,
+  onSuccess,
+}: {
+  user: AdminUserRow | null;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [password, setPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    setPassword("");
+    setConfirmation("");
+    setSubmitting(false);
+    setError("");
+  }, [user]);
+
+  async function submit() {
+    if (!user) return;
+    if (password.length < 6) {
+      setError("新密码至少需要 6 位");
+      return;
+    }
+    if (password !== confirmation) {
+      setError("两次输入的密码不一致");
+      return;
+    }
+    setSubmitting(true);
+    setError("");
+    try {
+      await adminResetUserPassword(user.id, password);
+      onSuccess();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "密码重置失败");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Dialog.Root open={user !== null} onOpenChange={(open) => !open && !submitting && onClose()}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-[60] bg-black/40" />
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-[61] w-[min(440px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border bg-background p-5 shadow-xl outline-none">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <Dialog.Title className="text-lg font-semibold">重置用户密码</Dialog.Title>
+              <Dialog.Description className="mt-1 truncate text-sm text-muted-foreground">
+                {user?.email ?? "—"}；保存后旧密码立即失效。
+              </Dialog.Description>
+            </div>
+            <Dialog.Close asChild>
+              <Button type="button" size="icon" variant="ghost" className="size-8" disabled={submitting} aria-label="关闭密码重置窗口">
+                <X className="size-4" />
+              </Button>
+            </Dialog.Close>
+          </div>
+
+          {error ? <p className="mt-4 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p> : null}
+
+          <div className="mt-4 space-y-3">
+            <Input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="新密码（至少 6 位）"
+              autoComplete="new-password"
+              disabled={submitting}
+              autoFocus
+            />
+            <Input
+              type="password"
+              value={confirmation}
+              onChange={(event) => setConfirmation(event.target.value)}
+              onKeyDown={(event) => event.key === "Enter" && void submit()}
+              placeholder="再次输入新密码"
+              autoComplete="new-password"
+              disabled={submitting}
+            />
+          </div>
+
+          <p className="mt-3 text-xs text-muted-foreground">Google 登录绑定不会受影响；原有已登录会话不会被强制退出。</p>
+
+          <div className="mt-5 flex justify-end gap-2">
+            <Button type="button" variant="secondary" disabled={submitting} onClick={onClose}>取消</Button>
+            <Button type="button" disabled={submitting || password.length < 6 || !confirmation} onClick={() => void submit()}>
+              {submitting ? "保存中…" : "确认重置"}
+            </Button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
 export function SettingsUserManagement({ currentUserId }: { currentUserId: string | null }) {
   const [users, setUsers] = useState<AdminUserRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -141,6 +254,8 @@ export function SettingsUserManagement({ currentUserId }: { currentUserId: strin
   const [newRole, setNewRole] = useState("user");
   const [newStatus, setNewStatus] = useState("active");
   const [creating, setCreating] = useState(false);
+  const [passwordUser, setPasswordUser] = useState<AdminUserRow | null>(null);
+  const [message, setMessage] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -221,6 +336,7 @@ export function SettingsUserManagement({ currentUserId }: { currentUserId: strin
       </div>
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      {message ? <p className="rounded-lg bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-300">{message}</p> : null}
       {loading ? <p className="text-sm text-muted-foreground">加载中…</p> : null}
 
       {!loading && !error ? (
@@ -243,12 +359,23 @@ export function SettingsUserManagement({ currentUserId }: { currentUserId: strin
                   currentUserId={currentUserId}
                   onUpdated={() => void load()}
                   onDeleted={() => void load()}
+                  onResetPassword={setPasswordUser}
                 />
               ))}
             </tbody>
           </table>
         </div>
       ) : null}
+
+      <ResetPasswordDialog
+        user={passwordUser}
+        onClose={() => setPasswordUser(null)}
+        onSuccess={() => {
+          setMessage(`${passwordUser?.email ?? "用户"} 的密码已重置`);
+          setPasswordUser(null);
+          void load();
+        }}
+      />
     </div>
   );
 }
