@@ -63,6 +63,7 @@ class PointAccountOverview(BaseModel):
     user_id: str
     email: str
     username: str
+    has_password: bool
     role: str
     plan_type: str
     plan_expire_at: str | None
@@ -169,7 +170,8 @@ def _account_overview(row, user: CurrentUser) -> PointAccountOverview:
     return PointAccountOverview(
         user_id=str(user.id),
         email=user.email,
-        username=user.email.split("@", 1)[0],
+        username=user.username or user.email.split("@", 1)[0],
+        has_password=user.has_password,
         role=user.role,
         plan_type=plan,
         plan_expire_at=_iso(row["plan_expire_at"]),

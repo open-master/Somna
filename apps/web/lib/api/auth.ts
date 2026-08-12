@@ -43,6 +43,8 @@ export interface AuthUser {
   email: string;
   role: string;
   account_status?: string;
+  username?: string | null;
+  has_password?: boolean;
 }
 
 export interface TokenResponse {
@@ -115,4 +117,26 @@ export async function meRequest(): Promise<AuthUser | null> {
   });
   if (!res.ok) return null;
   return res.json();
+}
+
+export async function updateMyProfile(username: string): Promise<AuthUser> {
+  const res = await fetch(`${AUTH_BASE}/me`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", ...cookieAuthHeaders() },
+    body: JSON.stringify({ username }),
+  });
+  if (!res.ok) throw new Error(await readApiError(res, `update profile: ${res.status}`));
+  return res.json();
+}
+
+export async function changeMyPassword(body: {
+  current_password?: string;
+  new_password: string;
+}): Promise<void> {
+  const res = await fetch(`${AUTH_BASE}/me/password`, {
+    method: "PUT",
+    headers: { "content-type": "application/json", ...cookieAuthHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await readApiError(res, `change password: ${res.status}`));
 }

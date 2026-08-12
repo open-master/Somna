@@ -1,7 +1,7 @@
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { X } from "lucide-react";
+import { KeyRound, Pencil, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ import {
   type PointTransaction,
 } from "@/lib/api/points";
 import type { AuthUser } from "@/lib/api/auth";
+import { changeMyPassword, updateMyProfile } from "@/lib/api/auth";
 import { cn } from "@/lib/utils/cn";
 
 const PLAN_META = {
@@ -39,6 +40,172 @@ function formatDate(value: string): string {
 
 function ErrorMessage({ children }: { children: string }) {
   return <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{children}</p>;
+}
+
+function UsernameDialog({
+  open,
+  initialValue,
+  onClose,
+  onSuccess,
+}: {
+  open: boolean;
+  initialValue: string;
+  onClose: () => void;
+  onSuccess: (username: string) => void;
+}) {
+  const [username, setUsername] = useState(initialValue);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (open) {
+      setUsername(initialValue);
+      setError("");
+      setSubmitting(false);
+    }
+  }, [initialValue, open]);
+
+  async function submit() {
+    const value = username.trim();
+    if (!value) {
+      setError("用户名不能为空");
+      return;
+    }
+    setSubmitting(true);
+    setError("");
+    try {
+      const profile = await updateMyProfile(value);
+      onSuccess(profile.username || value);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "用户名保存失败");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Dialog.Root open={open} onOpenChange={(next) => !next && !submitting && onClose()}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-[60] bg-black/40" />
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-[61] w-[min(420px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border bg-background p-5 shadow-xl outline-none">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <Dialog.Title className="text-lg font-semibold">编辑用户名</Dialog.Title>
+              <Dialog.Description className="mt-1 text-sm text-muted-foreground">用户名用于账户展示，不会改变登录邮箱。</Dialog.Description>
+            </div>
+            <Dialog.Close asChild>
+              <Button type="button" size="icon" variant="ghost" className="size-8" disabled={submitting} aria-label="关闭用户名编辑窗口"><X className="size-4" /></Button>
+            </Dialog.Close>
+          </div>
+          {error ? <div className="mt-4"><ErrorMessage>{error}</ErrorMessage></div> : null}
+          <Input
+            className="mt-4"
+            value={username}
+            onChange={(event) => setUsername(event.target.value)}
+            onKeyDown={(event) => event.key === "Enter" && void submit()}
+            maxLength={50}
+            autoComplete="nickname"
+            disabled={submitting}
+            autoFocus
+          />
+          <div className="mt-5 flex justify-end gap-2">
+            <Button type="button" variant="secondary" disabled={submitting} onClick={onClose}>取消</Button>
+            <Button type="button" disabled={submitting || !username.trim()} onClick={() => void submit()}>{submitting ? "保存中…" : "保存"}</Button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+function PasswordDialog({
+  open,
+  hasPassword,
+  onClose,
+  onSuccess,
+}: {
+  open: boolean;
+  hasPassword: boolean;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (open) {
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmation("");
+      setSubmitting(false);
+      setError("");
+    }
+  }, [open]);
+
+  async function submit() {
+    if (hasPassword && !currentPassword) {
+      setError("请输入当前密码");
+      return;
+    }
+    if (newPassword.length < 6) {
+      setError("新密码至少需要 6 位");
+      return;
+    }
+    if (newPassword !== confirmation) {
+      setError("两次输入的新密码不一致");
+      return;
+    }
+    setSubmitting(true);
+    setError("");
+    try {
+      await changeMyPassword({
+        ...(hasPassword ? { current_password: currentPassword } : {}),
+        new_password: newPassword,
+      });
+      onSuccess();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "密码修改失败");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Dialog.Root open={open} onOpenChange={(next) => !next && !submitting && onClose()}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-[60] bg-black/40" />
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-[61] w-[min(440px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border bg-background p-5 shadow-xl outline-none">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <Dialog.Title className="text-lg font-semibold">{hasPassword ? "重置密码" : "设置登录密码"}</Dialog.Title>
+              <Dialog.Description className="mt-1 text-sm text-muted-foreground">
+                {hasPassword ? "验证当前密码后设置新密码。" : "设置后可使用邮箱和密码登录。"}
+              </Dialog.Description>
+            </div>
+            <Dialog.Close asChild>
+              <Button type="button" size="icon" variant="ghost" className="size-8" disabled={submitting} aria-label="关闭密码窗口"><X className="size-4" /></Button>
+            </Dialog.Close>
+          </div>
+          {error ? <div className="mt-4"><ErrorMessage>{error}</ErrorMessage></div> : null}
+          <div className="mt-4 space-y-3">
+            {hasPassword ? (
+              <Input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} placeholder="当前密码" autoComplete="current-password" disabled={submitting} autoFocus />
+            ) : null}
+            <Input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="新密码（至少 6 位）" autoComplete="new-password" disabled={submitting} autoFocus={!hasPassword} />
+            <Input type="password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} onKeyDown={(event) => event.key === "Enter" && void submit()} placeholder="再次输入新密码" autoComplete="new-password" disabled={submitting} />
+          </div>
+          <p className="mt-3 text-xs text-muted-foreground">密码修改后，其他已登录设备不会自动退出。</p>
+          <div className="mt-5 flex justify-end gap-2">
+            <Button type="button" variant="secondary" disabled={submitting} onClick={onClose}>取消</Button>
+            <Button type="button" disabled={submitting || newPassword.length < 6 || !confirmation} onClick={() => void submit()}>{submitting ? "保存中…" : "确认"}</Button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
 }
 
 function useAccount() {
@@ -72,7 +239,10 @@ export function SettingsPointAccount({
   profile: AuthUser | null;
   onGetPoints: () => void;
 }) {
-  const { account, loading, error } = useAccount();
+  const { account, setAccount, loading, error } = useAccount();
+  const [usernameOpen, setUsernameOpen] = useState(false);
+  const [passwordOpen, setPasswordOpen] = useState(false);
+  const [message, setMessage] = useState("");
   const email = account?.email ?? profile?.email ?? "";
   const username = account?.username ?? email.split("@", 1)[0] ?? "用户";
   const initial = (username.charAt(0) || "U").toUpperCase();
@@ -85,12 +255,24 @@ export function SettingsPointAccount({
           {initial}
         </div>
         <div className="min-w-0">
-          <p className="truncate text-xl font-semibold">{username || "用户"}</p>
+          <div className="flex items-center gap-2">
+            <p className="truncate text-xl font-semibold">{username || "用户"}</p>
+            <Button type="button" size="icon" variant="ghost" className="size-8 shrink-0" aria-label="编辑用户名" onClick={() => setUsernameOpen(true)}>
+              <Pencil className="size-4" />
+            </Button>
+          </div>
           <p className="mt-1 truncate text-base text-muted-foreground">{email || "—"}</p>
+          {account ? (
+            <Button type="button" size="sm" variant="outline" className="mt-3" onClick={() => setPasswordOpen(true)}>
+              <KeyRound className="size-3.5" />
+              {account.has_password ? "重置密码" : "设置登录密码"}
+            </Button>
+          ) : null}
         </div>
       </div>
 
       {error ? <ErrorMessage>{error}</ErrorMessage> : null}
+      {message ? <p className="rounded-lg bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-300">{message}</p> : null}
       {loading ? <p className="text-sm text-muted-foreground">加载中…</p> : null}
 
       {account ? (
@@ -126,6 +308,27 @@ export function SettingsPointAccount({
           </dl>
         </section>
       ) : null}
+
+      <UsernameDialog
+        open={usernameOpen}
+        initialValue={username}
+        onClose={() => setUsernameOpen(false)}
+        onSuccess={(nextUsername) => {
+          setAccount((current) => current ? { ...current, username: nextUsername } : current);
+          setUsernameOpen(false);
+          setMessage("用户名已更新");
+        }}
+      />
+      <PasswordDialog
+        open={passwordOpen}
+        hasPassword={account?.has_password ?? false}
+        onClose={() => setPasswordOpen(false)}
+        onSuccess={() => {
+          setAccount((current) => current ? { ...current, has_password: true } : current);
+          setPasswordOpen(false);
+          setMessage(account?.has_password ? "密码已重置" : "登录密码已设置");
+        }}
+      />
     </div>
   );
 }

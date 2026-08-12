@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -26,6 +27,8 @@ class CurrentUser:
     id: uuid.UUID
     email: str
     role: str = "user"
+    username: str | None = None
+    has_password: bool = False
 
 
 def _normalize_role(value: object | None) -> str:
@@ -35,7 +38,7 @@ def _normalize_role(value: object | None) -> str:
 
 async def get_current_user(
     request: Request,
-    creds: HTTPAuthorizationCredentials | None = Depends(security),
+    creds: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
 ) -> CurrentUser:
     token: str | None = None
     if creds and creds.scheme.lower() == "bearer":
@@ -54,7 +57,7 @@ async def get_current_user(
     pool = get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT email, role, account_status FROM users WHERE id = $1",
+            "SELECT email, username, password_hash, role, account_status FROM users WHERE id = $1",
             uid,
         )
     if row is None:
@@ -66,10 +69,12 @@ async def get_current_user(
         id=uid,
         email=normalize_email(str(row["email"])),
         role=_normalize_role(row["role"]),
+        username=str(row.get("username") or "").strip() or None,
+        has_password=bool(row.get("password_hash")),
     )
 
 
-async def require_admin(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+async def require_admin(user: Annotated[CurrentUser, Depends(get_current_user)]) -> CurrentUser:
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="admin only")
     return user

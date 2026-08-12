@@ -21,6 +21,7 @@ from app.config import get_settings
 from app.graph.runtime import get_registry
 from app.graph.session_graph import close_graph, get_compiled_graph
 from app.logging_setup import get_logger, setup_logging
+from app.services.account_profile import ensure_account_profile_columns
 from app.services.billing import ensure_billing_tables
 from app.services.points import ensure_point_tables
 from app.services.skills import ensure_skill_tables, seed_builtin_skills
@@ -60,6 +61,7 @@ async def lifespan(app: FastAPI):
     log.info("agent-core.start", env=settings.env, service=settings.service_name)
 
     await init_pool()
+    await ensure_account_profile_columns()
     await ensure_point_tables()
     await ensure_billing_tables()
     await ensure_skill_tables()

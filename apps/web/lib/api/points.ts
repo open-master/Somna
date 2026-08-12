@@ -51,6 +51,7 @@ export interface PointAccount {
   user_id: string;
   email: string;
   username: string;
+  has_password: boolean;
   role: string;
   plan_type: "free" | "basic" | "pro";
   plan_expire_at: string | null;

@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from app.api.deps import CurrentUser, normalize_email, require_admin
 from app.logging_setup import get_logger
 from app.security.passwords import hash_password
+from app.services.account_profile import default_username
 from app.storage.postgres import get_pool
 
 log = get_logger(__name__)
@@ -94,11 +95,12 @@ async def create_user(
         uid = uuid.uuid4()
         await conn.execute(
             """
-            INSERT INTO users (id, email, password_hash, role, account_status)
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO users (id, email, username, password_hash, role, account_status)
+            VALUES ($1, $2, $3, $4, $5, $6)
             """,
             uid,
             email,
+            default_username(email),
             hash_password(req.password),
             req.role,
             req.account_status,

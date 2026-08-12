@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from google.auth.transport import requests as google_requests
@@ -23,10 +24,12 @@ from app.security.otp_codes import (
     verify_and_consume,
 )
 from app.security.passwords import hash_password, verify_password
+from app.services.account_profile import default_username, normalize_username
 from app.storage.postgres import get_pool
 
 log = get_logger(__name__)
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
+UserDep = Annotated[CurrentUser, Depends(get_current_user)]
 
 
 def _admin_set() -> set[str]:
@@ -96,6 +99,17 @@ class AuthUserOut(BaseModel):
     email: str
     role: str
     account_status: str = "active"
+    username: str | None = None
+    has_password: bool = False
+
+
+class ProfileUpdateReq(BaseModel):
+    username: str = Field(min_length=1, max_length=50)
+
+
+class PasswordChangeReq(BaseModel):
+    current_password: str | None = Field(default=None, max_length=256)
+    new_password: str = Field(min_length=6, max_length=256)
 
 
 class TokenResp(BaseModel):
@@ -172,10 +186,15 @@ async def register(req: RegisterReq) -> TokenResp:
         if existing:
             raise HTTPException(status_code=409, detail="email already registered")
         uid = uuid.uuid4()
+        username = default_username(email)
         await conn.execute(
-            "INSERT INTO users (id, email, password_hash, role, account_status) VALUES ($1, $2, $3, $4, 'active')",
+            """
+            INSERT INTO users (id, email, username, password_hash, role, account_status)
+            VALUES ($1, $2, $3, $4, $5, 'active')
+            """,
             uid,
             email,
+            username,
             hash_password(req.password),
             role,
         )
@@ -183,7 +202,14 @@ async def register(req: RegisterReq) -> TokenResp:
     tok = create_access_token(user_id=uid, email=email, role=role)
     return TokenResp(
         access_token=tok,
-        user=AuthUserOut(id=str(uid), email=email, role=role, account_status="active"),
+        user=AuthUserOut(
+            id=str(uid),
+            email=email,
+            role=role,
+            account_status="active",
+            username=username,
+            has_password=True,
+        ),
     )
 
 
@@ -193,7 +219,10 @@ async def login(req: LoginReq) -> TokenResp:
     pool = get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT id, email, password_hash, google_sub, role, account_status FROM users WHERE email = $1",
+            """
+            SELECT id, email, username, password_hash, google_sub, role, account_status
+            FROM users WHERE email = $1
+            """,
             email,
         )
     if row is None:
@@ -212,7 +241,14 @@ async def login(req: LoginReq) -> TokenResp:
     tok = create_access_token(user_id=uid, email=email, role=rrole)
     return TokenResp(
         access_token=tok,
-        user=AuthUserOut(id=str(uid), email=email, role=rrole, account_status="active"),
+        user=AuthUserOut(
+            id=str(uid),
+            email=email,
+            role=rrole,
+            account_status="active",
+            username=str(row["username"] or "").strip() or default_username(email),
+            has_password=True,
+        ),
     )
 
 
@@ -225,7 +261,7 @@ async def login_code(req: LoginCodeReq) -> TokenResp:
     pool = get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT id, email, role, account_status FROM users WHERE email = $1",
+            "SELECT id, email, username, password_hash, role, account_status FROM users WHERE email = $1",
             email,
         )
     if row is None:
@@ -236,7 +272,14 @@ async def login_code(req: LoginCodeReq) -> TokenResp:
     tok = create_access_token(user_id=uid, email=email, role=rrole)
     return TokenResp(
         access_token=tok,
-        user=AuthUserOut(id=str(uid), email=email, role=rrole, account_status="active"),
+        user=AuthUserOut(
+            id=str(uid),
+            email=email,
+            role=rrole,
+            account_status="active",
+            username=str(row["username"] or "").strip() or default_username(email),
+            has_password=bool(row["password_hash"]),
+        ),
     )
 
 
@@ -266,11 +309,17 @@ async def google_auth(req: GoogleReq) -> TokenResp:
     pool = get_pool()
     async with pool.acquire() as conn:
         row_sub = await conn.fetchrow(
-            "SELECT id, email, role, password_hash, google_sub, account_status FROM users WHERE google_sub = $1",
+            """
+            SELECT id, email, username, role, password_hash, google_sub, account_status
+            FROM users WHERE google_sub = $1
+            """,
             sub,
         )
         row_email = await conn.fetchrow(
-            "SELECT id, email, role, password_hash, google_sub, account_status FROM users WHERE email = $1",
+            """
+            SELECT id, email, username, role, password_hash, google_sub, account_status
+            FROM users WHERE email = $1
+            """,
             email,
         )
     if row_sub:
@@ -281,7 +330,14 @@ async def google_auth(req: GoogleReq) -> TokenResp:
         tok = create_access_token(user_id=uid, email=em, role=rrole)
         return TokenResp(
             access_token=tok,
-            user=AuthUserOut(id=str(uid), email=em, role=rrole, account_status="active"),
+            user=AuthUserOut(
+                id=str(uid),
+                email=em,
+                role=rrole,
+                account_status="active",
+                username=str(row_sub["username"] or "").strip() or default_username(em),
+                has_password=bool(row_sub["password_hash"]),
+            ),
         )
     if row_email:
         _reject_disabled(row_email)
@@ -301,15 +357,27 @@ async def google_auth(req: GoogleReq) -> TokenResp:
         tok = create_access_token(user_id=uid, email=email, role=rrole)
         return TokenResp(
             access_token=tok,
-            user=AuthUserOut(id=str(uid), email=email, role=rrole, account_status="active"),
+            user=AuthUserOut(
+                id=str(uid),
+                email=email,
+                role=rrole,
+                account_status="active",
+                username=str(row_email["username"] or "").strip() or default_username(email),
+                has_password=bool(row_email["password_hash"]),
+            ),
         )
     role = _role_for_email(email)
     uid = uuid.uuid4()
+    username = default_username(email)
     async with pool.acquire() as conn:
         await conn.execute(
-            "INSERT INTO users (id, email, password_hash, google_sub, role, account_status) VALUES ($1, $2, NULL, $3, $4, 'active')",
+            """
+            INSERT INTO users (id, email, username, password_hash, google_sub, role, account_status)
+            VALUES ($1, $2, $3, NULL, $4, $5, 'active')
+            """,
             uid,
             email,
+            username,
             sub,
             role,
         )
@@ -317,17 +385,93 @@ async def google_auth(req: GoogleReq) -> TokenResp:
     tok = create_access_token(user_id=uid, email=email, role=role)
     return TokenResp(
         access_token=tok,
-        user=AuthUserOut(id=str(uid), email=email, role=role, account_status="active"),
+        user=AuthUserOut(
+            id=str(uid),
+            email=email,
+            role=role,
+            account_status="active",
+            username=username,
+            has_password=False,
+        ),
     )
 
 
 @router.get("/me", response_model=AuthUserOut)
-async def me(user: CurrentUser = Depends(get_current_user)) -> AuthUserOut:
+async def me(user: UserDep) -> AuthUserOut:
     pool = get_pool()
     async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT id, email, role, account_status FROM users WHERE id = $1", user.id)
+        row = await conn.fetchrow(
+            "SELECT id, email, username, password_hash, role, account_status FROM users WHERE id = $1",
+            user.id,
+        )
     if row is None:
         raise HTTPException(status_code=401, detail="user not found")
     rrole = _normalize_role(row["role"])
     ast = str(row["account_status"] or "active")
-    return AuthUserOut(id=str(row["id"]), email=row["email"], role=rrole, account_status=ast)
+    return AuthUserOut(
+        id=str(row["id"]),
+        email=row["email"],
+        role=rrole,
+        account_status=ast,
+        username=str(row["username"] or "").strip() or default_username(str(row["email"])),
+        has_password=bool(row["password_hash"]),
+    )
+
+
+@router.patch("/me", response_model=AuthUserOut)
+async def update_me(req: ProfileUpdateReq, user: UserDep) -> AuthUserOut:
+    try:
+        username = normalize_username(req.username)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            UPDATE users
+            SET username = $2, updated_at = now()
+            WHERE id = $1
+            RETURNING id, email, username, password_hash, role, account_status
+            """,
+            user.id,
+            username,
+        )
+    if row is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    log.info("user.profile_updated", user_id=str(user.id))
+    return AuthUserOut(
+        id=str(row["id"]),
+        email=str(row["email"]),
+        role=_normalize_role(row["role"]),
+        account_status=str(row["account_status"] or "active"),
+        username=str(row["username"]),
+        has_password=bool(row["password_hash"]),
+    )
+
+
+@router.put("/me/password", status_code=204)
+async def change_my_password(req: PasswordChangeReq, user: UserDep) -> None:
+    if len(req.new_password.encode("utf-8")) > 72:
+        raise HTTPException(status_code=400, detail="新密码不能超过 72 个字节")
+    pool = get_pool()
+    async with pool.acquire() as conn, conn.transaction():
+        row = await conn.fetchrow(
+            "SELECT password_hash FROM users WHERE id = $1 FOR UPDATE",
+            user.id,
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="user not found")
+        current_hash = row["password_hash"]
+        if current_hash:
+            if not req.current_password:
+                raise HTTPException(status_code=400, detail="请输入当前密码")
+            if not verify_password(req.current_password, str(current_hash)):
+                raise HTTPException(status_code=400, detail="当前密码不正确")
+            if verify_password(req.new_password, str(current_hash)):
+                raise HTTPException(status_code=400, detail="新密码不能与当前密码相同")
+        await conn.execute(
+            "UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1",
+            user.id,
+            hash_password(req.new_password),
+        )
+    log.info("user.password_changed", user_id=str(user.id), password_was_set=bool(current_hash))

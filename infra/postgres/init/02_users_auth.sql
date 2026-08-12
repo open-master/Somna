@@ -3,6 +3,7 @@
 CREATE TABLE IF NOT EXISTS users (
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     email           TEXT NOT NULL UNIQUE,
+    username        TEXT,
     password_hash   TEXT,
     google_sub      TEXT UNIQUE,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
