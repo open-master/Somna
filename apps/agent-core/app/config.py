@@ -127,6 +127,42 @@ class Settings(BaseSettings):
     # 逗号分隔：首次注册/谷歌建号时把这些邮箱设为 admin，其它为 user
     admin_emails: str = Field(default="", alias="ADMIN_EMAILS")
 
+    # ---- Points / billing ----
+    # Plan allowances are boot-time policy. Task/tool prices below are the
+    # defaults for the database-backed runtime billing catalog.
+    plan_free_daily: int = Field(default=10, alias="PLAN_FREE_DAILY")
+    plan_basic_daily: int = Field(default=20, alias="PLAN_BASIC_DAILY")
+    plan_pro_daily: int = Field(default=50, alias="PLAN_PRO_DAILY")
+    plan_free_monthly: int = Field(default=50, alias="PLAN_FREE_MONTHLY")
+    plan_basic_monthly: int = Field(default=200, alias="PLAN_BASIC_MONTHLY")
+    plan_pro_monthly: int = Field(default=500, alias="PLAN_PRO_MONTHLY")
+
+    points_task_chat_base: int = Field(default=1, alias="POINTS_TASK_CHAT_BASE")
+    points_task_research_base: int = Field(default=2, alias="POINTS_TASK_RESEARCH_BASE")
+    points_task_content_build_base: int = Field(default=4, alias="POINTS_TASK_CONTENT_BUILD_BASE")
+    points_task_code_build_base: int = Field(default=5, alias="POINTS_TASK_CODE_BUILD_BASE")
+    points_task_operate_base: int = Field(default=3, alias="POINTS_TASK_OPERATE_BASE")
+    points_task_media_base: int = Field(default=1, alias="POINTS_TASK_MEDIA_BASE")
+    points_task_model_reserve: int = Field(default=2, alias="POINTS_TASK_MODEL_RESERVE")
+    points_effort_low_multiplier: int = Field(default=1, alias="POINTS_EFFORT_LOW_MULTIPLIER")
+    points_effort_medium_multiplier: int = Field(default=2, alias="POINTS_EFFORT_MEDIUM_MULTIPLIER")
+    points_effort_high_multiplier: int = Field(default=4, alias="POINTS_EFFORT_HIGH_MULTIPLIER")
+    points_model_input_tokens_per_point: int = Field(
+        default=8000,
+        alias="POINTS_MODEL_INPUT_TOKENS_PER_POINT",
+    )
+    points_model_output_tokens_per_point: int = Field(
+        default=2000,
+        alias="POINTS_MODEL_OUTPUT_TOKENS_PER_POINT",
+    )
+    points_web_search_batch: int = Field(default=1, alias="POINTS_WEB_SEARCH_BATCH")
+    points_visual_critique: int = Field(default=2, alias="POINTS_VISUAL_CRITIQUE")
+    points_image_per_output: int = Field(default=8, alias="POINTS_IMAGE_PER_OUTPUT")
+    points_tts_per_1000_chars: int = Field(default=2, alias="POINTS_TTS_PER_1000_CHARS")
+    points_video_default_per_output: int = Field(default=40, alias="POINTS_VIDEO_DEFAULT_PER_OUTPUT")
+    points_external_side_effect: int = Field(default=1, alias="POINTS_EXTERNAL_SIDE_EFFECT")
+    points_reservation_ttl_seconds: int = Field(default=7200, alias="POINTS_RESERVATION_TTL_SECONDS")
+
     # ---- Misc ----
     prompts_dir: str = Field(default="/packages/prompts", alias="PROMPTS_DIR")
 

@@ -24,7 +24,8 @@ from app.llm.client import get_async_openai
 from app.logging_setup import get_logger
 from app.memory import format_memories, search_memories
 from app.prompts.loader import load_template, render
-from app.services.skill_router import route_skills_for_task, selected_skills_payload, SkillRouteResult
+from app.services.billing import emit_model_usage
+from app.services.skill_router import SkillRouteResult, route_skills_for_task, selected_skills_payload
 from app.tools.schema import tool_manifest_cache
 
 log = get_logger(__name__)
@@ -118,6 +119,9 @@ async def plan_node(state: SessionState) -> SessionState:
         plan=state.get("plan") if isinstance(state.get("plan"), dict) else None,
         skill_mode=state.get("skill_mode"),
         skill_model=state.get("skill_model"),
+        session_id=session_id if state.get("user_id") else None,
+        run_id=run_id,
+        usage_key=f"{run_id}:skill_router:plan:{int(state.get('reflection_count') or 0)}",
     )
     selected_skills = selected_skills_payload(skill_route)
     skill_update = {
@@ -180,6 +184,19 @@ async def plan_node(state: SessionState) -> SessionState:
         return {"plan": None, **skill_update}
 
     raw = (resp.choices[0].message.content or "").strip()
+    usage = getattr(resp, "usage", None)
+    usage_input = int(getattr(usage, "prompt_tokens", 0) or 0)
+    usage_output = int(getattr(usage, "completion_tokens", 0) or 0)
+    if state.get("user_id") and (usage_input or usage_output):
+        await emit_model_usage(
+            session_id=session_id,
+            run_id=run_id,
+            usage_key=f"{run_id}:planner:{int(state.get('reflection_count') or 0)}",
+            phase="planner",
+            model=planner_model,
+            input_tokens=usage_input,
+            output_tokens=usage_output,
+        )
     parsed = _parse_plan(raw)
     if not parsed:
         log.warning("graph.plan.unparseable", raw_preview=raw[:200])

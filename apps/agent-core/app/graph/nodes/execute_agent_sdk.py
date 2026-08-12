@@ -8,8 +8,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 import time
+from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
@@ -26,36 +26,25 @@ from claude_agent_sdk import (
     query,
 )
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
-from somna_events import MessageDeltaEvent, TokenUsageEvent
+from somna_events import MessageDeltaEvent
 
 from app.config import get_settings
 from app.events.emitter import emit
 from app.graph.autonomy_policy import delivery_validation_policy, effective_autonomy_level
 from app.graph.compact import maybe_compact
 from app.graph.model_policy import pick_executor_turn_model
-from app.graph.nodes.plan import advance_with_proof, mark_progress
-from app.graph.run_artifacts import append_executor_progress_snapshot, sync_plan_artifact
-from app.graph.state import SessionState
-from app.llm.client import anthropic_subprocess_env
-from app.logging_setup import get_logger
-from app.memory import format_memories, search_memories
-from app.prompts.loader import build_system_prompt
-from app.services.skill_router import selected_skills_payload
-from app.tools.client import get_client, ToolManifest
-from app.tools.schema import tool_manifest_cache
-
 from app.graph.nodes.execute import (
-    _ExecutionProof,
-    _PendingToolCall,
-    _compose_executor_extra_context,
     _completion_retry_message,
+    _compose_executor_extra_context,
     _content_str,
     _delivery_recovery_tool_name,
     _detect_shell_recovery,
     _emit_skill_debug_event,
+    _ExecutionProof,
     _invoke_tool_with_events,
     _merge_proof,
     _missing_delivery_reason,
+    _PendingToolCall,
     _proof_from_execution_summary,
     _render_tool_content,
     _route_or_reuse_skills,
@@ -63,6 +52,17 @@ from app.graph.nodes.execute import (
     _with_fresh_system_prompt,
     effective_mcp_tool_models_map,
 )
+from app.graph.nodes.plan import advance_with_proof, mark_progress
+from app.graph.run_artifacts import append_executor_progress_snapshot, sync_plan_artifact
+from app.graph.state import SessionState
+from app.llm.client import anthropic_subprocess_env
+from app.logging_setup import get_logger
+from app.memory import format_memories, search_memories
+from app.prompts.loader import build_system_prompt
+from app.services.billing import emit_model_usage
+from app.services.skill_router import selected_skills_payload
+from app.tools.client import ToolManifest, get_client
+from app.tools.schema import tool_manifest_cache
 
 log = get_logger(__name__)
 
@@ -80,6 +80,7 @@ class _SomnaBridge:
     plan: dict[str, Any] | None
     artifact_state: dict[str, Any]
     mcp_tool_models: dict[str, str] | None = None
+    billing_enabled: bool = False
     tool_round: int = 0
 
     async def run_tool(self, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -102,6 +103,7 @@ class _SomnaBridge:
             working_messages=self.working_messages,
             manifest=manifest,
             mcp_tool_models=self.mcp_tool_models,
+            billing_enabled=self.billing_enabled,
         )
         proof_acc = delta
 
@@ -125,6 +127,7 @@ class _SomnaBridge:
                 working_messages=self.working_messages,
                 manifest=self.manifest_by_name.get("shell"),
                 mcp_tool_models=self.mcp_tool_models,
+                billing_enabled=self.billing_enabled,
             )
             proof_acc = _merge_proof(proof_acc, install_proof)
             if install_result.ok:
@@ -139,6 +142,7 @@ class _SomnaBridge:
                     working_messages=self.working_messages,
                     manifest=manifest,
                     mcp_tool_models=self.mcp_tool_models,
+                    billing_enabled=self.billing_enabled,
                 )
                 proof_acc = _merge_proof(proof_acc, retry_proof)
 
@@ -339,6 +343,7 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
         plan=state.get("plan"),
         artifact_state=artifact_state,
         mcp_tool_models=mcp_maps,
+        billing_enabled=bool(state.get("user_id")),
     )
     somna = create_sdk_mcp_server(
         name=_SOMNA_MCP_SERVER_NAME,
@@ -380,6 +385,7 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
                 run_id=run_id,
                 compact_model=state.get("compact_model"),
                 longctx_model=state.get("longctx_model"),
+                billing_enabled=bool(state.get("user_id")),
             )
             if did_compact and summary:
                 compact_memory = summary
@@ -449,15 +455,19 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
                         if pi or co:
                             prompt_tokens_total += pi
                             completion_tokens_total += co
-                            await emit(
-                                TokenUsageEvent(
-                                    session_id=session_id,
-                                    run_id=run_id,
-                                    model=turn_model,
-                                    input=pi,
-                                    output=co,
-                                    cost_usd=0.0,
-                                )
+                            sdk_cost = float(getattr(message, "total_cost_usd", 0.0) or 0.0)
+                            await emit_model_usage(
+                                session_id=session_id,
+                                run_id=run_id,
+                                usage_key=(
+                                    f"{run_id}:execute_sdk:{int(state.get('reflection_count') or 0)}:"
+                                    f"{finish_validation_failures}:{int(message.num_turns or 0)}"
+                                ),
+                                phase="execute_agent_sdk",
+                                model=turn_model,
+                                input_tokens=pi,
+                                output_tokens=co,
+                                cost_usd=sdk_cost,
                             )
 
             final_text = "".join(assistant_text_buf).strip()

@@ -18,6 +18,7 @@ from app.graph.state import SessionState
 from app.llm.client import get_async_openai
 from app.logging_setup import get_logger
 from app.prompts.loader import load_template, render
+from app.services.billing import emit_model_usage
 
 log = get_logger(__name__)
 
@@ -262,6 +263,19 @@ async def reflect_node(state: SessionState) -> SessionState:
                 "continue_execute",
                 "replan",
             }:
+                usage = getattr(resp, "usage", None)
+                usage_input = int(getattr(usage, "prompt_tokens", 0) or 0)
+                usage_output = int(getattr(usage, "completion_tokens", 0) or 0)
+                if state.get("user_id") and (usage_input or usage_output):
+                    await emit_model_usage(
+                        session_id=session_id,
+                        run_id=run_id,
+                        usage_key=f"{run_id}:reflect:{reflections}",
+                        phase="reflect",
+                        model=_reasoner,
+                        input_tokens=usage_input,
+                        output_tokens=usage_output,
+                    )
                 decision = parsed
     except Exception as exc:  # noqa: BLE001
         log.warning("graph.reflect.llm_failed", error=str(exc))

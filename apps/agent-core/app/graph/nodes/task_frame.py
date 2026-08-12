@@ -17,6 +17,14 @@ from app.graph.user_turn import last_human_turn_text
 from app.llm.client import get_async_openai
 from app.logging_setup import get_logger
 from app.prompts.loader import load_template, render
+from app.services.billing import (
+    InsufficientPointsError,
+    authorize_billing_run,
+    emit_model_usage,
+    normalize_deliverable_type,
+    normalize_effort_level,
+    normalize_task_mode,
+)
 from app.services.skills import list_enabled_skill_candidates
 
 log = get_logger(__name__)
@@ -147,14 +155,14 @@ def normalize_task_frame(parsed: dict[str, Any] | None) -> dict[str, Any]:
 
     out["needs_clarification"] = bool(parsed.get("needs_clarification"))
     out["clarification_questions"] = _coerce_str_list(parsed.get("clarification_questions"))
-    out["task_mode"] = str(parsed.get("task_mode") or out["task_mode"]).strip() or out["task_mode"]
-    out["effort_level"] = str(parsed.get("effort_level") or out["effort_level"]).strip() or out["effort_level"]
+    out["task_mode"] = normalize_task_mode(parsed.get("task_mode") or out["task_mode"])
+    out["effort_level"] = normalize_effort_level(parsed.get("effort_level") or out["effort_level"])
     _al = str(parsed.get("autonomy_level") or "").strip().lower()
     if _al in ("low", "medium", "high"):
         out["autonomy_level"] = _al
     out["risk_level"] = str(parsed.get("risk_level") or out["risk_level"]).strip() or out["risk_level"]
-    out["deliverable_type"] = (
-        str(parsed.get("deliverable_type") or out["deliverable_type"]).strip() or out["deliverable_type"]
+    out["deliverable_type"] = normalize_deliverable_type(
+        parsed.get("deliverable_type") or out["deliverable_type"]
     )
     if "should_invoke_planner" in parsed:
         out["should_invoke_planner"] = bool(parsed.get("should_invoke_planner"))
@@ -259,6 +267,21 @@ async def _emit_task_frame_ui(session_id, run_id: str | None, frame: dict[str, A
     )
 
 
+async def _authorize_frame_billing(state: SessionState, frame: dict[str, Any]) -> str | None:
+    """Reserve the task budget once framing is deterministic; tests/anonymous runs skip billing."""
+    run_id = state.get("run_id")
+    if not run_id or not state.get("user_id"):
+        return None
+    try:
+        await authorize_billing_run(run_id=run_id, frame=frame)
+    except InsufficientPointsError as exc:
+        return f"积分不足：当前 {exc.current}，本任务预计需要冻结 {exc.required} 积分"
+    except Exception as exc:  # noqa: BLE001
+        log.exception("graph.task_frame.billing_authorize_failed", run_id=run_id, error=str(exc))
+        return f"积分预授权失败：{exc}"
+    return None
+
+
 def deliverable_type_implies_artifact(deliverable_type: str) -> bool:
     dt = (deliverable_type or "").strip().lower()
     if dt in ("", "unspecified", "chat_answer", "direct_answer"):
@@ -276,7 +299,8 @@ async def task_frame_node(state: SessionState) -> SessionState:
         frame_b = frame_for_blank_user_message()
         await _emit_task_frame_ui(session_id, run_id, frame_b)
         path = await persist_task_frame_pointer(state, frame_b)
-        return {"task_frame": frame_b, "task_frame_path": path}
+        billing_error = await _authorize_frame_billing(state, frame_b)
+        return {"task_frame": frame_b, "task_frame_path": path, **({"error": billing_error} if billing_error else {})}
 
     if state.get("skip_planner"):
         tf = dict(DEFAULT_TASK_FRAME)
@@ -284,7 +308,8 @@ async def task_frame_node(state: SessionState) -> SessionState:
         log.info("graph.task_frame.skipped", session_id=str(session_id), reason="skip_planner")
         await _emit_task_frame_ui(session_id, run_id, tf)
         path = await persist_task_frame_pointer(state, tf)
-        return {"task_frame": tf, "task_frame_path": path}
+        billing_error = await _authorize_frame_billing(state, tf)
+        return {"task_frame": tf, "task_frame_path": path, **({"error": billing_error} if billing_error else {})}
 
     settings = get_settings()
     model = (state.get("task_frame_model") or settings.agent_default_taskframe).strip()
@@ -296,7 +321,8 @@ async def task_frame_node(state: SessionState) -> SessionState:
         _maybe_coerce_simple_definitional_qa(user_message, frame)
         await _emit_task_frame_ui(session_id, run_id, frame)
         path = await persist_task_frame_pointer(state, frame)
-        return {"task_frame": frame, "task_frame_path": path}
+        billing_error = await _authorize_frame_billing(state, frame)
+        return {"task_frame": frame, "task_frame_path": path, **({"error": billing_error} if billing_error else {})}
 
     prior = _prior_messages_for_framing(list(state.get("messages") or []))
     conv_ctx = format_conversation_context_for_framing(prior)
@@ -316,6 +342,7 @@ async def task_frame_node(state: SessionState) -> SessionState:
         )
     )
     frame: dict[str, Any]
+    usage_input = usage_output = 0
     try:
         client = get_async_openai()
         resp = await client.chat.completions.create(
@@ -326,6 +353,9 @@ async def task_frame_node(state: SessionState) -> SessionState:
             stream=False,
         )
         raw = (resp.choices[0].message.content or "").strip()
+        usage = getattr(resp, "usage", None)
+        usage_input = int(getattr(usage, "prompt_tokens", 0) or 0)
+        usage_output = int(getattr(usage, "completion_tokens", 0) or 0)
         parsed = _parse_frame_json(raw)
         frame = normalize_task_frame(parsed)
     except Exception as exc:  # noqa: BLE001
@@ -334,6 +364,16 @@ async def task_frame_node(state: SessionState) -> SessionState:
         frame["reasoning_summary"] = f"framing_llm_error: {exc}"
 
     _maybe_coerce_simple_definitional_qa(user_message, frame)
+    if state.get("user_id") and (usage_input or usage_output):
+        await emit_model_usage(
+            session_id=session_id,
+            run_id=run_id,
+            usage_key=f"{run_id}:task_frame",
+            phase="task_frame",
+            model=model,
+            input_tokens=usage_input,
+            output_tokens=usage_output,
+        )
     log.info(
         "graph.task_frame.ready",
         session_id=str(session_id),
@@ -343,4 +383,5 @@ async def task_frame_node(state: SessionState) -> SessionState:
     )
     await _emit_task_frame_ui(session_id, run_id, frame)
     path = await persist_task_frame_pointer(state, frame)
-    return {"task_frame": frame, "task_frame_path": path}
+    billing_error = await _authorize_frame_billing(state, frame)
+    return {"task_frame": frame, "task_frame_path": path, **({"error": billing_error} if billing_error else {})}

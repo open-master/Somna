@@ -12,13 +12,30 @@ from typing import Any
 from uuid import uuid4
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
-from somna_events import MessageDeltaEvent, TokenUsageEvent
+from somna_events import MessageDeltaEvent
 
 from app.config import get_settings
 from app.events.emitter import emit
 from app.graph.autonomy_policy import delivery_validation_policy, effective_autonomy_level
 from app.graph.compact import maybe_compact
 from app.graph.model_policy import pick_executor_turn_model
+from app.graph.nodes.execute import (
+    _append_executor_progress,
+    _completion_retry_message,
+    _compose_executor_extra_context,
+    _content_str,
+    _delivery_recovery_tool_name,
+    _emit_skill_debug_event,
+    _merge_proof,
+    _missing_delivery_reason,
+    _PendingToolCall,
+    _proof_from_execution_summary,
+    _route_or_reuse_skills,
+    _run_tool_calls,
+    _summarize_execution,
+    _with_fresh_system_prompt,
+    effective_mcp_tool_models_map,
+)
 from app.graph.nodes.plan import advance_with_proof, mark_progress
 from app.graph.run_artifacts import sync_plan_artifact
 from app.graph.state import SessionState
@@ -26,30 +43,12 @@ from app.llm.client import get_async_anthropic
 from app.logging_setup import get_logger
 from app.memory import format_memories, search_memories
 from app.prompts.loader import build_system_prompt
+from app.services.billing import emit_model_usage
 from app.services.skill_router import selected_skills_payload
 from app.tools.schema import (
     anthropic_tool_choice,
     manifests_to_anthropic_tools,
     tool_manifest_cache,
-)
-
-from app.graph.nodes.execute import (
-    _ExecutionProof,
-    _PendingToolCall,
-    _append_executor_progress,
-    _compose_executor_extra_context,
-    _completion_retry_message,
-    _content_str,
-    _delivery_recovery_tool_name,
-    _emit_skill_debug_event,
-    _merge_proof,
-    _missing_delivery_reason,
-    _proof_from_execution_summary,
-    _route_or_reuse_skills,
-    _run_tool_calls,
-    _summarize_execution,
-    _with_fresh_system_prompt,
-    effective_mcp_tool_models_map,
 )
 
 log = get_logger(__name__)
@@ -282,6 +281,7 @@ async def execute_anthropic_node(state: SessionState) -> SessionState:
                 run_id=run_id,
                 compact_model=state.get("compact_model"),
                 longctx_model=state.get("longctx_model"),
+                billing_enabled=bool(state.get("user_id")),
             )
             if did_compact and summary:
                 compact_memory = summary
@@ -310,15 +310,17 @@ async def execute_anthropic_node(state: SessionState) -> SessionState:
             prompt_tokens_total += usage[0]
             completion_tokens_total += usage[1]
             if usage[0] or usage[1]:
-                await emit(
-                    TokenUsageEvent(
-                        session_id=session_id,
-                        run_id=run_id,
-                        model=turn_model,
-                        input=usage[0],
-                        output=usage[1],
-                        cost_usd=0.0,
-                    )
+                await emit_model_usage(
+                    session_id=session_id,
+                    run_id=run_id,
+                    usage_key=(
+                        f"{run_id}:execute_anthropic:{int(state.get('reflection_count') or 0)}:"
+                        f"{tool_turns}:{finish_validation_failures}"
+                    ),
+                    phase="execute_anthropic",
+                    model=turn_model,
+                    input_tokens=usage[0],
+                    output_tokens=usage[1],
                 )
 
             assistant_kwargs: dict[str, Any] = {"content": turn_text}
@@ -393,6 +395,7 @@ async def execute_anthropic_node(state: SessionState) -> SessionState:
                 working_messages=working_messages,
                 manifests=manifests,
                 mcp_tool_models=mcp_tool_models_map,
+                billing_enabled=bool(state.get("user_id")),
             )
             proof = _merge_proof(proof, turn_proof)
             finish_validation_failures = 0

@@ -9,6 +9,7 @@ model can still see the most recent tool invocation and its result.
 
 from __future__ import annotations
 
+import hashlib
 from typing import Iterable
 
 from langchain_core.messages import (
@@ -17,13 +18,14 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
+from somna_events import SessionPhase, StatusEvent
 
 from app.config import get_settings
 from app.events.emitter import emit
 from app.llm.client import get_async_openai
 from app.logging_setup import get_logger
 from app.prompts.loader import load_template, render
-from somna_events import SessionPhase, StatusEvent
+from app.services.billing import emit_model_usage
 
 log = get_logger(__name__)
 
@@ -87,6 +89,7 @@ async def maybe_compact(
     run_id,
     compact_model: str | None = None,
     longctx_model: str | None = None,
+    billing_enabled: bool = False,
 ) -> tuple[list, bool, str | None]:
     """Summarise old messages in place. Returns (new_messages, did_compact, summary)."""
     settings = get_settings()
@@ -128,6 +131,19 @@ async def maybe_compact(
         return messages, False, None
 
     summary = (resp.choices[0].message.content or "").strip()
+    usage = getattr(resp, "usage", None)
+    usage_input = int(getattr(usage, "prompt_tokens", 0) or 0)
+    usage_output = int(getattr(usage, "completion_tokens", 0) or 0)
+    if billing_enabled and (usage_input or usage_output):
+        await emit_model_usage(
+            session_id=session_id,
+            run_id=run_id,
+            usage_key=f"{run_id}:compact:{hashlib.sha256(prompt.encode('utf-8')).hexdigest()[:16]}",
+            phase="compact",
+            model=model,
+            input_tokens=usage_input,
+            output_tokens=usage_output,
+        )
     if not summary:
         return messages, False, None
 

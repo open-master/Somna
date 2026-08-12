@@ -13,6 +13,7 @@ from app.graph.mcp_tool_models import merge_mcp_tool_models
 from app.graph.runtime import get_registry
 from app.graph.session_graph import close_graph, get_compiled_graph
 from app.logging_setup import get_logger
+from app.services.billing import settle_billing_run
 from app.storage.postgres import get_pool
 
 log = get_logger(__name__)
@@ -107,6 +108,11 @@ async def run_session_graph(
         reason = (run.reason if run and run.reason else None) or "interrupted"
         phase, message = cancel_status(reason)
         log.info("session.run.cancelled", session_id=str(session_id), run_id=run_id, reason=reason)
+        if user_id:
+            try:
+                await settle_billing_run(run_id=run_id, outcome="cancelled")
+            except Exception as exc:  # noqa: BLE001
+                log.exception("session.run.cancel_billing_failed", run_id=run_id, error=str(exc))
         await emit(InterruptAckEvent(session_id=session_id, run_id=run_id, reason=reason))
         await emit(
             StatusEvent(
@@ -128,6 +134,11 @@ async def run_session_graph(
         raise
     except Exception as exc:  # noqa: BLE001
         log.exception("session.run.failed", session_id=str(session_id), error=str(exc))
+        if user_id:
+            try:
+                await settle_billing_run(run_id=run_id, outcome="failure")
+            except Exception as billing_exc:  # noqa: BLE001
+                log.exception("session.run.failure_billing_failed", run_id=run_id, error=str(billing_exc))
         await emit(
             ErrorEvent(
                 session_id=session_id,

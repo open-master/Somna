@@ -68,6 +68,19 @@ def test_normalize_autonomy_level_invalid_keeps_default():
     assert out_ok["autonomy_level"] == "low"
 
 
+def test_normalize_billing_fields_rejects_untrusted_enums():
+    out = tf_mod.normalize_task_frame(
+        {
+            "task_mode": "free_unlimited",
+            "effort_level": "infinite",
+            "deliverable_type": "mystery",
+        }
+    )
+    assert out["task_mode"] == "full_pipeline"
+    assert out["effort_level"] == "medium"
+    assert out["deliverable_type"] == "unspecified"
+
+
 def test_blank_frame_is_clarify_only():
     frame = tf_mod.frame_for_blank_user_message()
     assert frame["needs_clarification"] is True

@@ -32,11 +32,6 @@ from app.config import get_settings
 from app.events.emitter import fetch_history
 from app.graph.runtime import get_registry
 from app.logging_setup import get_logger
-from app.storage.postgres import get_pool
-from app.temporal.client import get_temporal_client
-from app.temporal.models import SessionWorkflowInput
-from app.temporal.workflows import SessionRunWorkflow
-from app.services.session_cleanup import assert_session_owner, hard_delete_session
 from app.services.attachments import (
     ALLOWED_EXTENSIONS,
     fetch_object_bytes,
@@ -46,6 +41,12 @@ from app.services.attachments import (
     uploads_key_prefix,
     validate_mime_for_extension,
 )
+from app.services.billing import create_billing_run, mark_billing_run_unstarted
+from app.services.session_cleanup import assert_session_owner, hard_delete_session
+from app.storage.postgres import get_pool
+from app.temporal.client import get_temporal_client
+from app.temporal.models import SessionWorkflowInput
+from app.temporal.workflows import SessionRunWorkflow
 from app.tools.client import get_client
 
 log = get_logger(__name__)
@@ -411,6 +412,7 @@ async def post_message(
 
     run_id = f"run_{uuid.uuid4().hex[:12]}"
     workflow_id = f"session:{sid}:run:{run_id}"
+    await create_billing_run(run_id=run_id, session_id=sid, user_id=user.id)
     temporal = await get_temporal_client()
     try:
         await temporal.start_workflow(
@@ -437,6 +439,7 @@ async def post_message(
             task_queue=settings.temporal_task_queue,
         )
     except RPCError as exc:
+        await mark_billing_run_unstarted(run_id=run_id, outcome="failure")
         raise HTTPException(status_code=503, detail=f"temporal unavailable: {exc}") from exc
 
     async with pool.acquire() as conn:

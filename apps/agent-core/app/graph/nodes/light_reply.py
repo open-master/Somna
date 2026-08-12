@@ -14,6 +14,7 @@ from app.graph.state import SessionState
 from app.graph.user_turn import last_human_turn_text
 from app.llm.client import get_async_openai
 from app.logging_setup import get_logger
+from app.services.billing import emit_model_usage
 
 log = get_logger(__name__)
 
@@ -151,6 +152,7 @@ async def direct_answer_node(state: SessionState) -> SessionState:
 
     client = get_async_openai()
     text_buf = ""
+    prompt_tokens = completion_tokens = 0
     stream = await client.chat.completions.create(
         model=model,
         messages=[
@@ -169,6 +171,21 @@ async def direct_answer_node(state: SessionState) -> SessionState:
                 await emit(
                     MessageDeltaEvent(session_id=session_id, run_id=run_id, text=delta.content)
                 )
+        usage = getattr(chunk, "usage", None)
+        if usage is not None:
+            prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+            completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+
+    if state.get("user_id") and (prompt_tokens or completion_tokens):
+        await emit_model_usage(
+            session_id=session_id,
+            run_id=run_id,
+            usage_key=f"{run_id}:direct_answer",
+            phase="direct_answer",
+            model=model,
+            input_tokens=prompt_tokens,
+            output_tokens=completion_tokens,
+        )
 
     text = text_buf.strip() or "（未能生成回答，请重试或改用完整任务描述。）"
     new_msgs = list(state.get("messages") or [])

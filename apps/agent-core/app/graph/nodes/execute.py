@@ -17,13 +17,13 @@ Stops early at `agent_max_turns` to prevent runaway loops.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import json
 import mimetypes
-from pathlib import Path, PurePosixPath
 import re
 import shlex
 import time
+from dataclasses import dataclass, field
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import quote
 from uuid import uuid4
@@ -36,7 +36,6 @@ from somna_events import (
     SkillDebugEvent,
     ToolCallEvent,
     ToolResultEvent,
-    TokenUsageEvent,
 )
 
 from app.config import get_settings
@@ -52,9 +51,14 @@ from app.llm.client import get_async_openai
 from app.logging_setup import get_logger
 from app.memory import format_memories, search_memories
 from app.prompts.loader import build_system_prompt
-from app.services.skill_router import route_result_from_payload, route_skills_for_task
-from app.services.skill_router import selected_skills_payload, SkillRouteResult
-from app.tools.client import get_client
+from app.services.billing import emit_model_usage, record_tool_usage, reserve_tool_points
+from app.services.skill_router import (
+    SkillRouteResult,
+    route_result_from_payload,
+    route_skills_for_task,
+    selected_skills_payload,
+)
+from app.tools.client import ToolResult, get_client
 from app.tools.schema import manifests_to_openai_tools, openai_tool_choice, tool_manifest_cache
 
 log = get_logger(__name__)
@@ -200,6 +204,9 @@ async def _route_or_reuse_skills(state: SessionState) -> SkillRouteResult:
         plan=state.get("plan") if isinstance(state.get("plan"), dict) else None,
         skill_mode=state.get("skill_mode"),
         skill_model=state.get("skill_model"),
+        session_id=state.get("session_id") if state.get("user_id") else None,
+        run_id=state.get("run_id"),
+        usage_key=f"{state.get('run_id')}:skill_router:execute",
     )
 
 
@@ -563,6 +570,7 @@ async def execute_node(state: SessionState) -> SessionState:
                 run_id=run_id,
                 compact_model=state.get("compact_model"),
                 longctx_model=state.get("longctx_model"),
+                billing_enabled=bool(state.get("user_id")),
             )
             if did_compact and summary:
                 compact_memory = summary
@@ -584,15 +592,17 @@ async def execute_node(state: SessionState) -> SessionState:
             prompt_tokens_total += usage[0]
             completion_tokens_total += usage[1]
             if usage[0] or usage[1]:
-                await emit(
-                    TokenUsageEvent(
-                        session_id=session_id,
-                        run_id=run_id,
-                        model=turn_model,
-                        input=usage[0],
-                        output=usage[1],
-                        cost_usd=0.0,
-                    )
+                await emit_model_usage(
+                    session_id=session_id,
+                    run_id=run_id,
+                    usage_key=(
+                        f"{run_id}:execute:{int(state.get('reflection_count') or 0)}:"
+                        f"{tool_turns}:{finish_validation_failures}"
+                    ),
+                    phase="execute",
+                    model=turn_model,
+                    input_tokens=usage[0],
+                    output_tokens=usage[1],
                 )
 
             # Append assistant turn to conversation.
@@ -668,6 +678,7 @@ async def execute_node(state: SessionState) -> SessionState:
                 working_messages=working_messages,
                 manifests=manifests,
                 mcp_tool_models=mcp_tool_models_map,
+                billing_enabled=bool(state.get("user_id")),
             )
             proof = _merge_proof(proof, turn_proof)
             finish_validation_failures = 0
@@ -843,6 +854,7 @@ async def _run_tool_calls(
     working_messages: list,
     manifests: list,
     mcp_tool_models: dict[str, str] | None = None,
+    billing_enabled: bool = False,
 ) -> _ExecutionProof:
     """Invoke each tool via MCP Hub, emit events, append tool messages."""
     mcp = get_client()
@@ -861,6 +873,7 @@ async def _run_tool_calls(
             working_messages=working_messages,
             manifest=manifest_by_name.get(pc.name),
             mcp_tool_models=mcp_tool_models,
+            billing_enabled=billing_enabled,
         )
         proof = _merge_proof(proof, delta)
 
@@ -884,6 +897,7 @@ async def _run_tool_calls(
                 working_messages=working_messages,
                 manifest=manifest_by_name.get("shell"),
                 mcp_tool_models=mcp_tool_models,
+                billing_enabled=billing_enabled,
             )
             proof = _merge_proof(proof, install_proof)
             if install_result.ok:
@@ -898,6 +912,7 @@ async def _run_tool_calls(
                     working_messages=working_messages,
                     manifest=manifest_by_name.get(pc.name),
                     mcp_tool_models=mcp_tool_models,
+                    billing_enabled=billing_enabled,
                 )
                 proof = _merge_proof(proof, retry_proof)
     return proof
@@ -1001,6 +1016,7 @@ async def _invoke_tool_with_events(
     working_messages: list,
     manifest,
     mcp_tool_models: dict[str, str] | None = None,
+    billing_enabled: bool = False,
 ) -> tuple[Any, _ExecutionProof]:
     eff_args = args
     if (
@@ -1011,6 +1027,40 @@ async def _invoke_tool_with_events(
         dm = (mcp_tool_models.get(tool_name) or "").strip()
         if dm:
             eff_args = {**args, "model": dm}
+    if billing_enabled and run_id:
+        allowed, required, current = await reserve_tool_points(
+            run_id=run_id,
+            tool_name=tool_name,
+            args=eff_args,
+        )
+        if not allowed:
+            result = ToolResult(
+                ok=False,
+                error=f"积分不足，调用 {tool_name} 还需冻结 {required} 积分，当前可用 {current}",
+            )
+            await emit(
+                ToolCallEvent(
+                    session_id=session_id,
+                    run_id=run_id,
+                    id=event_id,
+                    name=tool_name,
+                    args=eff_args,
+                )
+            )
+            await emit(
+                ToolResultEvent(
+                    session_id=session_id,
+                    run_id=run_id,
+                    id=event_id,
+                    ok=False,
+                    preview=result.error or "积分不足",
+                    duration_ms=0,
+                )
+            )
+            working_messages.append(
+                ToolMessage(content=_render_tool_content(result), tool_call_id=event_id, name=tool_name)
+            )
+            return result, _ExecutionProof()
     await emit(
         ToolCallEvent(
             session_id=session_id,
@@ -1043,6 +1093,14 @@ async def _invoke_tool_with_events(
             duration_ms=duration_ms,
         )
     )
+    if billing_enabled:
+        await record_tool_usage(
+            run_id=run_id,
+            idempotency_key=f"{run_id}:tool:{event_id}",
+            tool_name=tool_name,
+            args=eff_args,
+            result=result,
+        )
 
     working_messages.append(
         ToolMessage(content=_render_tool_content(result), tool_call_id=event_id, name=tool_name)

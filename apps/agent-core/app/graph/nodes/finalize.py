@@ -7,7 +7,9 @@ from somna_events import ErrorEvent, SessionPhase, StatusEvent
 from app.events.emitter import emit
 from app.graph.state import SessionState
 from app.logging_setup import get_logger
-from app.memory import add_memory, is_enabled as memory_enabled
+from app.memory import add_memory
+from app.memory import is_enabled as memory_enabled
+from app.services.billing import settle_billing_run
 from app.storage.postgres import get_pool
 
 log = get_logger(__name__)
@@ -17,6 +19,19 @@ async def finalize_node(state: SessionState) -> SessionState:
     session_id = state["session_id"]
     run_id = state.get("run_id")
     err = state.get("error")
+    frame = state.get("task_frame") or {}
+
+    if err:
+        billing_outcome = "failure"
+    elif frame.get("needs_clarification"):
+        billing_outcome = "clarification"
+    else:
+        billing_outcome = "success"
+    if state.get("user_id"):
+        try:
+            await settle_billing_run(run_id=run_id, outcome=billing_outcome)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("graph.finalize.billing_failed", run_id=run_id, error=str(exc))
 
     if err:
         await emit(
@@ -38,7 +53,6 @@ async def finalize_node(state: SessionState) -> SessionState:
         )
         final_status = "error"
     else:
-        frame = state.get("task_frame") or {}
         if frame.get("needs_clarification"):
             # 本轮已输出追问，会话仍在等待用户补充，不应标记为「整个任务已完成」。
             await emit(

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
 import json
+from dataclasses import dataclass, field
 from typing import Any
 
 from app.config import get_settings
 from app.llm.client import get_async_openai
 from app.logging_setup import get_logger
+from app.services.billing import emit_model_usage
 from app.services.skills import list_enabled_skill_candidates
 
 log = get_logger(__name__)
@@ -237,6 +238,9 @@ async def route_skills_for_task(
     plan: dict[str, Any] | None,
     skill_mode: str | None,
     skill_model: str | None = None,
+    session_id: Any | None = None,
+    run_id: str | None = None,
+    usage_key: str | None = None,
 ) -> SkillRouteResult:
     if (skill_mode or "auto").strip().lower() == "off":
         return SkillRouteResult(selected=[], prompt_block=None)
@@ -316,6 +320,19 @@ Plan:
             candidate_payload = _extract_json_object(resp.choices[0].message.content or "")
             if not isinstance(candidate_payload.get("selected"), list):
                 raise ValueError("skill router response missing selected array")
+            usage = getattr(resp, "usage", None)
+            usage_input = int(getattr(usage, "prompt_tokens", 0) or 0)
+            usage_output = int(getattr(usage, "completion_tokens", 0) or 0)
+            if session_id is not None and run_id and (usage_input or usage_output):
+                await emit_model_usage(
+                    session_id=session_id,
+                    run_id=run_id,
+                    usage_key=usage_key or f"{run_id}:skill_router",
+                    phase="skill_router",
+                    model=model,
+                    input_tokens=usage_input,
+                    output_tokens=usage_output,
+                )
             payload = candidate_payload
             break
         except Exception as exc:  # noqa: BLE001
