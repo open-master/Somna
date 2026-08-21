@@ -43,7 +43,7 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { createSession, deleteSession, listSessions, patchSessionTitle, type Session } from "@/lib/api/sessions";
 import { sessionToSummary } from "@/lib/session-summary";
-import { clearAccessTokenCookie } from "@/lib/auth/cookie";
+import { logoutSession } from "@/lib/auth/cookie";
 import { meRequest, type AuthUser } from "@/lib/api/auth";
 import { cn } from "@/lib/utils/cn";
 import { useSessionStore, type SessionSummary } from "@/lib/store/session";
@@ -95,8 +95,7 @@ export function Sidebar() {
       .catch((err) => {
         console.error("sessions.list.failed", err);
         if (err instanceof Error && /401|403/.test(err.message)) {
-          clearAccessTokenCookie();
-          router.push("/login");
+          void logoutSession().then(() => router.push("/login"));
         }
       });
     return () => {
@@ -119,8 +118,7 @@ export function Sidebar() {
           router.replace(`/chat/${s.id}`);
         } catch (ce) {
           if (ce instanceof Error && /401|403/.test(ce.message)) {
-            clearAccessTokenCookie();
-            router.push("/login");
+            void logoutSession().then(() => router.push("/login"));
             return;
           }
           console.error("sessions.create_after_delete.failed", ce);
@@ -136,8 +134,7 @@ export function Sidebar() {
     } catch (e) {
       setDeletePromptId(null);
       if (e instanceof Error && /401|403/.test(e.message)) {
-        clearAccessTokenCookie();
-        router.push("/login");
+        void logoutSession().then(() => router.push("/login"));
         return;
       }
       setErrorAlert(e instanceof Error ? e.message : "删除失败");
@@ -156,8 +153,7 @@ export function Sidebar() {
       setRenameTarget(null);
     } catch (e) {
       if (e instanceof Error && /401|403/.test(e.message)) {
-        clearAccessTokenCookie();
-        router.push("/login");
+        void logoutSession().then(() => router.push("/login"));
         return;
       }
       setErrorAlert(e instanceof Error ? e.message : "重命名失败");
@@ -183,8 +179,7 @@ export function Sidebar() {
       router.push(`/chat/${s.id}`);
     } catch (e) {
       if (e instanceof Error && /401|403/.test(e.message)) {
-        clearAccessTokenCookie();
-        router.push("/login");
+        void logoutSession().then(() => router.push("/login"));
         return;
       }
       console.error("createSession.failed", e);
@@ -441,8 +436,7 @@ export function Sidebar() {
           aria-label="退出登录"
           title="退出登录"
           onClick={() => {
-            clearAccessTokenCookie();
-            router.push("/");
+            void logoutSession().then(() => router.push("/"));
           }}
           className={cn(sidebarCollapsed && "w-full")}
         >

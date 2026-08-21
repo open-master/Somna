@@ -28,7 +28,7 @@ async function readApiErrorMessage(res: Response, fallback: string): Promise<str
   return text.length <= 400 ? text : fallback;
 }
 
-/** 浏览器走 Next 反代，以便携带 cookie + Authorization；SSR 直连 agent-core（仅构建/少数场景）。 */
+/** 浏览器走 Next 反代，携带 HttpOnly Cookie；SSR 直连 agent-core（仅构建/少数场景）。 */
 const API_BASE =
   typeof window !== "undefined"
     ? "/api/v1/sessions"

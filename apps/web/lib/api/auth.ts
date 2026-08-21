@@ -1,17 +1,9 @@
-import { ACCESS_TOKEN_COOKIE } from "@/lib/auth/cookie";
-
 const AUTH_BASE =
   typeof window !== "undefined"
     ? "/api/v1/auth"
     : `${process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000"}/v1/auth`;
 
-function cookieAuthHeaders(): HeadersInit {
-  if (typeof window === "undefined") return {};
-  const m = document.cookie.match(new RegExp(`(?:^|; )${ACCESS_TOKEN_COOKIE}=([^;]*)`));
-  const g1 = m?.[1];
-  const t = g1 != null ? decodeURIComponent(g1) : null;
-  return t ? { Authorization: `Bearer ${t}` } : {};
-}
+const CREDENTIALS: RequestCredentials = "same-origin";
 
 async function readApiError(res: Response, fallback: string): Promise<string> {
   try {
@@ -48,13 +40,14 @@ export interface AuthUser {
 }
 
 export interface TokenResponse {
-  access_token: string;
+  access_token?: string;
   user: AuthUser;
 }
 
 export async function sendRegistrationCode(email: string): Promise<void> {
   const res = await fetch(`${AUTH_BASE}/send-registration-code`, {
     method: "POST",
+    credentials: CREDENTIALS,
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ email: email.trim() }),
   });
@@ -64,6 +57,7 @@ export async function sendRegistrationCode(email: string): Promise<void> {
 export async function sendLoginCode(email: string): Promise<void> {
   const res = await fetch(`${AUTH_BASE}/send-login-code`, {
     method: "POST",
+    credentials: CREDENTIALS,
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ email: email.trim() }),
   });
@@ -73,6 +67,7 @@ export async function sendLoginCode(email: string): Promise<void> {
 export async function registerRequest(email: string, password: string, code: string): Promise<TokenResponse> {
   const res = await fetch(`${AUTH_BASE}/register`, {
     method: "POST",
+    credentials: CREDENTIALS,
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ email: email.trim(), password, code: code.trim() }),
   });
@@ -83,6 +78,7 @@ export async function registerRequest(email: string, password: string, code: str
 export async function loginRequest(email: string, password: string): Promise<TokenResponse> {
   const res = await fetch(`${AUTH_BASE}/login`, {
     method: "POST",
+    credentials: CREDENTIALS,
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ email: email.trim(), password }),
   });
@@ -93,6 +89,7 @@ export async function loginRequest(email: string, password: string): Promise<Tok
 export async function loginCodeRequest(email: string, code: string): Promise<TokenResponse> {
   const res = await fetch(`${AUTH_BASE}/login-code`, {
     method: "POST",
+    credentials: CREDENTIALS,
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ email: email.trim(), code: code.trim() }),
   });
@@ -103,6 +100,7 @@ export async function loginCodeRequest(email: string, code: string): Promise<Tok
 export async function googleAuthRequest(credential: string): Promise<TokenResponse> {
   const res = await fetch(`${AUTH_BASE}/google`, {
     method: "POST",
+    credentials: CREDENTIALS,
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ credential }),
   });
@@ -112,7 +110,7 @@ export async function googleAuthRequest(credential: string): Promise<TokenRespon
 
 export async function meRequest(): Promise<AuthUser | null> {
   const res = await fetch(`${AUTH_BASE}/me`, {
-    headers: { ...cookieAuthHeaders() },
+    credentials: CREDENTIALS,
     cache: "no-store",
   });
   if (!res.ok) return null;
@@ -122,7 +120,8 @@ export async function meRequest(): Promise<AuthUser | null> {
 export async function updateMyProfile(username: string): Promise<AuthUser> {
   const res = await fetch(`${AUTH_BASE}/me`, {
     method: "PATCH",
-    headers: { "content-type": "application/json", ...cookieAuthHeaders() },
+    credentials: CREDENTIALS,
+    headers: { "content-type": "application/json" },
     body: JSON.stringify({ username }),
   });
   if (!res.ok) throw new Error(await readApiError(res, `update profile: ${res.status}`));
@@ -135,7 +134,8 @@ export async function changeMyPassword(body: {
 }): Promise<void> {
   const res = await fetch(`${AUTH_BASE}/me/password`, {
     method: "PUT",
-    headers: { "content-type": "application/json", ...cookieAuthHeaders() },
+    credentials: CREDENTIALS,
+    headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(await readApiError(res, `change password: ${res.status}`));

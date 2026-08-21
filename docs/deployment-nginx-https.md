@@ -26,6 +26,7 @@ docker compose -f docker-compose.yml -f docker-compose.nginx.yml up -d --build
 
 - **`nginx`**：对外 **80 / 443**；读 **`certbot-conf`**（证书，只读）与 **`certbot-www`**（ACME webroot）。
 - **`web`**：不再向宿主机暴露 **3000**（`ports` 被 `!override []`）；仅 **`expose: "3000"`**，由 Nginx 在 Compose 网络内访问。
+- **数据面与内部 API**（Postgres / MySQL / Redis / MinIO / Milvus / NATS / Temporal UI / LiteLLM / Langfuse / Agent Core）同样去掉宿主端口，只留 Docker 内网。
 - 若 **`/etc/letsencrypt/live/$TLS_DOMAIN/`** 下尚无有效证书，`docker-entrypoint` 会先启用 **仅 80**：ACME + 反代 Next；签发成功后重启 **nginx** 会切换为 **HTTP→HTTPS + 443**。
 
 ## 首次签发证书（webroot）

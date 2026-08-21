@@ -44,6 +44,59 @@ services:
     expose:
       - "3000"
 
+  postgres:
+    ports: !override []
+    expose:
+      - "5432"
+
+  mysql:
+    ports: !override []
+    expose:
+      - "3306"
+
+  redis:
+    ports: !override []
+    expose:
+      - "6379"
+
+  minio:
+    ports: !override []
+    expose:
+      - "9000"
+      - "9001"
+
+  milvus:
+    ports: !override []
+    expose:
+      - "19530"
+      - "9091"
+
+  nats:
+    ports: !override []
+    expose:
+      - "4222"
+      - "8222"
+
+  temporal-ui:
+    ports: !override []
+    expose:
+      - "8080"
+
+  langfuse:
+    ports: !override []
+    expose:
+      - "3000"
+
+  litellm:
+    ports: !override []
+    expose:
+      - "4000"
+
+  agent-core:
+    ports: !override []
+    expose:
+      - "8000"
+
   certbot:
     image: certbot/certbot:v3.3.0
     volumes:

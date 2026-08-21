@@ -59,8 +59,8 @@ function LoginForm() {
     setError(null);
     setLoading(true);
     try {
-      const { access_token } = await loginRequest(email.trim(), password);
-      await finishLogin(router, access_token, nextPath, afterLogin);
+      await loginRequest(email.trim(), password);
+      await finishLogin(router, nextPath, afterLogin);
     } catch (err) {
       setError(err instanceof Error ? err.message : "登录失败");
     } finally {
@@ -73,8 +73,8 @@ function LoginForm() {
     setError(null);
     setLoading(true);
     try {
-      const { access_token } = await loginCodeRequest(email.trim(), code.trim());
-      await finishLogin(router, access_token, nextPath, afterLogin);
+      await loginCodeRequest(email.trim(), code.trim());
+      await finishLogin(router, nextPath, afterLogin);
     } catch (err) {
       setError(err instanceof Error ? err.message : "登录失败");
     } finally {

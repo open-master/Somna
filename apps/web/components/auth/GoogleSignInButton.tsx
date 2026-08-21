@@ -68,8 +68,8 @@ export function GoogleSignInButton({
         if (!g?.accounts?.id) return;
 
         async function onCred(credential: string) {
-          const { access_token } = await googleAuthRequest(credential);
-          await finishLogin(router, access_token, nextPath, afterLogin);
+          await googleAuthRequest(credential);
+          await finishLogin(router, nextPath, afterLogin);
         }
 
         g.accounts.id.initialize({

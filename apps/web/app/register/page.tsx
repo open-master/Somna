@@ -57,8 +57,8 @@ function RegisterForm() {
     setError(null);
     setLoading(true);
     try {
-      const { access_token } = await registerRequest(email.trim(), password, code.trim());
-      await finishLogin(router, access_token, nextPath, afterLogin);
+      await registerRequest(email.trim(), password, code.trim());
+      await finishLogin(router, nextPath, afterLogin);
     } catch (err) {
       setError(err instanceof Error ? err.message : "注册失败");
     } finally {

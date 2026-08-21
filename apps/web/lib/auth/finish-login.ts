@@ -2,7 +2,6 @@
 
 import type { Session } from "@/lib/api/sessions";
 import { createSession } from "@/lib/api/sessions";
-import { setAccessTokenCookie } from "@/lib/auth/cookie";
 import { useSessionStore } from "@/lib/store/session";
 import type { SessionSummary } from "@/lib/store/session";
 
@@ -20,14 +19,12 @@ function toSummary(s: Session): SessionSummary {
 
 type AppRouter = { replace: (href: string) => void; refresh: () => void };
 
-/** 写入 token 后：可选直达新会话，否则跳转 nextPath */
+/** 登录接口已通过 Set-Cookie 写入 HttpOnly JWT 后再跳转。 */
 export async function finishLogin(
   router: AppRouter,
-  accessToken: string,
   nextPath: string,
   afterLogin: string | null,
 ): Promise<void> {
-  setAccessTokenCookie(accessToken);
   if (afterLogin === "new-session") {
     try {
       const s = await createSession();

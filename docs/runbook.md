@@ -32,6 +32,8 @@
 | MinIO API | 9000 | |
 | MinIO Console | 9001 | |
 
+生产叠加 `docker-compose.nginx.yml` 时，上表除 Nginx **80/443** 外均不映射宿主；健康检查用 `docker compose exec`（见 `scripts/health_check.sh`）。
+
 ## 3. 常用命令
 
 ```bash

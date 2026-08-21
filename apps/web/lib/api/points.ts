@@ -31,6 +31,7 @@ async function readApiError(res: Response, fallback: string): Promise<string> {
 async function pointsFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${POINTS_BASE}${path}`, {
     cache: "no-store",
+    credentials: "same-origin",
     ...init,
     headers: {
       ...(init?.body ? { "content-type": "application/json" } : {}),
