@@ -51,7 +51,7 @@ app/
 
 ## 本地运行
 
-工具与沙盒 API 需要 `Authorization: Bearer $MCP_HUB_INTERNAL_TOKEN`（与 agent-core 共用）。`/healthz` 无需鉴权。
+工具与沙盒 API 需要 `Authorization: Bearer $MCP_HUB_INTERNAL_TOKEN`（与 agent-core 共用）。`/healthz` 无需鉴权。`/docs`、`/redoc`、`/openapi.json` 已关闭。
 
 ```bash
 cd apps/mcp-hub

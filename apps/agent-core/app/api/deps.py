@@ -14,7 +14,7 @@ from app.storage.postgres import get_pool
 
 security = HTTPBearer(auto_error=False)
 
-# 与前端 middleware、lib/auth/cookie.ts 一致；新窗口/ <img> 预览只带 Cookie 不带 Authorization
+# 与前端 middleware、lib/auth/cookie.ts 一致；预览 <img> 只带 Cookie
 _ACCESS_TOKEN_COOKIE = "somna_access_token"
 
 
@@ -43,8 +43,6 @@ async def get_current_user(
     token: str | None = None
     if creds and creds.scheme.lower() == "bearer":
         token = creds.credentials
-    if not token:
-        token = request.query_params.get("access_token")
     if not token:
         token = request.cookies.get(_ACCESS_TOKEN_COOKIE)
     if not token:

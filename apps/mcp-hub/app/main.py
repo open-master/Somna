@@ -43,6 +43,9 @@ app = FastAPI(
     version=__version__,
     description="Tool server exposing shell / filesystem / search to Agent Core.",
     lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 
 app.include_router(health.router)

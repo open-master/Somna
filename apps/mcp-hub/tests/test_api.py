@@ -35,6 +35,12 @@ async def test_healthz_is_public(anon_client: AsyncClient):
     assert r.json()["service"] == "mcp-hub"
 
 
+async def test_docs_are_disabled(anon_client: AsyncClient, client: AsyncClient):
+    for path in ("/docs", "/redoc", "/openapi.json"):
+        assert (await anon_client.get(path)).status_code == 404
+        assert (await client.get(path)).status_code == 404
+
+
 async def test_tools_require_internal_token(anon_client: AsyncClient):
     r = await anon_client.get("/v1/tools")
     assert r.status_code == 401
