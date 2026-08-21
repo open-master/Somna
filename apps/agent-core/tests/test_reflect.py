@@ -294,6 +294,72 @@ def test_has_artifact_evidence_ignores_verified_paths():
     assert reflect_mod._has_artifact_evidence({}) is False
 
 
+def test_has_artifact_evidence_rejects_clips_for_composed_video_frame():
+    summary = {"written_paths": ["artifacts/wan_t2v_closing_shot.mp4"]}
+    frame = {
+        "deliverable_type": "video",
+        "success_criteria": ["交付最终成片", "画面与旁白同步"],
+    }
+    assert (
+        reflect_mod._has_artifact_evidence(
+            summary,
+            task_frame=frame,
+            user_message="做纪录片",
+        )
+        is False
+    )
+    summary2 = {"written_paths": ["artifacts/final_documentary.mp4"]}
+    assert (
+        reflect_mod._has_artifact_evidence(
+            summary2,
+            task_frame=frame,
+            user_message="做纪录片",
+        )
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_reflect_blocks_finalize_when_video_clips_are_not_composed_delivery():
+    sid = uuid4()
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                create=AsyncMock(
+                    return_value=_mk_completion('{"decision":"finalize","reason":"已经有视频","focus":""}')
+                )
+            )
+        )
+    )
+
+    with (
+        patch.object(reflect_mod, "emit", AsyncMock()),
+        patch.object(reflect_mod, "get_async_openai", return_value=client),
+        patch.object(reflect_mod, "load_template", return_value="tpl"),
+        patch.object(reflect_mod, "render", return_value="x"),
+    ):
+        out = await reflect_mod.reflect_node(
+            {
+                "session_id": sid,
+                "run_id": "r1",
+                "user_message": "做一条约 20 秒的纪录片",
+                "assistant_text": "done: 完成",
+                "task_frame": {
+                    "deliverable_type": "video",
+                    "success_criteria": ["生成横屏 16:9、约 20 秒视频", "画面与旁白同步"],
+                },
+                "execution_summary": {
+                    "written_paths": ["artifacts/wan_t2v_closing_shot.mp4"],
+                    "successful_tool_calls": 4,
+                },
+                "plan": {"todos": [{"id": "1", "text": "出片", "status": "done"}]},
+            }
+        )
+
+    assert out["next_node"] == "execute"
+    assert "成片" in (out["reflection"]["reason"] or "") or "素材" in (out["reflection"]["reason"] or "")
+
+
 @pytest.mark.asyncio
 async def test_reflect_blocks_skill_finalize_when_only_verified_paths_exist():
     sid = uuid4()

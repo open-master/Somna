@@ -486,7 +486,8 @@ async def test_execute_rejects_fake_done_for_artifact_goal_without_tool_proof():
 
     assert state["finished"] is True
     assert "error" not in state
-    assert "未检测到真实交付证据" in state["execution_summary"]["delivery_missing_reason"]
+    reason = state["execution_summary"]["delivery_missing_reason"] or ""
+    assert "未检测到真实交付证据" in reason or "未完成" in reason
 
 
 @pytest.mark.asyncio
@@ -538,7 +539,8 @@ async def test_execute_forces_shell_tool_after_missing_delivery_proof():
     assert stream.await_args_list[0].kwargs["forced_tool_name"] is None
     assert stream.await_args_list[1].kwargs["forced_tool_name"] == "shell"
     assert "error" not in state
-    assert "未检测到真实交付证据" in state["execution_summary"]["delivery_missing_reason"]
+    reason = state["execution_summary"]["delivery_missing_reason"] or ""
+    assert "未检测到真实交付证据" in reason or "未完成" in reason
 
 
 @pytest.mark.asyncio
@@ -934,6 +936,80 @@ def test_missing_delivery_reason_task_frame_implies_artifact_without_keywords():
     )
     assert reason is not None
     assert "工具" in reason
+
+
+def test_missing_delivery_reason_rejects_generator_clips_when_compose_required():
+    proof = exe._ExecutionProof(
+        successful_tool_calls=3,
+        written_paths={
+            "artifacts/wan_t2v_closing_shot.mp4",
+            "artifacts/wan_t2v_office.mp4",
+        },
+    )
+    reason = exe._missing_delivery_reason(
+        user_message="做一条乔布斯与盖茨的纪录片",
+        plan={
+            "todos": [
+                {"id": "5", "text": "将视频片段合成为约 20 秒连续视频", "status": "done"},
+                {"id": "6", "text": "验证最终视频", "status": "done"},
+            ]
+        },
+        proof=proof,
+        task_frame={
+            "deliverable_type": "video",
+            "success_criteria": ["生成横屏 16:9、约 20 秒视频", "画面与旁白同步", "交付最终视频文件路径"],
+        },
+    )
+    assert reason is not None
+    assert "成片" in reason or "素材" in reason
+
+
+def test_missing_delivery_reason_accepts_non_clip_video_as_composed_delivery():
+    proof = exe._ExecutionProof(
+        successful_tool_calls=4,
+        written_paths={
+            "artifacts/wan_t2v_clip.mp4",
+            "artifacts/final_documentary.mp4",
+        },
+    )
+    reason = exe._missing_delivery_reason(
+        user_message="做一条纪录片",
+        plan=None,
+        proof=proof,
+        task_frame={
+            "deliverable_type": "video",
+            "success_criteria": ["交付最终视频文件"],
+        },
+    )
+    assert reason is None
+
+
+def test_unfinished_plan_blocks_stop():
+    reason = exe._unfinished_plan_reason(
+        {
+            "todos": [
+                {"id": "1", "text": "合成成片", "status": "in_progress"},
+                {"id": "2", "text": "验收", "status": "pending"},
+            ]
+        }
+    )
+    assert reason is not None
+    assert "未完成" in reason
+
+
+def test_missing_delivery_reason_rejects_wrong_type_for_website():
+    proof = exe._ExecutionProof(
+        successful_tool_calls=1,
+        written_paths={"notes.txt"},
+    )
+    reason = exe._missing_delivery_reason(
+        user_message="做一个站点",
+        plan=None,
+        proof=proof,
+        task_frame={"deliverable_type": "website"},
+    )
+    assert reason is not None
+    assert "网页" in reason
 
 
 @pytest.mark.asyncio

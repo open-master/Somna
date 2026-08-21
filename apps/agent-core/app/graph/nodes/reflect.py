@@ -13,7 +13,12 @@ from app.config import get_settings
 from app.events.emitter import emit
 from app.graph.autonomy_policy import effective_autonomy_level
 from app.graph.nodes.plan import mark_progress
-from app.graph.nodes.task_frame import deliverable_type_implies_artifact
+from app.graph.nodes.task_frame import (
+    deliverable_type_implies_artifact,
+    format_task_frame_block,
+    task_expects_composed_media,
+    typed_delivery_gap,
+)
 from app.graph.state import SessionState
 from app.llm.client import get_async_openai
 from app.logging_setup import get_logger
@@ -99,9 +104,42 @@ def _selected_skills_block(state: SessionState) -> str:
     return "\n".join(lines) or "(本轮未选中 Skill)"
 
 
-def _has_artifact_evidence(summary: dict[str, Any]) -> bool:
+def _has_artifact_evidence(
+    summary: dict[str, Any],
+    *,
+    task_frame: dict[str, Any] | None = None,
+    plan: dict[str, Any] | None = None,
+    user_message: str = "",
+) -> bool:
     paths = summary.get("written_paths") or []
-    return isinstance(paths, list) and any(isinstance(p, str) and p.strip() for p in paths)
+    if not (isinstance(paths, list) and any(isinstance(p, str) and p.strip() for p in paths)):
+        return False
+    if not isinstance(task_frame, dict):
+        return True
+    gap = typed_delivery_gap(
+        paths=paths,
+        deliverable_type=str(task_frame.get("deliverable_type") or ""),
+        composed_media_required=task_expects_composed_media(user_message, plan, task_frame),
+    )
+    return gap is None
+
+
+def _typed_delivery_gap_from_state(state: SessionState) -> str:
+    tf = state.get("task_frame") if isinstance(state.get("task_frame"), dict) else {}
+    summary = state.get("execution_summary") or {}
+    paths = summary.get("written_paths") if isinstance(summary, dict) else []
+    return (
+        typed_delivery_gap(
+            paths=paths or [],
+            deliverable_type=str(tf.get("deliverable_type") or ""),
+            composed_media_required=task_expects_composed_media(
+                str(state.get("user_message") or ""),
+                state.get("plan") if isinstance(state.get("plan"), dict) else None,
+                tf,
+            ),
+        )
+        or ""
+    )
 
 
 def _unrecovered_tool_failures(summary: dict[str, Any] | None) -> int:
@@ -135,7 +173,12 @@ def _should_block_skill_finalize(state: SessionState) -> tuple[bool, str, str]:
         return True, "已选中 Skill，但仍有未完成 TODO", str(pending[0].get("text") or "")
     tf = state.get("task_frame") if isinstance(state.get("task_frame"), dict) else {}
     summary = state.get("execution_summary") or {}
-    if deliverable_type_implies_artifact(str(tf.get("deliverable_type") or "")) and not _has_artifact_evidence(summary):
+    if deliverable_type_implies_artifact(str(tf.get("deliverable_type") or "")) and not _has_artifact_evidence(
+        summary,
+        task_frame=tf,
+        plan=state.get("plan") if isinstance(state.get("plan"), dict) else None,
+        user_message=str(state.get("user_message") or ""),
+    ):
         return True, "已选中 Skill 且任务要求交付文件，但缺少产物证据", "继续按 Skill workflow 生成并验证交付文件"
     return False, "", ""
 
@@ -166,6 +209,9 @@ def _fallback_decision(state: SessionState) -> dict[str, Any]:
         if "多步计划" in reason or "步骤" in reason:
             return {"decision": "replan", "reason": reason, "focus": "基于当前结果重新拆解剩余步骤"}
         return {"decision": "continue_execute", "reason": reason, "focus": "补齐缺失的真实执行和验证"}
+    typed_gap = _typed_delivery_gap_from_state(state)
+    if typed_gap:
+        return {"decision": "continue_execute", "reason": typed_gap, "focus": "按任务定调补齐匹配的最终交付文件"}
     note = _execute_exception_note(summary)
     if note:
         return {
@@ -212,6 +258,8 @@ def _coerce_route_for_high_autonomy(state: SessionState, route: str, reason: str
         return route, reason, focus
     summary = state.get("execution_summary") or {}
     if str(summary.get("delivery_missing_reason") or "").strip():
+        return route, reason, focus
+    if _typed_delivery_gap_from_state(state):
         return route, reason, focus
     if _unrecovered_tool_failures(summary) > 0:
         return route, reason, focus
@@ -293,6 +341,9 @@ async def reflect_node(state: SessionState) -> SessionState:
         completed_todos=_todo_block(state.get("plan"), status="done"),
         artifacts=_artifact_block(state.get("plan"), summary),
         selected_skills_context=_selected_skills_block(state),
+        task_frame_block=format_task_frame_block(
+            state.get("task_frame") if isinstance(state.get("task_frame"), dict) else None
+        ),
         execution_summary=json.dumps(summary, ensure_ascii=False, indent=2)[:4000] if summary else "(无)",
         compact_memory=state.get("compact_memory") or "(无)",
         effective_autonomy=eff_a,
@@ -374,6 +425,12 @@ async def reflect_node(state: SessionState) -> SessionState:
         route = "continue_execute"
         reason = "执行节点异常但已有进度，暂不能宣告任务完成"
         focus = exc_note[:120]
+
+    typed_gap = _typed_delivery_gap_from_state(state)
+    if route == "finalize" and typed_gap and reflections < _MAX_REFLECTIONS:
+        route = "continue_execute"
+        reason = typed_gap
+        focus = "按任务定调补齐匹配的最终交付文件"
 
     route, reason, focus = _coerce_route_for_high_autonomy(state, route, reason, focus)
     if route == "finalize" and blocked:

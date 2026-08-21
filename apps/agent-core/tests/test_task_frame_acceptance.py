@@ -129,6 +129,38 @@ def test_blank_frame_is_clarify_only():
     assert frame["clarification_questions"]
 
 
+def test_typed_delivery_gap_rejects_clips_when_compose_required():
+    frame = {"deliverable_type": "video", "success_criteria": ["交付最终成片"]}
+    assert tf_mod.task_expects_composed_media("做纪录片", None, frame) is True
+    gap = tf_mod.typed_delivery_gap(
+        paths=["artifacts/wan_t2v_closing_shot.mp4"],
+        deliverable_type="video",
+        composed_media_required=True,
+    )
+    assert gap is not None
+    assert tf_mod.typed_delivery_gap(
+        paths=["artifacts/final_documentary.mp4"],
+        deliverable_type="video",
+        composed_media_required=True,
+    ) is None
+
+
+def test_typed_delivery_gap_website_requires_html():
+    gap = tf_mod.typed_delivery_gap(
+        paths=["notes.txt"],
+        deliverable_type="website",
+    )
+    assert gap is not None
+    assert "网页" in gap
+    assert (
+        tf_mod.typed_delivery_gap(
+            paths=["index.html"],
+            deliverable_type="website",
+        )
+        is None
+    )
+
+
 def test_framing_context_excludes_current_human_turn():
     from langchain_core.messages import AIMessage, HumanMessage
 

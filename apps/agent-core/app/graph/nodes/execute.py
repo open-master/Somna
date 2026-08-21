@@ -52,6 +52,8 @@ from app.graph.nodes.task_frame import (
     _emit_task_frame_ui,
     deliverable_type_implies_artifact,
     format_task_frame_block,
+    task_expects_composed_media,
+    typed_delivery_gap,
 )
 from app.graph.run_artifacts import (
     append_executor_progress_snapshot,
@@ -358,10 +360,33 @@ def _missing_delivery_reason(
             return "任务要求交付网站/代码/文件，但没有任何成功的工具执行"
         if not _artifact_paths(proof):
             return "任务要求交付真实产物，但没有检测到写文件/修改沙盒的证据"
+        gap = typed_delivery_gap(
+            paths=_artifact_paths(proof),
+            deliverable_type=str((task_frame or {}).get("deliverable_type") or ""),
+            composed_media_required=task_expects_composed_media(
+                user_message, plan, task_frame if isinstance(task_frame, dict) else None
+            ),
+        )
+        if gap:
+            return gap
 
     if len(plan_todos) >= 3 and proof.successful_tool_calls == 0:
         return "存在多步计划，但模型没有实际调用工具就试图结束"
 
+    return None
+
+
+def _unfinished_plan_reason(plan: dict[str, Any] | None) -> str | None:
+    todos = (plan or {}).get("todos") if isinstance(plan, dict) else None
+    if not isinstance(todos, list) or not todos:
+        return None
+    for todo in todos:
+        if not isinstance(todo, dict):
+            continue
+        if str(todo.get("status") or "") not in {"pending", "in_progress"}:
+            continue
+        text = str(todo.get("text") or "未完成步骤").strip() or "未完成步骤"
+        return f"计划仍有未完成项（{text[:80]}），不能结束执行"
     return None
 
 
@@ -1975,6 +2000,9 @@ async def _stop_blocked_reason(
     sandbox_id: str,
     mcp=None,
 ) -> str | None:
+    reason = _unfinished_plan_reason(plan)
+    if reason:
+        return reason
     reason = _missing_delivery_reason(
         user_message=user_message,
         plan=plan,

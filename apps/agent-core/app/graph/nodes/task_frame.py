@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage
@@ -328,6 +329,146 @@ def deliverable_type_implies_artifact(deliverable_type: str) -> bool:
     if dt in ("", "unspecified", "chat_answer", "direct_answer"):
         return False
     return True
+
+
+_GENERATOR_CLIP_PREFIXES = ("wan_t2v_", "wan_i2v_", "wan_r2v_", "wan_video_edit_")
+_VIDEO_EXTS = {".mp4", ".webm", ".mov", ".mkv", ".m4v"}
+_AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"}
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
+_HTML_EXTS = {".html", ".htm"}
+_SHEET_EXTS = {".csv", ".xlsx", ".xls", ".tsv"}
+_SLIDE_EXTS = {".pptx", ".ppt"}
+_MD_EXTS = {".md", ".markdown"}
+_DOC_EXTS = _MD_EXTS | {".pdf", ".txt", ".docx", ".doc"} | _HTML_EXTS
+_CODE_EXTS = {
+    ".py",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".go",
+    ".rs",
+    ".java",
+    ".css",
+    ".vue",
+    ".svelte",
+} | _HTML_EXTS
+_JUNK_PATH_PARTS = {"node_modules", "site-packages", ".git"}
+_COMPOSE_HINT_RE = re.compile(
+    r"合成|成片|拼接|叠加|混音|音画|旁白.*同步|连续视频|最终视频|final\s*video|\bmux\b",
+    re.IGNORECASE,
+)
+_DELIVERABLE_TYPE_LABELS = {
+    "video": "视频文件",
+    "audio": "音频文件",
+    "image": "图像文件",
+    "website": "网页文件",
+    "web_app": "网页文件",
+    "spreadsheet": "表格文件",
+    "presentation": "演示文稿",
+    "markdown_report": "报告文件",
+    "document": "文档文件",
+    "code": "代码或页面文件",
+    "file": "交付文件",
+    "multimodal": "图像/音频/视频文件",
+}
+
+
+def is_generator_clip_path(path: str) -> bool:
+    name = Path(path).name
+    return name.startswith(_GENERATOR_CLIP_PREFIXES) and Path(path).suffix.lower() in _VIDEO_EXTS
+
+
+def task_expects_composed_media(
+    user_message: str | None,
+    plan: dict[str, Any] | None,
+    task_frame: dict[str, Any] | None,
+) -> bool:
+    """任务是否要求合成/成片，而不是生成器直接给出的素材片段。"""
+    parts: list[str] = [str(user_message or "")]
+    if isinstance(task_frame, dict):
+        for item in task_frame.get("success_criteria") or []:
+            parts.append(str(item))
+        parts.append(str(task_frame.get("reasoning_summary") or ""))
+    todos = (plan or {}).get("todos") if isinstance(plan, dict) else None
+    if isinstance(todos, list):
+        for todo in todos:
+            if isinstance(todo, dict):
+                parts.append(str(todo.get("text") or ""))
+    return bool(_COMPOSE_HINT_RE.search("\n".join(parts)))
+
+
+def _usable_deliverable_path(path: str) -> bool:
+    if not path.strip():
+        return False
+    return not (set(Path(path).parts) & _JUNK_PATH_PARTS)
+
+
+def expected_deliverable_exts(deliverable_type: str) -> set[str] | None:
+    """该交付类型应匹配的后缀。None=任意可用文件；空集合=不要求落盘。"""
+    dt = normalize_deliverable_type(deliverable_type)
+    if dt in {"", "unspecified", "chat_answer", "direct_answer", "browser_action"}:
+        return set()
+    mapping: dict[str, set[str] | None] = {
+        "video": _VIDEO_EXTS,
+        "audio": _AUDIO_EXTS,
+        "image": _IMAGE_EXTS,
+        "website": _HTML_EXTS,
+        "web_app": _HTML_EXTS,
+        "spreadsheet": _SHEET_EXTS,
+        "presentation": _SLIDE_EXTS,
+        "markdown_report": _MD_EXTS | _HTML_EXTS,
+        "document": _DOC_EXTS,
+        "file": None,
+        "code": _CODE_EXTS,
+        "multimodal": _VIDEO_EXTS | _AUDIO_EXTS | _IMAGE_EXTS,
+    }
+    return mapping.get(dt)
+
+
+def matching_deliverable_paths(
+    paths: Any,
+    deliverable_type: str,
+    *,
+    composed_media_required: bool = False,
+) -> list[str]:
+    exts = expected_deliverable_exts(deliverable_type)
+    if exts is not None and not exts:
+        return []
+    out: list[str] = []
+    raw_paths = paths if isinstance(paths, (list, tuple, set)) else []
+    for path in raw_paths:
+        if not isinstance(path, str) or not _usable_deliverable_path(path):
+            continue
+        if composed_media_required and is_generator_clip_path(path):
+            continue
+        if exts is not None and Path(path).suffix.lower() not in exts:
+            continue
+        out.append(path)
+    return out
+
+
+def typed_delivery_gap(
+    *,
+    paths: Any,
+    deliverable_type: str,
+    composed_media_required: bool = False,
+) -> str | None:
+    """对照定调的 deliverable_type：有文件但类型不对时给出原因。"""
+    dt = normalize_deliverable_type(deliverable_type)
+    if not deliverable_type_implies_artifact(dt) or dt == "browser_action":
+        return None
+    matched = matching_deliverable_paths(
+        paths,
+        dt,
+        composed_media_required=composed_media_required,
+    )
+    if matched:
+        return None
+    if dt in {"video", "multimodal"} and composed_media_required:
+        return "任务定调要求交付合成成片，但目前只有素材片段、没有最终视频文件"
+    label = _DELIVERABLE_TYPE_LABELS.get(dt, dt)
+    return f"任务定调要求交付{label}，但已写入的文件类型不匹配"
 
 
 async def task_frame_node(state: SessionState) -> SessionState:

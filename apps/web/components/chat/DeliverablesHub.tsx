@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { PptxAwareLink, PptxAwarePreviewAnchor } from "@/components/chat/PptxAwarePreview";
 import { useChatStore } from "@/lib/store/chat";
 import { useLiveStore } from "@/lib/store/live";
+import { useTaskFrameStore } from "@/lib/store/taskFrame";
 import { cn } from "@/lib/utils/cn";
 import {
   artifactDownloadUrl,
@@ -31,6 +32,36 @@ import {
 import { normalizeWorkspacePath } from "@/lib/utils/workspace-path";
 
 const PREVIEW_LIMIT = 12;
+const GENERATOR_CLIP_RE = /^(wan_t2v_|wan_i2v_|wan_r2v_|wan_video_edit_)/i;
+const FINAL_NAME_RE = /最终|合成|成片|final|composite|merge|talk_show|talkshow|交付/i;
+
+function parseDeliverableType(detail: string | null): string {
+  const m = (detail || "").match(/deliverable_type:\s*(\S+)/i);
+  return (m?.[1] || "").trim().toLowerCase();
+}
+
+function fileBaseName(name: string): string {
+  const parts = name.split("/");
+  return parts[parts.length - 1] || name;
+}
+
+function isGeneratorClip(name: string): boolean {
+  const base = fileBaseName(name);
+  return GENERATOR_CLIP_RE.test(base) && /\.(mp4|webm|mov|mkv|m4v)$/i.test(base);
+}
+
+function isVideoRow(r: HubRow): boolean {
+  return r.mime.startsWith("video/") || /\.(mp4|webm|mov|mkv|m4v)$/i.test(r.name);
+}
+
+function isHtmlRow(r: HubRow): boolean {
+  return r.mime === "text/html" || /\.html?$/i.test(r.name);
+}
+
+function newest(rows: HubRow[]): HubRow | null {
+  if (rows.length === 0) return null;
+  return rows.reduce((best, row) => (row.ts >= best.ts ? row : best), rows[0]!);
+}
 
 type HubRow = {
   key: string;
@@ -102,29 +133,51 @@ function dedupeLiveArtifacts(
   return out;
 }
 
-function pickFeaturedKey(rows: HubRow[]): string | null {
-  const videos = rows.filter(
-    (r) => r.mime.startsWith("video/") || /\.mp4$/i.test(r.name),
-  );
-  if (videos.length === 0) return null;
-  let best = videos[0]!;
-  let score = -1;
-  for (const v of videos) {
-    let s = v.ts / 1e12;
-    if (/最终|合成|成片|final|composite|merge|talk_show|talkshow|交付/i.test(v.name)) s += 10;
-    if (/_show\.mp4$/i.test(v.name) || /final/i.test(v.name)) s += 5;
-    if (s > score) {
-      score = s;
-      best = v;
-    }
+function pickFeaturedKey(rows: HubRow[], deliverableType = ""): string | null {
+  const dt = deliverableType;
+  const named = rows.filter((r) => FINAL_NAME_RE.test(fileBaseName(r.name)) && !isGeneratorClip(r.name));
+  if (dt === "video" || dt === "multimodal" || dt === "") {
+    const videos = rows.filter(isVideoRow);
+    const composed = videos.filter((v) => !isGeneratorClip(v.name));
+    const namedVideo = named.filter(isVideoRow);
+    const hit = newest(namedVideo) || newest(composed);
+    if (hit) return hit.key;
+    if (dt === "video") return null;
   }
-  return best.key;
+  if (dt === "website" || dt === "web_app") {
+    const html = rows.filter((r) => isHtmlRow(r) && !r.key.includes("node_modules"));
+    const index = html.find((r) => /index\.html?$/i.test(fileBaseName(r.name)));
+    return (index || newest(html))?.key ?? null;
+  }
+  if (dt === "audio") {
+    const audio = rows.filter(
+      (r) => r.mime.startsWith("audio/") || /\.(mp3|wav|m4a|aac)$/i.test(r.name),
+    );
+    return newest(audio)?.key ?? null;
+  }
+  if (dt === "image") {
+    const images = rows.filter(
+      (r) => r.mime.startsWith("image/") || /\.(png|jpe?g|gif|webp|svg)$/i.test(r.name),
+    );
+    return newest(images)?.key ?? null;
+  }
+  if (dt === "spreadsheet") {
+    const sheets = rows.filter((r) => /\.(csv|xlsx|xls|tsv)$/i.test(r.name));
+    return newest(sheets)?.key ?? null;
+  }
+  if (dt === "presentation") {
+    const decks = rows.filter((r) => /\.pptx?$/i.test(r.name));
+    return newest(decks)?.key ?? null;
+  }
+  if (named.length) return newest(named)?.key ?? null;
+  return null;
 }
 
 export function DeliverablesHub({ sessionId }: { sessionId: string }) {
   const artifacts = useLiveStore((s) => s.artifacts);
   const fileItems = useLiveStore((s) => s.fileItems);
   const messages = useChatStore((s) => s.messages);
+  const taskFrameDetail = useTaskFrameStore((s) => s.detail);
   const [expanded, setExpanded] = useState(false);
 
   const rows = useMemo(() => {
@@ -201,7 +254,10 @@ export function DeliverablesHub({ sessionId }: { sessionId: string }) {
     return list;
   }, [artifacts, fileItems, messages, sessionId]);
 
-  const featured = pickFeaturedKey(rows);
+  const deliverableType = parseDeliverableType(taskFrameDetail);
+  const featured = pickFeaturedKey(rows, deliverableType);
+  const featuredLabel =
+    deliverableType === "video" || deliverableType === "multimodal" ? "最终成片 / 主推交付" : "主推交付";
   const shown = expanded ? rows : rows.slice(0, PREVIEW_LIMIT);
   const hasMore = rows.length > PREVIEW_LIMIT;
 
@@ -286,7 +342,7 @@ export function DeliverablesHub({ sessionId }: { sessionId: string }) {
                             className="block w-full cursor-pointer rounded-md px-1 py-1 -mx-1 text-left text-muted-foreground no-underline outline-none ring-offset-background transition-colors hover:bg-accent/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
                           >
                             {isFeatured ? (
-                              <span className="font-medium text-foreground">✅ 最终成片 / 主推交付 · </span>
+                              <span className="font-medium text-foreground">✅ {featuredLabel} · </span>
                             ) : null}
                             <span className="underline-offset-2 hover:underline">{r.desc}</span>
                           </PptxAwareLink>
