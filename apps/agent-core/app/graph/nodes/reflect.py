@@ -70,10 +70,14 @@ def _artifact_block(plan: dict[str, Any] | None, execution_summary: dict[str, An
             if text and paths:
                 lines.append(f"- {text}: {', '.join(paths[:5])}")
     if execution_summary:
-        for key in ("written_paths", "verified_paths"):
-            paths = execution_summary.get(key) or []
-            if isinstance(paths, list) and paths:
-                lines.append(f"- {key}: {', '.join(str(p) for p in paths[:8])}")
+        written = execution_summary.get("written_paths") or []
+        if isinstance(written, list) and written:
+            lines.append(f"- written_paths: {', '.join(str(p) for p in written[:8])}")
+        verified = execution_summary.get("verified_paths") or []
+        if isinstance(verified, list) and verified:
+            lines.append(
+                f"- verified_paths（仅读取/stat，不算交付）: {', '.join(str(p) for p in verified[:8])}"
+            )
     return "\n".join(lines) or "(无)"
 
 
@@ -96,11 +100,8 @@ def _selected_skills_block(state: SessionState) -> str:
 
 
 def _has_artifact_evidence(summary: dict[str, Any]) -> bool:
-    for key in ("written_paths", "verified_paths"):
-        paths = summary.get(key) or []
-        if isinstance(paths, list) and any(isinstance(p, str) and p.strip() for p in paths):
-            return True
-    return False
+    paths = summary.get("written_paths") or []
+    return isinstance(paths, list) and any(isinstance(p, str) and p.strip() for p in paths)
 
 
 def _should_block_skill_finalize(state: SessionState) -> tuple[bool, str, str]:

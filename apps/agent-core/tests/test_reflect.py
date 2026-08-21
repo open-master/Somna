@@ -286,3 +286,43 @@ async def test_reflect_high_risk_caps_autonomy_no_coerce_from_model_continue():
 
     assert out["next_node"] == "execute"
     assert out["reflection"]["decision"] == "continue_execute"
+
+
+def test_has_artifact_evidence_ignores_verified_paths():
+    assert reflect_mod._has_artifact_evidence({"verified_paths": ["/workspace/old.png"]}) is False
+    assert reflect_mod._has_artifact_evidence({"written_paths": ["/workspace/new.png"]}) is True
+    assert reflect_mod._has_artifact_evidence({}) is False
+
+
+@pytest.mark.asyncio
+async def test_reflect_blocks_skill_finalize_when_only_verified_paths_exist():
+    sid = uuid4()
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                create=AsyncMock(return_value=_mk_completion('{"decision":"finalize","reason":"文件已在","focus":""}'))
+            )
+        )
+    )
+
+    with (
+        patch.object(reflect_mod, "emit", AsyncMock()),
+        patch.object(reflect_mod, "get_async_openai", return_value=client),
+        patch.object(reflect_mod, "load_template", return_value="tpl"),
+        patch.object(reflect_mod, "render", return_value="x"),
+    ):
+        out = await reflect_mod.reflect_node(
+            {
+                "session_id": sid,
+                "run_id": "r1",
+                "user_message": "做一个网站",
+                "assistant_text": "已经有页面了",
+                "selected_skills": [{"name": "frontend-design", "load_files": []}],
+                "task_frame": {"deliverable_type": "website"},
+                "execution_summary": {"verified_paths": ["/workspace/app/page.tsx"]},
+                "plan": {"todos": [{"id": "1", "text": "写页面", "status": "done"}]},
+            }
+        )
+
+    assert out["next_node"] == "execute"
+    assert "产物证据" in out["reflection"]["reason"]

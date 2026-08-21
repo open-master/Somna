@@ -331,9 +331,7 @@ def _record_todo_evidence(todo: dict[str, Any], proof: Any) -> bool:
     changed = False
     existing_paths = [str(p) for p in (todo.get("evidence_paths") or []) if isinstance(p, str)]
     seen = set(existing_paths)
-    for path in list(getattr(proof, "written_paths", set()) or set()) + list(
-        getattr(proof, "verified_paths", set()) or set()
-    ):
+    for path in list(getattr(proof, "written_paths", set()) or set()):
         if not isinstance(path, str) or not path or path in seen:
             continue
         existing_paths.append(path)

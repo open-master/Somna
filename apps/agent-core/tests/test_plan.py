@@ -254,7 +254,4 @@ async def test_advance_with_proof_requires_artifact_evidence_for_build_todo():
     assert out is not None
     assert out["todos"][0]["status"] == TodoStatus.done
     assert out["todos"][1]["status"] == TodoStatus.in_progress
-    assert out["todos"][0]["evidence_paths"] == [
-        "/workspace/app/existing.tsx",
-        "/workspace/app/page.tsx",
-    ]
+    assert out["todos"][0]["evidence_paths"] == ["/workspace/app/page.tsx"]

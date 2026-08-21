@@ -66,4 +66,6 @@ async def ingest_node(state: SessionState) -> SessionState:
         "tool_turns": 0,
         "total_agent_turns": 0,
         "total_execution_tokens": 0,
+        "compact_memory": None,
+        "execution_summary": None,
     }

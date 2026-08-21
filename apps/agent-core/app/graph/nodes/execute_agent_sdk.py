@@ -25,7 +25,7 @@ from claude_agent_sdk import (
     create_sdk_mcp_server,
     query,
 )
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from somna_events import MessageDeltaEvent
 
 from app.config import get_settings
@@ -224,26 +224,55 @@ def _merge_system_prompt(working_messages: list) -> tuple[str, list]:
     return "\n\n".join(sys_parts), rest
 
 
+def _sdk_progress_snapshot(proof: _ExecutionProof | None) -> str:
+    if proof is None:
+        return ""
+    written = sorted(str(p) for p in (proof.written_paths or set()) if str(p).strip())[:12]
+    return (
+        "【本轮已确认进度】\n"
+        f"已成功工具调用：{int(proof.successful_tool_calls or 0)}\n"
+        f"已写入路径：{', '.join(written) if written else '（无）'}"
+    )
+
+
 def _body_chain_to_user_prompt(
     body_chain: list,
     *,
     user_message: str,
     retry_instruction: str | None,
+    proof: _ExecutionProof | None = None,
 ) -> str:
+    """Build a compact SDK user prompt.
+
+    Delivery retries must not re-dump the full tool transcript: each `query()`
+    already starts a fresh Agent loop, and repeating ToolMessage blobs burns
+    the global token budget while encouraging more search-only turns.
+    """
     parts: list[str] = []
+    tail = (user_message or "").strip()
     if retry_instruction:
         parts.append(retry_instruction)
+        snapshot = _sdk_progress_snapshot(proof)
+        if snapshot:
+            parts.append(snapshot)
+        if tail:
+            parts.append(f"【当前用户请求】\n{tail}")
+        return "\n\n".join(parts)
+
+    last_human = ""
+    last_assistant = ""
     for m in body_chain:
         if isinstance(m, HumanMessage):
-            parts.append(f"【用户】\n{_content_str(m.content)}")
+            last_human = _content_str(m.content)
         elif isinstance(m, AIMessage):
-            parts.append(f"【助手】\n{_content_str(m.content)}")
-        elif isinstance(m, ToolMessage):
-            parts.append(f"【工具 {getattr(m, 'name', '') or '?'} 输出】\n{_content_str(m.content)[:4000]}")
-        else:
-            parts.append(f"【其它】\n{_content_str(getattr(m, 'content', ''))}")
-    tail = (user_message or "").strip()
-    if tail:
+            text = _content_str(m.content).strip()
+            if text:
+                last_assistant = text
+    if last_human:
+        parts.append(f"【用户】\n{last_human[:8000]}")
+    if last_assistant:
+        parts.append(f"【助手上一轮】\n{last_assistant[:2000]}")
+    if tail and tail not in last_human:
         parts.append(f"【当前用户请求】\n{tail}")
     return "\n\n".join(parts)
 
@@ -437,6 +466,7 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
                 body_chain,
                 user_message=user_message,
                 retry_instruction=retry_instruction,
+                proof=bridge.proof,
             )
 
             options = ClaudeAgentOptions(
