@@ -22,6 +22,7 @@ class _SettingsStub:
     agent_max_total_turns = 80
     agent_default_executor = "agent-executor"
     agent_default_coder = "agent-coder"
+    agent_default_skill = "agent-skill"
 
 
 # --- helpers ---
@@ -328,6 +329,7 @@ async def test_max_turns_short_circuits():
         agent_max_turns = 2
         agent_default_executor = "agent-executor"
         agent_default_coder = "agent-coder"
+        agent_default_skill = "agent-skill"
 
     with (
         patch.object(exe, "_stream_one_turn", _stream),
@@ -932,3 +934,152 @@ async def test_invoke_tool_visual_critique_respects_explicit_model():
             mcp_tool_models={"visual_critique": "qwen3-vl-flash"},
         )
     assert mcp.invoke.await_args.kwargs["args"]["model"] == "custom-vl"
+
+
+def test_thin_written_file_reason_rejects_empty_or_tiny_deliverables():
+    assert exe._thin_written_file_reason(path="out.png", exists=False, is_file=False, size=0)
+    assert "过小或为空" in (exe._thin_written_file_reason(path="out.png", exists=True, is_file=True, size=0) or "")
+    assert "过小或为空" in (exe._thin_written_file_reason(path="index.html", exists=True, is_file=True, size=8) or "")
+    assert exe._thin_written_file_reason(path="index.html", exists=True, is_file=True, size=128) is None
+    assert exe._thin_written_file_reason(path="src", exists=True, is_file=False, size=0) is None
+
+
+def test_unrecovered_failure_reason_requires_outstanding_failures():
+    ok = exe._ExecutionProof(failed_tool_calls=1, recovered_failures=1)
+    assert exe._unrecovered_failure_reason(ok) is None
+    bad = exe._ExecutionProof(
+        failed_tool_calls=2,
+        recovered_failures=1,
+        failure_notes=["exit_code=1"],
+    )
+    reason = exe._unrecovered_failure_reason(bad)
+    assert reason is not None
+    assert "尚未恢复" in reason
+    assert "exit_code=1" in reason
+
+
+def test_is_retryable_shell_failure_timeout_and_exit_code():
+    timeout = ToolResult(ok=False, error="timeout", output={"timed_out": True, "cmd": "sleep 9"})
+    assert exe._is_retryable_shell_failure(tool_name="shell", result=timeout) is True
+    nonzero = ToolResult(ok=False, error="failed", output={"exit_code": 2, "cmd": "false"})
+    assert exe._is_retryable_shell_failure(tool_name="shell", result=nonzero) is True
+    ok = ToolResult(ok=True, output={"exit_code": 0})
+    assert exe._is_retryable_shell_failure(tool_name="shell", result=ok) is False
+    search = ToolResult(ok=False, error="timeout", output={"timed_out": True})
+    assert exe._is_retryable_shell_failure(tool_name="search", result=search) is False
+    billing = ToolResult(ok=False, error="积分不足，调用 shell 还需冻结 1 积分")
+    assert exe._is_retryable_shell_failure(tool_name="shell", result=billing) is False
+
+
+@pytest.mark.asyncio
+async def test_empty_written_delivery_reason_rejects_zero_byte_html():
+    mcp = AsyncMock()
+    mcp.invoke = AsyncMock(
+        return_value=ToolResult(ok=True, output={"is_file": True, "is_dir": False, "size": 0, "path": "index.html"})
+    )
+    proof = exe._ExecutionProof(successful_tool_calls=1, written_paths={"index.html"})
+    reason = await exe._empty_written_delivery_reason(
+        mcp=mcp,
+        sandbox_id="sb",
+        proof=proof,
+        requires_artifact=True,
+    )
+    assert reason is not None
+    assert "过小或为空" in reason
+
+
+@pytest.mark.asyncio
+async def test_execute_blocks_stop_after_unrecovered_shell_failure():
+    sid = uuid4()
+    stream = _StreamStub(
+        [
+            ("", [_pending("cid_1", "shell", '{"cmd":"false"}')], (8, 4)),
+            ("DONE: 已经完成", [], (3, 2)),
+            ("DONE: 还是完成", [], (2, 1)),
+        ]
+    )
+    mcp = AsyncMock()
+    mcp.invoke = AsyncMock(
+        return_value=ToolResult(
+            ok=False,
+            error="command failed",
+            preview="boom",
+            output={"exit_code": 1, "cmd": "false"},
+        )
+    )
+
+    with (
+        patch.object(exe, "_stream_one_turn", stream),
+        patch.object(exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))),
+        patch.object(exe, "emit", AsyncMock()),
+        patch.object(exe, "emit_model_usage", AsyncMock()),
+        patch.object(exe, "get_async_openai", return_value=object()),
+        patch.object(exe, "tool_manifest_cache", return_value={}),
+        patch.object(exe, "build_system_prompt", return_value="sys"),
+        patch.object(exe, "get_client", return_value=mcp),
+        patch.object(exe, "get_settings", return_value=_SettingsStub()),
+    ):
+        state = await exe.execute_node(
+            {
+                "session_id": sid,
+                "run_id": "r1",
+                "executor_model": "agent-executor",
+                "sandbox_id": str(sid),
+                "user_message": "随便跑一下",
+                "messages": [],
+                "tool_turns": 0,
+            }
+        )
+
+    assert state["finished"] is True
+    assert "尚未恢复" in (state["execution_summary"].get("delivery_missing_reason") or "")
+    assert int(state["execution_summary"].get("unrecovered_failures") or 0) >= 1
+    assert stream.calls >= 3
+    assert mcp.invoke.await_count >= 2
+
+
+@pytest.mark.asyncio
+async def test_execute_once_retry_recovers_timeout_and_allows_stop():
+    sid = uuid4()
+    stream = _StreamStub(
+        [
+            ("", [_pending("cid_1", "shell", '{"cmd":"echo hi"}')], (8, 4)),
+            ("hello world", [], (3, 2)),
+        ]
+    )
+    mcp = AsyncMock()
+    mcp.invoke = AsyncMock(
+        side_effect=[
+            ToolResult(ok=False, error="timeout", preview="timed out", output={"timed_out": True, "cmd": "echo hi"}),
+            ToolResult(ok=True, preview="hi\n", output={"exit_code": 0, "cmd": "echo hi"}),
+        ]
+    )
+
+    with (
+        patch.object(exe, "_stream_one_turn", stream),
+        patch.object(exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))),
+        patch.object(exe, "emit", AsyncMock()),
+        patch.object(exe, "emit_model_usage", AsyncMock()),
+        patch.object(exe, "get_async_openai", return_value=object()),
+        patch.object(exe, "tool_manifest_cache", return_value={}),
+        patch.object(exe, "build_system_prompt", return_value="sys"),
+        patch.object(exe, "get_client", return_value=mcp),
+        patch.object(exe, "get_settings", return_value=_SettingsStub()),
+    ):
+        state = await exe.execute_node(
+            {
+                "session_id": sid,
+                "run_id": "r1",
+                "executor_model": "agent-executor",
+                "sandbox_id": str(sid),
+                "user_message": "说一声 hi",
+                "messages": [],
+                "tool_turns": 0,
+            }
+        )
+
+    assert state["assistant_text"] == "hello world"
+    assert state["execution_summary"]["unrecovered_failures"] == 0
+    assert state["execution_summary"]["recovered_failures"] == 1
+    assert mcp.invoke.await_count == 2
+    assert stream.calls == 2

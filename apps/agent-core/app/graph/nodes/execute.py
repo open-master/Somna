@@ -97,6 +97,9 @@ class _ExecutionProof:
     mock_search_calls: int = 0
     written_paths: set[str] = field(default_factory=set)
     verified_paths: set[str] = field(default_factory=set)
+    failed_tool_calls: int = 0
+    recovered_failures: int = 0
+    failure_notes: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -135,6 +138,12 @@ def _merge_proof(base: _ExecutionProof, delta: _ExecutionProof) -> _ExecutionPro
     base.mock_search_calls += delta.mock_search_calls
     base.written_paths.update(delta.written_paths)
     base.verified_paths.update(delta.verified_paths)
+    base.failed_tool_calls += delta.failed_tool_calls
+    base.recovered_failures += delta.recovered_failures
+    if delta.failure_notes:
+        base.failure_notes.extend(delta.failure_notes)
+        if len(base.failure_notes) > 8:
+            base.failure_notes = base.failure_notes[-8:]
     return base
 
 
@@ -295,6 +304,100 @@ def _missing_delivery_reason(
     return None
 
 
+def _unrecovered_failure_count(proof: _ExecutionProof) -> int:
+    return max(0, int(proof.failed_tool_calls) - int(proof.recovered_failures))
+
+
+def _failure_note(result) -> str:
+    output = result.output if isinstance(result.output, dict) else {}
+    parts: list[str] = []
+    if result.error:
+        parts.append(str(result.error).strip()[:160])
+    if output.get("timed_out") is True:
+        parts.append("timeout")
+    rc = output.get("exit_code")
+    if isinstance(rc, int) and rc != 0:
+        parts.append(f"exit_code={rc}")
+    preview = str(result.preview or "").strip()[:80]
+    if preview and preview not in (parts[0] if parts else ""):
+        parts.append(preview)
+    return "; ".join(x for x in parts if x) or "tool failed"
+
+
+def _unrecovered_failure_reason(proof: _ExecutionProof) -> str | None:
+    n = _unrecovered_failure_count(proof)
+    if n <= 0:
+        return None
+    last = (proof.failure_notes[-1] if proof.failure_notes else "工具失败").strip()
+    return f"有 {n} 次工具失败尚未恢复（最近：{last[:80]}），不能当作已完成"
+
+
+def _is_retryable_shell_failure(*, tool_name: str, result) -> bool:
+    if tool_name != "shell" or result.ok:
+        return False
+    err = str(result.error or "")
+    if "积分不足" in err or "计费状态已关闭" in err:
+        return False
+    output = result.output if isinstance(result.output, dict) else {}
+    if output.get("timed_out") is True:
+        return True
+    blob = f"{err} {result.preview or ''}".lower()
+    if "timeout" in blob or "timed out" in blob:
+        return True
+    rc = output.get("exit_code")
+    return isinstance(rc, int) and rc != 0
+
+
+_MIN_DELIVERABLE_BYTES = {
+    ".png": 64,
+    ".jpg": 64,
+    ".jpeg": 64,
+    ".gif": 64,
+    ".webp": 64,
+    ".svg": 24,
+    ".pdf": 80,
+    ".pptx": 80,
+    ".ppt": 80,
+    ".mp4": 80,
+    ".webm": 80,
+    ".mp3": 32,
+    ".wav": 32,
+    ".html": 24,
+    ".htm": 24,
+    ".md": 16,
+    ".markdown": 16,
+    ".json": 8,
+    ".csv": 8,
+    ".txt": 8,
+}
+
+
+def _min_bytes_for_path(path: str) -> int:
+    suffix = Path(str(path)).suffix.lower()
+    return int(_MIN_DELIVERABLE_BYTES.get(suffix, 1))
+
+
+def _thin_written_file_reason(
+    *,
+    path: str,
+    exists: bool,
+    is_file: bool,
+    size: Any,
+) -> str | None:
+    if not exists:
+        return f"声称已写入 {path}，但文件不存在或不可读"
+    if not is_file:
+        return None
+    try:
+        nbytes = int(size) if size is not None else 0
+    except (TypeError, ValueError):
+        nbytes = 0
+    min_b = _min_bytes_for_path(path)
+    if nbytes < min_b:
+        return f"交付文件过小或为空：{path}（{nbytes} 字节）"
+    return None
+
+
 def _completion_retry_message(reason: str) -> str:
     return (
         "系统校验未通过："
@@ -327,6 +430,10 @@ def _summarize_execution(proof: _ExecutionProof, *, delivery_missing_reason: str
         "mock_search_calls": proof.mock_search_calls,
         "written_paths": sorted(proof.written_paths),
         "verified_paths": sorted(proof.verified_paths),
+        "failed_tool_calls": proof.failed_tool_calls,
+        "recovered_failures": proof.recovered_failures,
+        "unrecovered_failures": _unrecovered_failure_count(proof),
+        "failure_notes": list(proof.failure_notes[-8:]),
         "delivery_missing_reason": delivery_missing_reason,
     }
 
@@ -351,6 +458,13 @@ def _proof_from_execution_summary(summary: dict[str, Any] | None) -> _ExecutionP
     for path in summary.get("verified_paths") or []:
         if isinstance(path, str) and path.strip():
             p.verified_paths.add(path.strip())
+    p.failed_tool_calls = int(summary.get("failed_tool_calls") or 0)
+    p.recovered_failures = int(summary.get("recovered_failures") or 0)
+    for note in summary.get("failure_notes") or []:
+        if isinstance(note, str) and note.strip():
+            p.failure_notes.append(note.strip()[:160])
+    if len(p.failure_notes) > 8:
+        p.failure_notes = p.failure_notes[-8:]
     return p
 
 
@@ -657,11 +771,12 @@ async def execute_node(state: SessionState) -> SessionState:
             working_messages.append(AIMessage(**assistant_kwargs))
 
             if not pending_calls:
-                reason = _missing_delivery_reason(
+                reason = await _stop_blocked_reason(
                     user_message=user_message,
                     plan=plan,
                     proof=proof,
                     task_frame=state.get("task_frame"),
+                    sandbox_id=sandbox_id,
                 )
                 if reason:
                     finish_validation_failures += 1
@@ -935,47 +1050,22 @@ async def _run_tool_calls(
             operation_index=f"{operation_scope}:{call_index}",
         )
         proof = _merge_proof(proof, delta)
-
-        recovery = _detect_shell_recovery(args=args, result=result)
-        if recovery is not None:
-            log.info(
-                "graph.execute.shell_auto_recover",
-                session_id=str(session_id),
-                run_id=run_id,
-                reason=recovery.reason,
-                install_cmd=recovery.install_cmd,
-            )
-            install_result, install_proof = await _invoke_tool_with_events(
-                mcp=mcp,
-                tool_name="shell",
-                args={"cmd": recovery.install_cmd, "cwd": args.get("cwd")},
-                event_id=f"{pc.id}_recover_install",
-                sandbox_id=sandbox_id,
-                session_id=session_id,
-                run_id=run_id,
-                working_messages=working_messages,
-                manifest=manifest_by_name.get("shell"),
-                mcp_tool_models=mcp_tool_models,
-                billing_enabled=billing_enabled,
-                operation_index=f"{operation_scope}:{call_index}:recover_install",
-            )
-            proof = _merge_proof(proof, install_proof)
-            if install_result.ok:
-                retry_result, retry_proof = await _invoke_tool_with_events(
-                    mcp=mcp,
-                    tool_name=pc.name,
-                    args=args,
-                    event_id=f"{pc.id}_recover_retry",
-                    sandbox_id=sandbox_id,
-                    session_id=session_id,
-                    run_id=run_id,
-                    working_messages=working_messages,
-                    manifest=manifest_by_name.get(pc.name),
-                    mcp_tool_models=mcp_tool_models,
-                    billing_enabled=billing_enabled,
-                    operation_index=f"{operation_scope}:{call_index}:recover_retry",
-                )
-                proof = _merge_proof(proof, retry_proof)
+        _result, extra = await _retry_failed_tool_if_needed(
+            mcp=mcp,
+            tool_name=pc.name,
+            args=args,
+            result=result,
+            event_id=pc.id,
+            sandbox_id=sandbox_id,
+            session_id=session_id,
+            run_id=run_id,
+            working_messages=working_messages,
+            manifest_by_name=manifest_by_name,
+            mcp_tool_models=mcp_tool_models,
+            billing_enabled=billing_enabled,
+            operation_prefix=f"{operation_scope}:{call_index}",
+        )
+        proof = _merge_proof(proof, extra)
     return proof
 
 
@@ -1263,6 +1353,104 @@ def _detect_shell_recovery(*, args: dict[str, Any], result) -> _ShellRecoveryPla
     return None
 
 
+async def _retry_failed_tool_if_needed(
+    *,
+    mcp,
+    tool_name: str,
+    args: dict[str, Any],
+    result,
+    event_id: str,
+    sandbox_id: str,
+    session_id,
+    run_id,
+    working_messages: list,
+    manifest_by_name: dict[str, Any],
+    mcp_tool_models: dict[str, str] | None,
+    billing_enabled: bool,
+    operation_prefix: str,
+) -> tuple[Any, _ExecutionProof]:
+    """Count a failed call; pip-recover missing deps or once-retry timeout/nonzero shell."""
+    extra = _ExecutionProof()
+    if result.ok:
+        return result, extra
+
+    extra.failed_tool_calls = 1
+    extra.failure_notes = [_failure_note(result)]
+
+    recovery = _detect_shell_recovery(args=args, result=result)
+    if recovery is not None:
+        log.info(
+            "graph.execute.shell_auto_recover",
+            session_id=str(session_id),
+            run_id=run_id,
+            reason=recovery.reason,
+            install_cmd=recovery.install_cmd,
+        )
+        install_result, install_proof = await _invoke_tool_with_events(
+            mcp=mcp,
+            tool_name="shell",
+            args={"cmd": recovery.install_cmd, "cwd": args.get("cwd")},
+            event_id=f"{event_id}_recover_install",
+            sandbox_id=sandbox_id,
+            session_id=session_id,
+            run_id=run_id,
+            working_messages=working_messages,
+            manifest=manifest_by_name.get("shell"),
+            mcp_tool_models=mcp_tool_models,
+            billing_enabled=billing_enabled,
+            operation_index=f"{operation_prefix}:recover_install",
+        )
+        extra = _merge_proof(extra, install_proof)
+        if install_result.ok:
+            retry_result, retry_proof = await _invoke_tool_with_events(
+                mcp=mcp,
+                tool_name=tool_name,
+                args=args,
+                event_id=f"{event_id}_recover_retry",
+                sandbox_id=sandbox_id,
+                session_id=session_id,
+                run_id=run_id,
+                working_messages=working_messages,
+                manifest=manifest_by_name.get(tool_name),
+                mcp_tool_models=mcp_tool_models,
+                billing_enabled=billing_enabled,
+                operation_index=f"{operation_prefix}:recover_retry",
+            )
+            extra = _merge_proof(extra, retry_proof)
+            if retry_result.ok:
+                extra.recovered_failures = 1
+            return retry_result, extra
+        return result, extra
+
+    if _is_retryable_shell_failure(tool_name=tool_name, result=result):
+        log.info(
+            "graph.execute.shell_fail_retry",
+            session_id=str(session_id),
+            run_id=run_id,
+            note=extra.failure_notes[-1] if extra.failure_notes else "tool failed",
+        )
+        retry_result, retry_proof = await _invoke_tool_with_events(
+            mcp=mcp,
+            tool_name=tool_name,
+            args=args,
+            event_id=f"{event_id}_fail_retry",
+            sandbox_id=sandbox_id,
+            session_id=session_id,
+            run_id=run_id,
+            working_messages=working_messages,
+            manifest=manifest_by_name.get(tool_name),
+            mcp_tool_models=mcp_tool_models,
+            billing_enabled=billing_enabled,
+            operation_index=f"{operation_prefix}:fail_retry",
+        )
+        extra = _merge_proof(extra, retry_proof)
+        if retry_result.ok:
+            extra.recovered_failures = 1
+        return retry_result, extra
+
+    return result, extra
+
+
 def _normalize_evidence_path(raw: Any, *, cwd: str | None = None) -> str | None:
     if not isinstance(raw, str):
         return None
@@ -1438,8 +1626,16 @@ async def _confirm_shell_artifact_paths_via_stat(
         if not body.get("is_file"):
             continue
         use_rel = rel.strip().lstrip("./")
-        if use_rel and _is_deliverable_path_candidate(use_rel):
-            confirmed.add(use_rel)
+        if not use_rel or not _is_deliverable_path_candidate(use_rel):
+            continue
+        if _thin_written_file_reason(
+            path=use_rel,
+            exists=True,
+            is_file=True,
+            size=body.get("size"),
+        ):
+            continue
+        confirmed.add(use_rel)
     return confirmed
 
 
@@ -1471,6 +1667,98 @@ _DELIVERABLE_EXTS_FOR_STAT = frozenset({
 def _is_deliverable_path_candidate(rel: str) -> bool:
     s = Path(rel.strip()).suffix.lower()
     return bool(s) and s in _DELIVERABLE_EXTS_FOR_STAT
+
+
+def _stat_rel_path(raw: str) -> str | None:
+    rel = _workspace_relative_from_guess(raw) or str(raw).strip().lstrip("./")
+    if not rel or ".." in Path(rel).parts:
+        return None
+    return rel
+
+
+async def _empty_written_delivery_reason(
+    *,
+    mcp,
+    sandbox_id: str,
+    proof: _ExecutionProof,
+    requires_artifact: bool,
+    max_stats: int = 12,
+) -> str | None:
+    if not requires_artifact:
+        return None
+    candidates = [
+        p
+        for p in sorted(proof.written_paths)
+        if isinstance(p, str) and _is_deliverable_path_candidate(_stat_rel_path(p) or p)
+    ]
+    if not candidates:
+        return None
+    first_bad: str | None = None
+    ok_files = 0
+    tried = 0
+    for raw in candidates:
+        if tried >= max_stats:
+            break
+        rel = _stat_rel_path(raw)
+        if not rel:
+            continue
+        tried += 1
+        st = await mcp.invoke(
+            "filesystem",
+            sandbox_id=sandbox_id,
+            args={"action": "stat", "path": rel},
+        )
+        if not st.ok:
+            if first_bad is None:
+                first_bad = f"声称已写入 {rel}，但文件不存在或不可读"
+            continue
+        body = st.output if isinstance(st.output, dict) else {}
+        if body.get("is_dir") and not body.get("is_file"):
+            continue
+        reason = _thin_written_file_reason(
+            path=rel,
+            exists=True,
+            is_file=bool(body.get("is_file")),
+            size=body.get("size"),
+        )
+        if reason:
+            if first_bad is None:
+                first_bad = reason
+            continue
+        if body.get("is_file"):
+            ok_files += 1
+    if ok_files > 0:
+        return None
+    return first_bad
+
+
+async def _stop_blocked_reason(
+    *,
+    user_message: str,
+    plan: dict[str, Any] | None,
+    proof: _ExecutionProof,
+    task_frame: dict[str, Any] | None,
+    sandbox_id: str,
+    mcp=None,
+) -> str | None:
+    reason = _missing_delivery_reason(
+        user_message=user_message,
+        plan=plan,
+        proof=proof,
+        task_frame=task_frame,
+    )
+    if reason:
+        return reason
+    reason = _unrecovered_failure_reason(proof)
+    if reason:
+        return reason
+    requires_artifact = _goal_requires_real_artifact(user_message, plan, task_frame)
+    return await _empty_written_delivery_reason(
+        mcp=mcp or get_client(),
+        sandbox_id=sandbox_id,
+        proof=proof,
+        requires_artifact=requires_artifact,
+    )
 
 
 def _proof_from_tool_result(

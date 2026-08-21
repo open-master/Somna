@@ -104,6 +104,23 @@ def _has_artifact_evidence(summary: dict[str, Any]) -> bool:
     return isinstance(paths, list) and any(isinstance(p, str) and p.strip() for p in paths)
 
 
+def _unrecovered_tool_failures(summary: dict[str, Any] | None) -> int:
+    if not isinstance(summary, dict):
+        return 0
+    raw = summary.get("unrecovered_failures")
+    if raw is not None:
+        try:
+            return max(0, int(raw))
+        except (TypeError, ValueError):
+            return 0
+    try:
+        failed = int(summary.get("failed_tool_calls") or 0)
+        recovered = int(summary.get("recovered_failures") or 0)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, failed - recovered)
+
+
 def _should_block_skill_finalize(state: SessionState) -> tuple[bool, str, str]:
     if not (state.get("selected_skills") or []):
         return False, "", ""
@@ -143,6 +160,15 @@ def _fallback_decision(state: SessionState) -> dict[str, Any]:
         if "多步计划" in reason or "步骤" in reason:
             return {"decision": "replan", "reason": reason, "focus": "基于当前结果重新拆解剩余步骤"}
         return {"decision": "continue_execute", "reason": reason, "focus": "补齐缺失的真实执行和验证"}
+    unrecovered = _unrecovered_tool_failures(summary)
+    if unrecovered > 0:
+        notes = summary.get("failure_notes") or []
+        last = notes[-1] if isinstance(notes, list) and notes else "修复失败的工具调用并验证结果"
+        return {
+            "decision": "continue_execute",
+            "reason": "本轮有未恢复的工具失败",
+            "focus": str(last)[:120],
+        }
     blocked, block_reason, focus = _should_block_skill_finalize(state)
     if blocked:
         return {"decision": "continue_execute", "reason": block_reason, "focus": focus}
@@ -173,6 +199,8 @@ def _coerce_route_for_high_autonomy(state: SessionState, route: str, reason: str
         return route, reason, focus
     summary = state.get("execution_summary") or {}
     if str(summary.get("delivery_missing_reason") or "").strip():
+        return route, reason, focus
+    if _unrecovered_tool_failures(summary) > 0:
         return route, reason, focus
     if _pending_todos(state.get("plan")):
         return route, reason, focus
@@ -317,6 +345,14 @@ async def reflect_node(state: SessionState) -> SessionState:
         route = "continue_execute"
         reason = "仍有未完成 TODO，暂不能宣告任务完成"
         focus = str(pending_before_finalize[0].get("text") or "继续完成并验证剩余步骤")
+
+    unrecovered = _unrecovered_tool_failures(state.get("execution_summary") or {})
+    if route == "finalize" and unrecovered > 0 and reflections < _MAX_REFLECTIONS:
+        notes = (state.get("execution_summary") or {}).get("failure_notes") or []
+        last = notes[-1] if isinstance(notes, list) and notes else "修复失败步骤并验证"
+        route = "continue_execute"
+        reason = "本轮有未恢复的工具失败，暂不能宣告任务完成"
+        focus = str(last)[:120]
 
     route, reason, focus = _coerce_route_for_high_autonomy(state, route, reason, focus)
     if route == "finalize" and blocked:

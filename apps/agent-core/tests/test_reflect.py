@@ -326,3 +326,83 @@ async def test_reflect_blocks_skill_finalize_when_only_verified_paths_exist():
 
     assert out["next_node"] == "execute"
     assert "产物证据" in out["reflection"]["reason"]
+
+
+@pytest.mark.asyncio
+async def test_reflect_unrecovered_failures_blocks_finalize():
+    sid = uuid4()
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                create=AsyncMock(return_value=_mk_completion('{"decision":"finalize","reason":"可以结束","focus":""}'))
+            )
+        )
+    )
+
+    with (
+        patch.object(reflect_mod, "emit", AsyncMock()),
+        patch.object(reflect_mod, "get_async_openai", return_value=client),
+        patch.object(reflect_mod, "load_template", return_value="tpl"),
+        patch.object(reflect_mod, "render", return_value="x"),
+    ):
+        out = await reflect_mod.reflect_node(
+            {
+                "session_id": sid,
+                "run_id": "r1",
+                "user_message": "跑一下脚本",
+                "assistant_text": "已经完成",
+                "execution_summary": {
+                    "written_paths": ["/workspace/out.txt"],
+                    "unrecovered_failures": 1,
+                    "failed_tool_calls": 1,
+                    "recovered_failures": 0,
+                    "failure_notes": ["exit_code=1"],
+                },
+                "plan": {"todos": [{"id": "1", "text": "执行脚本", "status": "done"}]},
+            }
+        )
+
+    assert out["next_node"] == "execute"
+    assert "未恢复" in out["reflection"]["reason"]
+
+
+@pytest.mark.asyncio
+async def test_reflect_high_autonomy_does_not_coerce_unrecovered_failures():
+    sid = uuid4()
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                create=AsyncMock(
+                    return_value=_mk_completion(
+                        '{"decision":"continue_execute","reason":"再检查一遍","focus":"无"}'
+                    )
+                )
+            )
+        )
+    )
+
+    with (
+        patch.object(reflect_mod, "emit", AsyncMock()),
+        patch.object(reflect_mod, "get_async_openai", return_value=client),
+    ):
+        out = await reflect_mod.reflect_node(
+            {
+                "session_id": sid,
+                "run_id": "r1",
+                "task_frame": {"autonomy_level": "high", "risk_level": "low"},
+                "user_message": "任务",
+                "assistant_text": "已完成",
+                "execution_summary": {
+                    "unrecovered_failures": 1,
+                    "failure_notes": ["timeout"],
+                },
+                "plan": {
+                    "todos": [
+                        {"id": "1", "text": "步骤一", "status": "done"},
+                    ]
+                },
+            }
+        )
+
+    assert out["next_node"] == "execute"
+    assert out["reflection"]["decision"] == "continue_execute"

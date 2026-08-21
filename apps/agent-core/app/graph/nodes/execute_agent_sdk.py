@@ -38,16 +38,16 @@ from app.graph.nodes.execute import (
     _compose_executor_extra_context,
     _content_str,
     _delivery_recovery_tool_name,
-    _detect_shell_recovery,
     _emit_skill_debug_event,
     _ExecutionProof,
     _invoke_tool_with_events,
     _merge_proof,
-    _missing_delivery_reason,
     _PendingToolCall,
     _proof_from_execution_summary,
     _render_tool_content,
+    _retry_failed_tool_if_needed,
     _route_or_reuse_skills,
+    _stop_blocked_reason,
     _summarize_execution,
     _with_fresh_system_prompt,
     effective_mcp_tool_models_map,
@@ -116,47 +116,22 @@ class _SomnaBridge:
             operation_index=operation_scope,
         )
         proof_acc = delta
-
-        recovery = _detect_shell_recovery(args=args, result=result)
-        if recovery is not None:
-            log.info(
-                "graph.execute_agent_sdk.shell_auto_recover",
-                session_id=str(self.session_id),
-                run_id=self.run_id,
-                reason=recovery.reason,
-                install_cmd=recovery.install_cmd,
-            )
-            install_result, install_proof = await _invoke_tool_with_events(
-                mcp=get_client(),
-                tool_name="shell",
-                args={"cmd": recovery.install_cmd, "cwd": args.get("cwd")},
-                event_id=f"{pc.id}_recover_install",
-                sandbox_id=self.sandbox_id,
-                session_id=self.session_id,
-                run_id=self.run_id,
-                working_messages=self.working_messages,
-                manifest=self.manifest_by_name.get("shell"),
-                mcp_tool_models=self.mcp_tool_models,
-                billing_enabled=self.billing_enabled,
-                operation_index=f"{operation_scope}:recover_install",
-            )
-            proof_acc = _merge_proof(proof_acc, install_proof)
-            if install_result.ok:
-                result, retry_proof = await _invoke_tool_with_events(
-                    mcp=get_client(),
-                    tool_name=tool_name,
-                    args=args,
-                    event_id=f"{pc.id}_recover_retry",
-                    sandbox_id=self.sandbox_id,
-                    session_id=self.session_id,
-                    run_id=self.run_id,
-                    working_messages=self.working_messages,
-                    manifest=manifest,
-                    mcp_tool_models=self.mcp_tool_models,
-                    billing_enabled=self.billing_enabled,
-                    operation_index=f"{operation_scope}:recover_retry",
-                )
-                proof_acc = _merge_proof(proof_acc, retry_proof)
+        result, extra = await _retry_failed_tool_if_needed(
+            mcp=get_client(),
+            tool_name=tool_name,
+            args=args,
+            result=result,
+            event_id=pc.id,
+            sandbox_id=self.sandbox_id,
+            session_id=self.session_id,
+            run_id=self.run_id,
+            working_messages=self.working_messages,
+            manifest_by_name=self.manifest_by_name,
+            mcp_tool_models=self.mcp_tool_models,
+            billing_enabled=self.billing_enabled,
+            operation_prefix=operation_scope,
+        )
+        proof_acc = _merge_proof(proof_acc, extra)
 
         self.proof = _merge_proof(self.proof, proof_acc)
         self.plan = await advance_with_proof(
@@ -543,11 +518,12 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
             if last_result:
                 total_agent_turns += max(0, int(last_result.num_turns or 0))
 
-            delivery_reason = _missing_delivery_reason(
+            delivery_reason = await _stop_blocked_reason(
                 user_message=user_message,
                 plan=plan,
                 proof=proof,
                 task_frame=state.get("task_frame"),
+                sandbox_id=sandbox_id,
             )
             if not delivery_reason:
                 break
