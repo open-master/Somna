@@ -55,6 +55,8 @@ interface LiveState {
   recentEvents: RecentEvent[];
   seenArtifactEventKeys: Record<string, true>;
   seenUsageEventKeys: Record<string, true>;
+  seenToolEventKeys: Record<string, true>;
+  seenTraceEventKeys: Record<string, true>;
   onScreenshot: (e: ScreenshotEvent) => void;
   onArtifact: (e: ArtifactEvent) => void;
   onUsage: (e: TokenUsageEvent) => void;
@@ -79,6 +81,8 @@ export const useLiveStore = create<LiveState>((set) => ({
   recentEvents: [],
   seenArtifactEventKeys: {},
   seenUsageEventKeys: {},
+  seenToolEventKeys: {},
+  seenTraceEventKeys: {},
   onScreenshot: (e) =>
     set((s) => {
       const shot: Shot = {
@@ -144,7 +148,11 @@ export const useLiveStore = create<LiveState>((set) => ({
     }),
   onToolCall: (e) =>
     set((s) => {
-      if (e.name !== "shell") return s;
+      const key = sideEventKey(e);
+      if (s.seenToolEventKeys[key]) return s;
+      if (e.name !== "shell") {
+        return { seenToolEventKeys: { ...s.seenToolEventKeys, [key]: true } };
+      }
       const cmd = typeof e.args === "object" && e.args
         ? ((e.args as Record<string, unknown>).cmd as string) ?? JSON.stringify(e.args)
         : String(e.args);
@@ -153,23 +161,36 @@ export const useLiveStore = create<LiveState>((set) => ({
       return {
         terminalLines: next,
         fileItems: collectToolFileItems(s.fileItems, e),
+        seenToolEventKeys: { ...s.seenToolEventKeys, [key]: true },
       };
     }),
   onToolResult: (e) =>
     set((s) => {
-      if (!e.preview) return s;
+      const key = sideEventKey(e);
+      if (s.seenToolEventKeys[key]) return s;
+      if (!e.preview) {
+        return { seenToolEventKeys: { ...s.seenToolEventKeys, [key]: true } };
+      }
       const lines = [...s.terminalLines, e.preview].slice(-MAX_TERM);
-      return { terminalLines: lines };
+      return {
+        terminalLines: lines,
+        seenToolEventKeys: { ...s.seenToolEventKeys, [key]: true },
+      };
     }),
   track: (e) =>
     set((s) => {
+      const key = sideEventKey(e);
+      if (s.seenTraceEventKeys[key]) return s;
       const rec: RecentEvent = {
         type: e.type,
         seq: (e as { seq?: number | null }).seq ?? null,
         summary: summarize(e),
         ts: Date.now(),
       };
-      return { recentEvents: [rec, ...s.recentEvents].slice(0, MAX_EVENTS) };
+      return {
+        recentEvents: [rec, ...s.recentEvents].slice(0, MAX_EVENTS),
+        seenTraceEventKeys: { ...s.seenTraceEventKeys, [key]: true },
+      };
     }),
   clear: () =>
     set({
@@ -182,8 +203,18 @@ export const useLiveStore = create<LiveState>((set) => ({
       recentEvents: [],
       seenArtifactEventKeys: {},
       seenUsageEventKeys: {},
+      seenToolEventKeys: {},
+      seenTraceEventKeys: {},
     }),
 }));
+
+function sideEventKey(e: AgentEvent): string {
+  const seq = (e as { seq?: unknown }).seq;
+  if (typeof seq === "number") return `seq:${seq}`;
+  const id = (e as { id?: unknown }).id;
+  if (typeof id === "string" && id) return `${e.type}:${id}`;
+  return `${e.type}:${e.ts ?? ""}:${summarize(e)}`;
+}
 
 function summarize(e: AgentEvent): string {
   switch (e.type) {

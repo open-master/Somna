@@ -119,9 +119,7 @@ START → ingest → task_frame ─┬─（需澄清）───→ clarify ─
 - **clarify / direct_answer**：不经 Planner 与工具主环；**direct_answer** 可对图片/PDF 做多模态与正文抽取（实现见 `light_reply.py`）。
 - **plan**：产出/更新 TODO；**execute**：按 `executor_engine` 走 **OpenAI Chat Completions 自研 loop** 或 **Claude Agent SDK**（经 LiteLLM），再经 MCP Hub 调用沙箱工具。
 - **reflect**：复盘后设定 `next_node`（`execute` / `plan` / `finalize`）。**若 `execute` 结束时已设置 `state.error`，主图不进入 `reflect`，直接 `finalize`。**
-- **finalize**：终态事件、`sessions.status` 更新；**当前主图中无独立 `compact` 节点**（摘要/压缩若存在，为节点内或其它模块职责，非本节主环）。
-
-> **说明**：`compact` 仍以路线图中的「独立环上节点」为目标，落地后应回到本节更新「当前实现」示意图。
+- **finalize**：终态事件、`sessions.status` / `last_phase` 更新。上下文压缩在 **execute 内**（`maybe_compact`），主图没有独立 `compact` 节点。
 
 ### 3.3 Temporal 与 LangGraph 的边界
 

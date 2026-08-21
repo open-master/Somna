@@ -17,7 +17,7 @@ Somna 将 **Temporal** 用于可恢复编排，**Agent Core** 承载 LangGraph �
 ### 会话与编排
 
 - **Temporal 工作流**：长任务、断线续跑、人工介入与超时控制（可扩展）
-- **LangGraph 状态机**：ingest → plan → execute → compact → reflect → finalize
+- **LangGraph 状态机**：ingest → task_frame → plan → execute ↔ reflect → finalize（压缩在 execute 内）
 - **双执行模式**：自研 OpenAI 兼容 loop；**模式二** 走 Claude Agent SDK + MCP
 
 ### 沙盒与工具

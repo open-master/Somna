@@ -3,12 +3,31 @@ import { startTransition, useEffect, useRef, useState } from "react";
 import { unstable_batchedUpdates as batchedUpdates } from "react-dom";
 import { createDispatcher } from "@somna/event-schema/dispatcher";
 import type { HandlerMap } from "@somna/event-schema/dispatcher";
+import type { AgentEventType } from "@somna/event-schema";
 
 import { mergeUserMessagesAndEvents, type MergedItem, type PersistedUserMessage } from "@/lib/chat/timeline";
 import { listAllSessionEventPayloads, listSessionEvents, listSessionMessages } from "@/lib/api/sessions";
 import { useChatStore } from "@/lib/store/chat";
 
 const POLL_MS = 1_500;
+
+/** Named SSE frames from agent-core (`event: <type>`). `onmessage` only sees unnamed/`message`. */
+export const SSE_NAMED_EVENT_TYPES: Array<AgentEventType | "ping"> = [
+  "message.delta",
+  "thinking.delta",
+  "tool.call",
+  "tool.result",
+  "screenshot",
+  "artifact",
+  "plan.update",
+  "task.frame",
+  "skill.debug",
+  "status",
+  "token.usage",
+  "interrupt.ack",
+  "error",
+  "ping",
+];
 
 /**
  * Subscribe to a session's SSE stream.
@@ -73,22 +92,7 @@ export function useEventStream(sessionId: string | null, handlers: HandlerMap) {
       };
 
       es.onmessage = onMessage;
-      const eventTypes = [
-        "message.delta",
-        "thinking.delta",
-        "tool.call",
-        "tool.result",
-        "screenshot",
-        "artifact",
-        "plan.update",
-        "task.frame",
-        "status",
-        "token.usage",
-        "interrupt.ack",
-        "error",
-        "ping",
-      ];
-      for (const t of eventTypes) {
+      for (const t of SSE_NAMED_EVENT_TYPES) {
         es.addEventListener(t, onMessage as EventListener);
       }
 

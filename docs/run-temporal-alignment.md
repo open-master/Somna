@@ -19,7 +19,7 @@
 |------|------|----------|
 | Workflow | 启动/等待一次「整段会话图」Activity | `app/temporal/workflows.py` → `SessionRunWorkflow.run` |
 | Activity | 在进程内调用 `run_session_graph(...)`，并对 Temporal **打心跳** | `app/temporal/activities.py` → `run_session_graph_activity` |
-| LangGraph | 多节点（定调 / 计划 / 执行 / 压缩等）与 checkpoint | `app/graph/runner.py` |
+| LangGraph | 多节点（定调 / 计划 / 执行 / 反思）与 checkpoint；压缩在 execute 内 | `app/graph/runner.py` |
 
 **心跳与超时**（可调）：`app/temporal/workflow_limits.py` — `ACTIVITY_START_TO_CLOSE_TIMEOUT`、`ACTIVITY_HEARTBEAT_TIMEOUT`、`ACTIVITY_MAXIMUM_ATTEMPTS`。Activity 内约每 10s `activity.heartbeat()`，直至 `run_session_graph` 结束。
 
@@ -33,4 +33,4 @@
 
 1. **Workflow 显示超时/心跳失败**：检查长工具调用是否阻塞事件循环、Worker 是否存活；必要时调大 `ACTIVITY_HEARTBEAT_TIMEOUT` 或缩短心跳间隔（与 limits 注释一致）。  
 2. **run_id 与 DB 不一致**：以会话行 `run_id` / `workflow_id` 为准，比对 API 发起新 run 时的赋值链路。  
-3. **恢复语义**：当前竖切以「单次 Activity 跑完整图」为主；更细的断点/Signal 续跑见产品里程碑，不在本文范围。
+3. **恢复语义**：同一 `run_id` 的 Activity 重试从 LangGraph checkpoint 续跑（`ainvoke(None)`），不从 ingest 整图重来。更细的 execute 内部断点不在本文范围。

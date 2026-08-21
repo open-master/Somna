@@ -1,4 +1,4 @@
-"""Phase B: materialize Frame/Plan as sandbox JSON; append-only executor progress.
+"""Phase B: materialize Frame/Plan as sandbox JSON; bounded executor progress.
 
 Events + LangGraph checkpoint remain authoritative for replay; these files are
 debuggable snapshots and stable path pointers for tools / future memory index.
@@ -6,8 +6,8 @@ debuggable snapshots and stable path pointers for tools / future memory index.
 Layout (sandbox-relative):
   .somna/runs/<run_id>/task_frame.json
   .somna/runs/<run_id>/plan.json
-  .somna/runs/<run_id>/progress.log
-  .somna/runs/<run_id>/run_index.json   # minimal discovery manifest (P2)
+  .somna/runs/<run_id>/progress.log   # overwritten, last N lines only
+  .somna/runs/<run_id>/run_index.json
 """
 
 from __future__ import annotations
@@ -23,6 +23,9 @@ from app.tools.client import get_client
 log = get_logger(__name__)
 
 RUN_PREFIX = ".somna/runs"
+_MAX_PROGRESS_LINES = 24
+_MAX_PROGRESS_BUFFERS = 16
+_progress_buffers: dict[str, list[str]] = {}
 
 
 def run_state_dir(run_id: str) -> str:
@@ -141,21 +144,33 @@ async def append_progress_line(
     run_id: str,
     line: str,
 ) -> None:
+    """Overwrite progress.log with a bounded rolling window (does not grow forever)."""
     rel = progress_rel(run_id)
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    row = f"{ts}\t{line}\n"
+    buf = _progress_buffers.setdefault(run_id, [])
+    buf.append(f"{ts}\t{line}")
+    if len(buf) > _MAX_PROGRESS_LINES:
+        del buf[:-_MAX_PROGRESS_LINES]
+    if len(_progress_buffers) > _MAX_PROGRESS_BUFFERS:
+        for stale in list(_progress_buffers):
+            if stale == run_id:
+                continue
+            _progress_buffers.pop(stale, None)
+            if len(_progress_buffers) <= _MAX_PROGRESS_BUFFERS:
+                break
+    body = "\n".join(buf) + "\n"
     try:
         tool = await get_client().invoke(
             "filesystem",
             sandbox_id=sandbox_id,
             session_id=str(session_id),
             run_id=run_id,
-            args={"action": "append", "path": rel, "content": row},
+            args={"action": "write", "path": rel, "content": body},
         )
         if not tool.ok:
-            log.warning("run_artifacts.progress_append_failed", path=rel, error=tool.error)
+            log.warning("run_artifacts.progress_write_failed", path=rel, error=tool.error)
     except Exception as exc:  # noqa: BLE001
-        log.warning("run_artifacts.progress_append_exception", path=rel, error=str(exc))
+        log.warning("run_artifacts.progress_write_exception", path=rel, error=str(exc))
 
 
 async def persist_task_frame_pointer(

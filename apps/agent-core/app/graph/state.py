@@ -9,9 +9,10 @@ from langgraph.graph import add_messages
 
 
 class SessionState(TypedDict, total=False):
-    """Minimum state the M2 skeleton propagates through the graph.
+    """Session graph state.
 
-    Grows as nodes are added (plan / compact / reflect bring more fields).
+    Compact summaries live on `compact_memory`; compaction runs inside execute,
+    not as a separate graph node.
     """
 
     session_id: UUID
@@ -55,7 +56,7 @@ class SessionState(TypedDict, total=False):
 
     # Planner output (dict: {id, reasoning, todos: [...], estimated_steps})
     plan: dict[str, Any] | None
-    # Latest compacted summary (markdown from compact node)
+    # Latest compacted summary (markdown from maybe_compact inside execute)
     compact_memory: str | None
     # Execution summary used by reflect / replan
     execution_summary: dict[str, Any] | None

@@ -156,7 +156,7 @@ async def maybe_compact(
         return messages, False, None
 
     summary_msg = SystemMessage(
-        content="# 历史会话摘要（由 compact 节点生成）\n\n" + summary
+        content="# 历史会话摘要（由 execute 内压缩生成）\n\n" + summary
     )
     await emit(
         StatusEvent(

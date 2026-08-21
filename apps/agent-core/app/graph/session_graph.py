@@ -1,12 +1,12 @@
 """LangGraph session state machine.
 
-M2 minimal version:  ingest → execute → finalize
-Future M2 full:      ingest → plan → execute ↔ compact → reflect → finalize
+Current graph:
+  ingest → task_frame → (clarify | direct_answer | plan → execute ↔ reflect) → finalize
 
-Checkpoints are persisted to Postgres via `langgraph-checkpoint-postgres`.
-Temporal Activity retries invoke the compiled graph with the same
-`thread_id=session_id`; in-progress runs resume from the next node
-(`ainvoke(None)`) instead of restarting at ingest.
+Context compaction stays inside execute (`maybe_compact`); it is not a graph node.
+Checkpoints persist to Postgres via `langgraph-checkpoint-postgres`.
+Temporal Activity retries use the same `thread_id=session_id` and resume from the
+next node (`ainvoke(None)`) instead of restarting at ingest.
 """
 
 from __future__ import annotations

@@ -153,7 +153,7 @@
 |---|---|
 | 国产模型 tool use 稳定性 | 强 JSON schema 校验 + 自动重试 + 多级 fallback |
 | 沙盒逃逸 | rootless + 只读宿主卷 + 出口网络白名单 |
-| 长任务 token 爆炸 | LangGraph 的 compact 节点强制摘要 |
+| 长任务 token 爆炸 | execute 内 `maybe_compact` 强制摘要 |
 | Claude SDK 特性在国产模型失效 | 将压缩/缓存/并发重建到 LangGraph 层 |
 | Temporal 学习曲线 | 初期只用 1 个 workflow，活动由 Agent Core 提供 |
 
