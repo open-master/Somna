@@ -247,7 +247,12 @@ async def test_advance_with_proof_completes_generic_todo_on_successful_tool_call
             {"id": "2", "text": "整理答案", "status": "pending"},
         ]
     }
-    proof = SimpleNamespace(successful_tool_calls=1, written_paths=set(), verified_paths=set())
+    proof = SimpleNamespace(
+        successful_tool_calls=1,
+        written_paths=set(),
+        verified_paths=set(),
+        tool_names=["search"],
+    )
 
     with patch.object(plan_mod, "emit", AsyncMock()):
         out = await plan_mod.advance_with_proof(plan, session_id=sid, run_id="r1", proof=proof)
@@ -255,6 +260,31 @@ async def test_advance_with_proof_completes_generic_todo_on_successful_tool_call
     assert out is not None
     assert out["todos"][0]["status"] == TodoStatus.done
     assert out["todos"][1]["status"] == TodoStatus.in_progress
+    assert out["todos"][0]["tool_call_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_advance_with_proof_shell_env_check_does_not_complete_todo():
+    sid = uuid4()
+    plan = {
+        "todos": [
+            {"id": "1", "text": "调研乔布斯和盖茨的成就与代表产品", "status": "in_progress"},
+            {"id": "2", "text": "写一个约 20 秒的英文纪录片旁白脚本", "status": "pending"},
+        ]
+    }
+    proof = SimpleNamespace(
+        successful_tool_calls=1,
+        written_paths=set(),
+        verified_paths=set(),
+        tool_names=["shell"],
+    )
+
+    with patch.object(plan_mod, "emit", AsyncMock()):
+        out = await plan_mod.advance_with_proof(plan, session_id=sid, run_id="r1", proof=proof)
+
+    assert out is not None
+    assert out["todos"][0]["status"] == TodoStatus.in_progress
+    assert out["todos"][1]["status"] == TodoStatus.pending
     assert out["todos"][0]["tool_call_count"] == 1
 
 
@@ -267,16 +297,23 @@ async def test_advance_with_proof_requires_artifact_evidence_for_build_todo():
             {"id": "2", "text": "本地验证", "status": "pending"},
         ]
     }
-    install_only = SimpleNamespace(successful_tool_calls=1, written_paths=set(), verified_paths=set())
+    install_only = SimpleNamespace(
+        successful_tool_calls=1,
+        written_paths=set(),
+        verified_paths=set(),
+        tool_names=["shell"],
+    )
     verified_only = SimpleNamespace(
         successful_tool_calls=1,
         written_paths=set(),
         verified_paths={"/workspace/app/existing.tsx"},
+        tool_names=["filesystem"],
     )
     file_proof = SimpleNamespace(
         successful_tool_calls=1,
         written_paths={"/workspace/app/page.tsx"},
         verified_paths=set(),
+        tool_names=["filesystem"],
     )
 
     with patch.object(plan_mod, "emit", AsyncMock()):
@@ -298,3 +335,140 @@ async def test_advance_with_proof_requires_artifact_evidence_for_build_todo():
     assert out["todos"][0]["status"] == TodoStatus.done
     assert out["todos"][1]["status"] == TodoStatus.in_progress
     assert out["todos"][0]["evidence_paths"] == ["/workspace/app/page.tsx"]
+
+
+@pytest.mark.asyncio
+async def test_advance_with_proof_one_clip_does_not_complete_multi_video_todo():
+    sid = uuid4()
+    plan = {
+        "todos": [
+            {"id": "4", "text": "按分镜生成 4-5 条横屏 16:9 原创视频片段", "status": "in_progress"},
+            {"id": "5", "text": "将视频片段合成为约 20 秒连续视频，并叠加音频、对齐", "status": "pending"},
+            {"id": "6", "text": "验证最终视频时长、比例、音画同步，必要时重导出", "status": "pending"},
+        ]
+    }
+    clip = SimpleNamespace(
+        successful_tool_calls=1,
+        written_paths={"artifacts/wan_t2v_clip1_abcd1234.mp4"},
+        verified_paths=set(),
+        tool_names=["wan_t2v"],
+    )
+
+    with patch.object(plan_mod, "emit", AsyncMock()):
+        out = await plan_mod.advance_with_proof(plan, session_id=sid, run_id="r1", proof=clip)
+
+    assert out is not None
+    assert out["todos"][0]["status"] == TodoStatus.in_progress
+    assert out["todos"][1]["status"] == TodoStatus.pending
+    assert out["todos"][2]["status"] == TodoStatus.pending
+    assert out["todos"][0]["evidence_paths"] == ["artifacts/wan_t2v_clip1_abcd1234.mp4"]
+
+
+@pytest.mark.asyncio
+async def test_advance_with_proof_fourth_clip_starts_mux_without_completing_it():
+    sid = uuid4()
+    plan = {
+        "todos": [
+            {
+                "id": "4",
+                "text": "按分镜生成 4-5 条横屏 16:9 原创视频片段",
+                "status": "in_progress",
+                "evidence_paths": [
+                    "artifacts/wan_t2v_a.mp4",
+                    "artifacts/wan_t2v_b.mp4",
+                    "artifacts/wan_t2v_c.mp4",
+                ],
+            },
+            {"id": "5", "text": "将视频片段合成为约 20 秒连续视频，并叠加音频、对齐", "status": "pending"},
+            {"id": "6", "text": "验证最终视频时长、比例、音画同步，必要时重导出", "status": "pending"},
+        ]
+    }
+    fourth = SimpleNamespace(
+        successful_tool_calls=1,
+        written_paths={"artifacts/wan_t2v_d.mp4"},
+        verified_paths=set(),
+        tool_names=["wan_t2v"],
+    )
+
+    with patch.object(plan_mod, "emit", AsyncMock()):
+        out = await plan_mod.advance_with_proof(plan, session_id=sid, run_id="r1", proof=fourth)
+
+    assert out is not None
+    assert out["todos"][0]["status"] == TodoStatus.done
+    assert out["todos"][1]["status"] == TodoStatus.in_progress
+    assert out["todos"][2]["status"] == TodoStatus.pending
+
+
+@pytest.mark.asyncio
+async def test_advance_with_proof_wan_t2v_does_not_complete_mux_or_verify():
+    sid = uuid4()
+    plan = {
+        "todos": [
+            {"id": "5", "text": "将视频片段合成为约 20 秒连续视频，并叠加音频、对齐", "status": "in_progress"},
+            {"id": "6", "text": "验证最终视频时长、比例、音画同步，必要时重导出", "status": "pending"},
+        ]
+    }
+    extra_clip = SimpleNamespace(
+        successful_tool_calls=1,
+        written_paths={"artifacts/wan_t2v_extra.mp4"},
+        verified_paths=set(),
+        tool_names=["wan_t2v"],
+    )
+
+    with patch.object(plan_mod, "emit", AsyncMock()):
+        out = await plan_mod.advance_with_proof(plan, session_id=sid, run_id="r1", proof=extra_clip)
+
+    assert out is not None
+    assert out["todos"][0]["status"] == TodoStatus.in_progress
+    assert out["todos"][1]["status"] == TodoStatus.pending
+
+
+@pytest.mark.asyncio
+async def test_advance_with_proof_ffmpeg_output_completes_mux_not_verify():
+    sid = uuid4()
+    plan = {
+        "todos": [
+            {"id": "5", "text": "将视频片段合成为约 20 秒连续视频，并叠加音频、对齐", "status": "in_progress"},
+            {"id": "6", "text": "验证最终视频时长、比例、音画同步，必要时重导出", "status": "pending"},
+        ]
+    }
+    muxed = SimpleNamespace(
+        successful_tool_calls=1,
+        written_paths={"artifacts/final_documentary.mp4"},
+        verified_paths=set(),
+        tool_names=["shell"],
+    )
+
+    with patch.object(plan_mod, "emit", AsyncMock()):
+        out = await plan_mod.advance_with_proof(plan, session_id=sid, run_id="r1", proof=muxed)
+
+    assert out is not None
+    assert out["todos"][0]["status"] == TodoStatus.done
+    assert out["todos"][1]["status"] == TodoStatus.in_progress
+    assert out["todos"][0]["evidence_paths"] == ["artifacts/final_documentary.mp4"]
+
+
+@pytest.mark.asyncio
+async def test_advance_with_proof_tts_finishes_script_and_audio_not_clips():
+    sid = uuid4()
+    plan = {
+        "todos": [
+            {"id": "2", "text": "写一个约 20 秒的英文纪录片旁白脚本，并规划 4-5 个分镜与时间轴", "status": "in_progress"},
+            {"id": "3", "text": "根据脚本生成英文纪录片风格旁白音频", "status": "pending"},
+            {"id": "4", "text": "按分镜生成 4-5 条横屏 16:9 原创视频片段", "status": "pending"},
+        ]
+    }
+    tts = SimpleNamespace(
+        successful_tool_calls=1,
+        written_paths={"artifacts/minimax_tts_intro_ab12cd34.mp3"},
+        verified_paths=set(),
+        tool_names=["minimax_tts"],
+    )
+
+    with patch.object(plan_mod, "emit", AsyncMock()):
+        out = await plan_mod.advance_with_proof(plan, session_id=sid, run_id="r1", proof=tts)
+
+    assert out is not None
+    assert out["todos"][0]["status"] == TodoStatus.done
+    assert out["todos"][1]["status"] == TodoStatus.done
+    assert out["todos"][2]["status"] == TodoStatus.in_progress

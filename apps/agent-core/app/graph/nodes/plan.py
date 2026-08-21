@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -375,8 +376,31 @@ async def _emit_plan_update(*, session_id, run_id, todos: list[dict[str, Any]]) 
         log.warning("graph.plan.progress_emit_failed", error=str(exc))
 
 
+_VIDEO_EXTS = {".mp4", ".webm", ".mov", ".mkv", ".m4v"}
+_AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"}
+_CLIP_NAME_PREFIXES = ("wan_t2v_", "wan_i2v_", "wan_r2v_", "wan_video_edit_")
+_MEDIA_GEN_TOOLS = frozenset(
+    {
+        "minimax_tts",
+        "wan_text2image",
+        "wan_t2v",
+        "wan_i2v",
+        "wan_r2v",
+        "wan_video_edit",
+    }
+)
+_COUNT_RANGE_RE = re.compile(r"(\d+)\s*[-~～到至]\s*(\d+)")
+_COUNT_ITEM_RE = re.compile(r"(\d+)\s*(?:条|个|段|份|张)")
+_MAX_COMPLETIONS_PER_TURN = 2
+
+
 def _todo_requires_artifact_proof(todo: dict[str, Any]) -> bool:
     text = str(todo.get("text") or "").lower()
+    # 旁白脚本 / 分镜文案是内容步骤，不要求先落盘。
+    if any(k in text for k in ("旁白", "分镜", "文案", "时间轴")) and not any(
+        k in text for k in ("文件", "html", "网站", "网页")
+    ):
+        return False
     direct_artifact_keywords = (
         "网站",
         "网页",
@@ -394,8 +418,173 @@ def _todo_requires_artifact_proof(todo: dict[str, Any]) -> bool:
         return True
 
     build_intent_keywords = ("写", "生成", "创建", "产出", "制作", "开发", "搭建", "实现", "做")
-    build_artifact_subjects = ("前端", "html", "react", "next.js", "项目", "代码", "脚本", "应用", "demo")
+    build_artifact_subjects = ("前端", "html", "react", "next.js", "项目", "代码", "应用", "demo")
+    if "脚本" in text and not any(k in text for k in ("旁白", "分镜", "文案")):
+        build_artifact_subjects = (*build_artifact_subjects, "脚本")
     return any(k in text for k in build_artifact_subjects) and any(k in text for k in build_intent_keywords)
+
+
+def _todo_intent(text: str) -> str:
+    t = (text or "").lower()
+    if any(k in t for k in ("验收", "必要时重导出", "再导出")):
+        return "verify"
+    if "验证" in t and any(k in t for k in ("最终", "成片", "时长", "同步", "比例", "交付", "本地")):
+        return "verify"
+    if any(k in t for k in ("合成", "拼接", "合并成", "合成为", "叠加音频", "混音", "mux")):
+        return "mux"
+    if "成片" in t and any(k in t for k in ("生成", "导出", "制作")):
+        return "mux"
+    if any(k in t for k in ("视频片段", "原创视频", "文生视频")):
+        return "video_clips"
+    if any(k in t for k in ("视频", "片段", "镜头", "clip")) and any(
+        k in t for k in ("生成", "制作", "出")
+    ):
+        return "video_clips"
+    if any(k in t for k in ("旁白音频", "配音", "语音解说")):
+        return "audio"
+    if ("音频" in t or "tts" in t) and any(k in t for k in ("生成", "录", "制作")):
+        return "audio"
+    if "旁白" in t and any(k in t for k in ("生成", "录", "制作")) and "脚本" not in t:
+        return "audio"
+    if any(k in t for k in ("调研", "搜索", "检索", "查找资料", "搜集")):
+        return "research"
+    if any(k in t for k in ("安装", "依赖", "ffmpeg", "检查环境", "环境检查")):
+        return "setup"
+    if _todo_requires_artifact_proof({"text": text}):
+        return "artifact"
+    return "generic"
+
+
+def _expected_count(text: str) -> int | None:
+    raw = text or ""
+    m = _COUNT_RANGE_RE.search(raw)
+    if m:
+        return max(1, int(m.group(1)))
+    m = _COUNT_ITEM_RE.search(raw)
+    if m:
+        return max(1, int(m.group(1)))
+    return None
+
+
+def _path_ext(path: str) -> str:
+    return Path(path).suffix.lower()
+
+
+def _is_video_path(path: str) -> bool:
+    return _path_ext(path) in _VIDEO_EXTS
+
+
+def _is_audio_path(path: str) -> bool:
+    return _path_ext(path) in _AUDIO_EXTS
+
+
+def _is_generated_clip_path(path: str) -> bool:
+    return Path(path).name.startswith(_CLIP_NAME_PREFIXES) and _is_video_path(path)
+
+
+def _turn_tool_names(proof: Any) -> list[str]:
+    names = getattr(proof, "tool_names", None)
+    collected: list[str] = []
+    if isinstance(names, (list, tuple, set)):
+        collected = [str(n) for n in names if n]
+    if collected:
+        return collected
+    inferred: list[str] = []
+    for path in list(getattr(proof, "written_paths", set()) or set()):
+        if not isinstance(path, str):
+            continue
+        name = Path(path).name
+        if name.startswith("wan_t2v_"):
+            inferred.append("wan_t2v")
+        elif name.startswith("wan_i2v_"):
+            inferred.append("wan_i2v")
+        elif name.startswith("wan_r2v_"):
+            inferred.append("wan_r2v")
+        elif name.startswith("wan_video_edit_"):
+            inferred.append("wan_video_edit")
+        elif name.startswith("minimax_tts_"):
+            inferred.append("minimax_tts")
+        elif name.startswith("wan_t2i_"):
+            inferred.append("wan_text2image")
+    return inferred
+
+
+def _written_paths(proof: Any) -> set[str]:
+    raw = getattr(proof, "written_paths", set()) or set()
+    return {p for p in raw if isinstance(p, str) and p}
+
+
+def _todo_paths(todo: dict[str, Any]) -> list[str]:
+    return [str(p) for p in (todo.get("evidence_paths") or []) if isinstance(p, str) and p]
+
+
+def _in_progress_todo(todos: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for t in todos:
+        if t.get("status") == TodoStatus.in_progress:
+            return t
+    return None
+
+
+def _start_next_pending(todos: list[dict[str, Any]]) -> bool:
+    for t in todos:
+        if t.get("status") == TodoStatus.pending:
+            t["status"] = TodoStatus.in_progress
+            return True
+    return False
+
+
+def _proof_satisfies_todo(todo: dict[str, Any], proof: Any) -> bool:
+    """当前 TODO 是否已经有对得上这条文案的证据。一次成功工具不够。"""
+    has_success = int(getattr(proof, "successful_tool_calls", 0) or 0) > 0
+    if not has_success:
+        return False
+
+    intent = _todo_intent(str(todo.get("text") or ""))
+    tools = _turn_tool_names(proof)
+    new_paths = _written_paths(proof)
+    all_paths = set(_todo_paths(todo)) | new_paths
+    inspect_only = (set(tools) <= {"shell"} if tools else not new_paths) and not new_paths
+
+    if intent == "setup":
+        return True
+
+    if inspect_only and intent not in {"setup", "verify"}:
+        return False
+
+    if intent == "research":
+        return "search" in tools or any(_path_ext(p) in {".md", ".txt", ".json"} for p in new_paths)
+
+    if intent == "audio":
+        return any(_is_audio_path(p) for p in all_paths)
+
+    if intent == "video_clips":
+        videos = [p for p in all_paths if _is_video_path(p)]
+        need = _expected_count(str(todo.get("text") or "")) or 1
+        return len(videos) >= need
+
+    if intent == "mux":
+        if any(t in _MEDIA_GEN_TOOLS for t in tools):
+            return False
+        return any(_is_video_path(p) and not _is_generated_clip_path(p) for p in new_paths)
+
+    if intent == "verify":
+        if any(t in _MEDIA_GEN_TOOLS for t in tools):
+            return False
+        if any(_is_generated_clip_path(p) for p in new_paths):
+            return False
+        return "shell" in tools or "filesystem" in tools
+
+    if intent == "artifact":
+        return bool(new_paths)
+
+    # generic：shell 探路不完成；search 归调研；媒体生成视为已跳到制作，结束写稿类步骤。
+    if any(t in _MEDIA_GEN_TOOLS for t in tools):
+        return True
+    if "search" in tools:
+        return False
+    if new_paths:
+        return True
+    return bool(set(tools) - {"shell", "search"})
 
 
 def _record_todo_evidence(todo: dict[str, Any], proof: Any) -> bool:
@@ -426,40 +615,37 @@ async def advance_with_proof(
     run_id,
     proof: Any,
 ) -> dict[str, Any] | None:
-    """Update the current todo using concrete execution proof from one turn.
+    """用本轮执行证据更新当前 TODO，证据对得上这条文案才勾完。
 
-    Generic todos may complete after any successful tool call.
-    Artifact-producing todos require at least one path written by this run
-    before advancing. Read/stat/list evidence may be recorded but cannot prove
-    that the requested artifact was produced.
+    shell 检查环境不会推进计划。出片类 TODO 要凑够视频文件；合成 / 验收
+    不会被下一条素材生成一并勾掉。同一轮最多结束写稿 + 配音两步，避免
+    一条 wan_t2v 把后面的合成、验收全部烧完。
     """
     todos = _plan_todos(plan)
     if not todos:
         return plan
 
-    current: dict[str, Any] | None = None
-    for t in todos:
-        if t.get("status") == TodoStatus.in_progress:
-            current = t
-            break
+    current = _in_progress_todo(todos)
     if current is None:
         return plan
 
-    changed = _record_todo_evidence(current, proof)
-    has_success = int(getattr(proof, "successful_tool_calls", 0) or 0) > 0
-    has_artifact_evidence = bool(getattr(proof, "written_paths", set()) or set())
-
-    should_complete = has_success and (
-        has_artifact_evidence if _todo_requires_artifact_proof(current) else True
-    )
-    if should_complete:
+    changed = False
+    completions = 0
+    while completions < _MAX_COMPLETIONS_PER_TURN:
+        current = _in_progress_todo(todos)
+        if current is None:
+            break
+        intent = _todo_intent(str(current.get("text") or ""))
+        if completions > 0 and intent in {"mux", "verify", "video_clips", "artifact"}:
+            break
+        if _record_todo_evidence(current, proof):
+            changed = True
+        if not _proof_satisfies_todo(current, proof):
+            break
         current["status"] = TodoStatus.done
+        completions += 1
         changed = True
-        for t in todos:
-            if t.get("status") == TodoStatus.pending:
-                t["status"] = TodoStatus.in_progress
-                changed = True
-                break
+        _start_next_pending(todos)
 
     if not changed:
         return plan

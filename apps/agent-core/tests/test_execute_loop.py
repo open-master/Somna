@@ -811,6 +811,7 @@ def test_proof_from_filesystem_write_records_written_path():
     )
     assert "/tmp/sandbox/src/app.ts" in proof.written_paths
     assert proof.verified_paths == set()
+    assert proof.tool_names == ["filesystem"]
 
 
 def test_proof_from_media_tools_record_written_paths():

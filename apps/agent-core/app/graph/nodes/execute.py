@@ -148,6 +148,7 @@ class _ExecutionProof:
     recovered_failures: int = 0
     failure_notes: list[str] = field(default_factory=list)
     user_questions: list[dict[str, Any]] = field(default_factory=list)
+    tool_names: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -196,6 +197,8 @@ def _merge_proof(base: _ExecutionProof, delta: _ExecutionProof) -> _ExecutionPro
         base.user_questions.extend(delta.user_questions)
         if len(base.user_questions) > 4:
             base.user_questions = base.user_questions[:4]
+    if delta.tool_names:
+        base.tool_names.extend(delta.tool_names)
     return base
 
 
@@ -2004,6 +2007,7 @@ def _proof_from_tool_result(
         return proof
 
     proof.successful_tool_calls = 1
+    proof.tool_names.append(tool_name)
     if tool_name != "search":
         proof.non_search_tool_calls = 1
     if getattr(manifest, "mutates", False):
