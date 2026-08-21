@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     executor_model TEXT,
     workflow_id   TEXT,           -- Temporal workflow id
     run_id        TEXT,           -- Temporal run id
+    last_phase    TEXT,           -- 最近一次 run 的终态 phase（waiting_user / partial / done / error …）
     metadata      JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()

@@ -52,6 +52,30 @@ from app.tools.client import get_client
 log = get_logger(__name__)
 router = APIRouter(prefix="/v1/sessions", tags=["sessions"])
 
+_SESSION_PUBLIC_COLUMNS = (
+    "id, user_id, title, status, last_phase, planner_model, task_frame_model, "
+    "executor_model, workflow_id, run_id, created_at, updated_at"
+)
+_SESSION_PUBLIC_KEYS = (
+    "id",
+    "user_id",
+    "title",
+    "status",
+    "last_phase",
+    "planner_model",
+    "task_frame_model",
+    "executor_model",
+    "workflow_id",
+    "run_id",
+    "created_at",
+    "updated_at",
+)
+
+
+def _public_session(row: Any) -> dict[str, Any]:
+    data = dict(row) if row else {}
+    return {k: data[k] for k in _SESSION_PUBLIC_KEYS if k in data}
+
 
 def _artifact_content_disposition(
     media_type: str,
@@ -175,7 +199,7 @@ async def list_sessions(
     pool = get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT id, user_id, title, status, planner_model, task_frame_model, executor_model, workflow_id, run_id, created_at, updated_at "
+            f"SELECT {_SESSION_PUBLIC_COLUMNS} "
             "FROM sessions WHERE user_id = $1 ORDER BY updated_at DESC LIMIT $2",
             user.id,
             limit,
@@ -211,23 +235,7 @@ async def create_session(
 @router.get("/{sid}")
 async def get_session(sid: uuid.UUID, user: CurrentUser = Depends(get_current_user)) -> dict[str, Any]:
     row = await assert_session_owner(sid, user.id)
-    return {
-        k: row[k]
-        for k in (
-            "id",
-            "user_id",
-            "title",
-            "status",
-            "planner_model",
-            "task_frame_model",
-            "executor_model",
-            "workflow_id",
-            "run_id",
-            "created_at",
-            "updated_at",
-        )
-        if k in row
-    }
+    return _public_session(row)
 
 
 @router.patch("/{sid}")
@@ -246,12 +254,10 @@ async def patch_session(
             user.id,
         )
         row = await conn.fetchrow(
-            "SELECT id, user_id, title, status, planner_model, task_frame_model, executor_model, workflow_id, run_id, created_at, updated_at "
-            "FROM sessions WHERE id = $1",
+            f"SELECT {_SESSION_PUBLIC_COLUMNS} FROM sessions WHERE id = $1",
             sid,
         )
-    r = dict(row) if row else {}
-    return {k: r[k] for k in ("id", "user_id", "title", "status", "planner_model", "task_frame_model", "executor_model", "workflow_id", "run_id", "created_at", "updated_at") if k in r}
+    return _public_session(row)
 
 
 @router.delete("/{sid}", status_code=204)
@@ -449,6 +455,7 @@ async def post_message(
             """
             UPDATE sessions
             SET status = 'running',
+                last_phase = NULL,
                 workflow_id = $1,
                 run_id = $2,
                 planner_model = $3,

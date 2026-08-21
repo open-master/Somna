@@ -39,6 +39,7 @@ export interface Session {
   user_id?: string;
   title: string;
   status: string;
+  last_phase?: string | null;
   workflow_id?: string | null;
   run_id?: string | null;
   planner_model?: string | null;

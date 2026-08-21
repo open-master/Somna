@@ -24,6 +24,7 @@ from app.logging_setup import get_logger, setup_logging
 from app.services.account_profile import ensure_account_profile_columns
 from app.services.billing import ensure_billing_tables
 from app.services.points import ensure_point_tables
+from app.services.session_phase import ensure_session_phase_columns
 from app.services.skills import ensure_skill_tables, seed_builtin_skills
 from app.storage.nats_client import close_nats, init_nats
 from app.storage.postgres import close_pool, init_pool
@@ -62,6 +63,7 @@ async def lifespan(app: FastAPI):
 
     await init_pool()
     await ensure_account_profile_columns()
+    await ensure_session_phase_columns()
     await ensure_point_tables()
     await ensure_billing_tables()
     await ensure_skill_tables()

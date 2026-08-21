@@ -15,7 +15,7 @@ from app.graph.runtime import get_registry
 from app.graph.session_graph import close_graph, get_compiled_graph
 from app.logging_setup import get_logger
 from app.services.billing import settle_billing_run
-from app.storage.postgres import get_pool
+from app.services.session_phase import mark_session_run_closed
 
 log = get_logger(__name__)
 
@@ -131,12 +131,11 @@ async def run_session_graph(
             )
         )
         try:
-            pool = get_pool()
-            async with pool.acquire() as conn:
-                await conn.execute(
-                    "UPDATE sessions SET status = 'paused', workflow_id = NULL, run_id = NULL, updated_at = now() WHERE id = $1",
-                    session_id,
-                )
+            await mark_session_run_closed(
+                session_id,
+                status="paused",
+                last_phase=phase.value,
+            )
         except Exception:  # noqa: BLE001
             pass
         raise
@@ -166,11 +165,10 @@ async def run_session_graph(
         )
         # 图未走到 finalize 时 sessions 仍会停留在 running，导致后续 POST /messages 409
         try:
-            pool = get_pool()
-            async with pool.acquire() as conn:
-                await conn.execute(
-                    "UPDATE sessions SET status = 'error', workflow_id = NULL, run_id = NULL, updated_at = now() WHERE id = $1",
-                    session_id,
-                )
+            await mark_session_run_closed(
+                session_id,
+                status="error",
+                last_phase=SessionPhase.error.value,
+            )
         except Exception:  # noqa: BLE001
             pass

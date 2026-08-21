@@ -42,6 +42,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { createSession, deleteSession, listSessions, patchSessionTitle, type Session } from "@/lib/api/sessions";
+import { sessionToSummary } from "@/lib/session-summary";
 import { clearAccessTokenCookie } from "@/lib/auth/cookie";
 import { meRequest, type AuthUser } from "@/lib/api/auth";
 import { cn } from "@/lib/utils/cn";
@@ -55,15 +56,7 @@ const NAV_ITEMS = [
 ] as const;
 
 function toSummary(session: Session) {
-  return {
-    id: session.id,
-    title: session.title,
-    status: session.status,
-    runId: session.run_id ?? null,
-    workflowId: session.workflow_id ?? null,
-    createdAt: session.created_at,
-    updatedAt: session.updated_at ?? new Date().toISOString(),
-  };
+  return sessionToSummary(session);
 }
 
 export function Sidebar() {
@@ -573,10 +566,16 @@ function MetricCard({
 }
 
 function sessionRowVisual(s: SessionSummary): { dot: string; label: string } {
-  if (s.awaitingUser) return { dot: "waiting_user", label: "等待您补充" };
+  if (s.awaitingUser || s.lastPhase === "waiting_user") return { dot: "waiting_user", label: "等待您补充" };
   if (s.lastRunTerminal === "success") return { dot: "run_success", label: "本轮已完成" };
   if (s.lastRunTerminal === "partial") return { dot: "partial", label: "本轮部分完成" };
   if (s.lastRunTerminal === "error") return { dot: "error", label: "上轮出错" };
+  if (s.lastPhase === "interrupted" || s.status === "interrupted") {
+    return { dot: "interrupted", label: "已中断" };
+  }
+  if (s.lastPhase === "stopped" || s.status === "stopped") {
+    return { dot: "stopped", label: "已停止" };
+  }
   switch (s.status) {
     case "running":
       return { dot: "running", label: "执行中" };

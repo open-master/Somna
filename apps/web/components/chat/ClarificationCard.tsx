@@ -118,6 +118,7 @@ export function ClarificationCard({
         runId: response.run_id,
         lastRunTerminal: null,
         awaitingUser: false,
+        lastPhase: null,
         updatedAt: new Date().toISOString(),
       });
     } catch (cause) {

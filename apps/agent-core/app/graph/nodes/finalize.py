@@ -10,7 +10,7 @@ from app.logging_setup import get_logger
 from app.memory import add_memory
 from app.memory import is_enabled as memory_enabled
 from app.services.billing import settle_billing_run
-from app.storage.postgres import get_pool
+from app.services.session_phase import mark_session_run_closed
 
 log = get_logger(__name__)
 
@@ -61,6 +61,7 @@ async def finalize_node(state: SessionState) -> SessionState:
             )
         )
         final_status = "error"
+        last_phase = SessionPhase.error.value
     else:
         if frame.get("needs_clarification"):
             # 本轮已输出追问，会话仍在等待用户补充，不应标记为「整个任务已完成」。
@@ -72,6 +73,7 @@ async def finalize_node(state: SessionState) -> SessionState:
                     message="等待您补充信息后再继续",
                 )
             )
+            last_phase = SessionPhase.waiting_user.value
         elif has_unfinished:
             await emit(
                 StatusEvent(
@@ -81,6 +83,7 @@ async def finalize_node(state: SessionState) -> SessionState:
                     message="本轮已结束，但部分步骤未完成",
                 )
             )
+            last_phase = SessionPhase.partial.value
         else:
             await emit(
                 StatusEvent(
@@ -90,15 +93,17 @@ async def finalize_node(state: SessionState) -> SessionState:
                     message="完成",
                 )
             )
+            last_phase = SessionPhase.done.value
         final_status = "active"  # session remains active; run is done
 
-    pool = get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE sessions SET status = $1, workflow_id = NULL, run_id = NULL, updated_at = now() WHERE id = $2",
-            final_status,
+    try:
+        await mark_session_run_closed(
             session_id,
+            status=final_status,
+            last_phase=last_phase,
         )
+    except Exception:  # noqa: BLE001
+        log.exception("graph.finalize.session_status_failed", session_id=str(session_id))
 
     # Opportunistically capture a takeaway into long-term memory so next
     # sessions can reference it. Gated by MEMORY_ENABLED — failure is silent.

@@ -73,6 +73,20 @@ async def _build_direct_answer_user_payload(
     return out
 
 
+def _has_card_questions(qs: Any) -> bool:
+    """Structured questions are rendered by ClarificationCard; skip the twin text bubble."""
+    if isinstance(qs, str):
+        return bool(qs.strip())
+    if not isinstance(qs, list):
+        return False
+    for item in qs:
+        if isinstance(item, dict) and str(item.get("prompt") or "").strip():
+            return True
+        if isinstance(item, str) and item.strip():
+            return True
+    return False
+
+
 async def clarify_node(state: SessionState) -> SessionState:
     session_id = state["session_id"]
     run_id = state.get("run_id")
@@ -100,7 +114,10 @@ async def clarify_node(state: SessionState) -> SessionState:
             message="需要您补充信息",
         )
     )
-    await emit(MessageDeltaEvent(session_id=session_id, run_id=run_id, text=text))
+    # Card already lists prompts/options. Repeating them as message.delta
+    # makes the same questions appear twice, especially on mobile.
+    if not _has_card_questions(qs):
+        await emit(MessageDeltaEvent(session_id=session_id, run_id=run_id, text=text))
     new_msgs = list(state.get("messages") or [])
     new_msgs.append(AIMessage(content=text))
     log.info("graph.clarify", session_id=str(session_id), n_questions=len(qs))

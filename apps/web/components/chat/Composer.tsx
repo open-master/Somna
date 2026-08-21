@@ -138,6 +138,7 @@ export function Composer({
               status: "running",
               runId: resp.run_id,
               lastRunTerminal: null,
+              lastPhase: null,
               awaitingUser: false,
               updatedAt: new Date().toISOString(),
             });
@@ -152,6 +153,7 @@ export function Composer({
         status: "running",
         runId: resp.run_id,
         lastRunTerminal: null,
+        lastPhase: null,
         awaitingUser: false,
         updatedAt: new Date().toISOString(),
       });

@@ -8,6 +8,7 @@ import { LiveComputerPanel } from "@/components/live/LiveComputerPanel";
 import { useEventStream } from "@/lib/events/useEventStream";
 import type { HandlerMap } from "@somna/event-schema/dispatcher";
 import { getSession } from "@/lib/api/sessions";
+import { sessionToSummary } from "@/lib/session-summary";
 import { useChatStore } from "@/lib/store/chat";
 import { useLiveStore } from "@/lib/store/live";
 import { usePlanStore } from "@/lib/store/plan";
@@ -63,13 +64,8 @@ export default function ChatSessionPage() {
     taskFrameClear();
     void getSession(sessionId).then((s) =>
       upsert({
-        id: s.id,
+        ...sessionToSummary(s),
         title: s.title ?? "新会话",
-        status: s.status,
-        runId: s.run_id ?? null,
-        workflowId: s.workflow_id ?? null,
-        createdAt: s.created_at,
-        updatedAt: s.updated_at ?? new Date().toISOString(),
       }),
     ).catch(() => { /* ignore for now */ });
     return () => {
@@ -134,6 +130,7 @@ export default function ChatSessionPage() {
           workflowId: existing?.workflowId ?? null,
           status: statusFromPhase(e.phase),
           runId: e.run_id ?? existing?.runId ?? null,
+          lastPhase: p,
           lastRunTerminal,
           awaitingUser: nextAwaiting,
           updatedAt: new Date().toISOString(),
@@ -151,6 +148,7 @@ export default function ChatSessionPage() {
           workflowId: existing?.workflowId ?? null,
           status: e.reason === "user_stop" ? "stopped" : "interrupted",
           runId: e.run_id ?? existing?.runId ?? null,
+          lastPhase: e.reason === "user_stop" ? "stopped" : "interrupted",
           lastRunTerminal: null,
           awaitingUser: false,
           updatedAt: new Date().toISOString(),
@@ -175,6 +173,7 @@ export default function ChatSessionPage() {
           workflowId: existing?.workflowId ?? null,
           status: "error",
           runId: existing?.runId ?? null,
+          lastPhase: "error",
           lastRunTerminal: "error",
           awaitingUser: false,
           updatedAt: new Date().toISOString(),
