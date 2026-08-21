@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 
 const TOKEN = "somna_access_token";
 
-/** 未携带 JWT 时仅允许登录页与 auth API（由 Next 反代到 agent-core）。 */
+/** 未携带 JWT 时仅允许登录页、健康检查与 auth API（由 Next 反代到 agent-core）。 */
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
@@ -11,6 +11,7 @@ export function middleware(request: NextRequest) {
     pathname.startsWith("/login") ||
     pathname.startsWith("/register") ||
     pathname === "/" ||
+    pathname === "/api/health" ||
     pathname.startsWith("/api/v1/auth") ||
     pathname.startsWith("/_next") ||
     pathname === "/favicon.ico"
