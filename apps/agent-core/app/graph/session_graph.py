@@ -3,8 +3,10 @@
 M2 minimal version:  ingest → execute → finalize
 Future M2 full:      ingest → plan → execute ↔ compact → reflect → finalize
 
-Checkpoints are persisted to Postgres via `langgraph-checkpoint-postgres`
-so a session can be resumed after crashes or client disconnects.
+Checkpoints are persisted to Postgres via `langgraph-checkpoint-postgres`.
+Temporal Activity retries invoke the compiled graph with the same
+`thread_id=session_id`; in-progress runs resume from the next node
+(`ainvoke(None)`) instead of restarting at ingest.
 """
 
 from __future__ import annotations

@@ -10,6 +10,7 @@ from somna_events import ErrorEvent, InterruptAckEvent, SessionPhase, StatusEven
 from app.config import get_settings
 from app.events.emitter import emit
 from app.graph.mcp_tool_models import merge_mcp_tool_models
+from app.graph.resume import invoke_session_graph
 from app.graph.runtime import get_registry
 from app.graph.session_graph import close_graph, get_compiled_graph
 from app.logging_setup import get_logger
@@ -91,9 +92,13 @@ async def run_session_graph(
                 "finished": False,
                 "error": None,
             }
-            cfg = {"configurable": {"thread_id": str(session_id)}}
             try:
-                await graph.ainvoke(payload, config=cfg)
+                await invoke_session_graph(
+                    graph=graph,
+                    payload=payload,
+                    session_id=session_id,
+                    run_id=run_id,
+                )
                 break
             except psycopg.OperationalError as exc:
                 log.warning(

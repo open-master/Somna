@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-# 单次 Activity attempt：从 ingest 到 finalize 的整段图（同一 user message）
+# 单次 Activity attempt：同一 user message 的图执行。
+# Worker 崩溃后 Temporal 重试同一 run_id；runner 从 LangGraph checkpoint 续跑，不从 ingest 重来。
 ACTIVITY_START_TO_CLOSE_TIMEOUT = timedelta(minutes=60)
 
 # Temporal 要求在此时间内至少收到一次 activity heartbeat（见 activities._HEARTBEAT_INTERVAL_SECONDS）
