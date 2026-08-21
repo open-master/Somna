@@ -34,7 +34,9 @@ from somna_events import (
     ArtifactEvent,
     MessageDeltaEvent,
     ScreenshotEvent,
+    SessionPhase,
     SkillDebugEvent,
+    StatusEvent,
     ToolCallEvent,
     ToolResultEvent,
 )
@@ -45,8 +47,17 @@ from app.graph.autonomy_policy import delivery_validation_policy, effective_auto
 from app.graph.compact import maybe_compact
 from app.graph.model_policy import pick_executor_turn_model
 from app.graph.nodes.plan import advance_with_proof, mark_progress
-from app.graph.nodes.task_frame import deliverable_type_implies_artifact, format_task_frame_block
-from app.graph.run_artifacts import append_executor_progress_snapshot, sync_plan_artifact
+from app.graph.nodes.task_frame import (
+    _coerce_clarification_questions,
+    _emit_task_frame_ui,
+    deliverable_type_implies_artifact,
+    format_task_frame_block,
+)
+from app.graph.run_artifacts import (
+    append_executor_progress_snapshot,
+    persist_task_frame_pointer,
+    sync_plan_artifact,
+)
 from app.graph.state import SessionState
 from app.graph.user_turn import executor_messages_for_current_turn, last_human_turn_text
 from app.llm.client import get_async_openai
@@ -60,10 +71,46 @@ from app.services.skill_router import (
     route_skills_for_task,
     selected_skills_payload,
 )
-from app.tools.client import ToolResult, get_client
+from app.tools.client import ToolManifest, ToolResult, get_client
 from app.tools.schema import manifests_to_openai_tools, openai_tool_choice, tool_manifest_cache
 
 log = get_logger(__name__)
+
+ASK_USER_TOOL_NAME = "ask_user"
+ASK_USER_MANIFEST = ToolManifest(
+    name=ASK_USER_TOOL_NAME,
+    description=(
+        "当必须由用户拍板才能继续时调用：多种实现方案、工具或积分失败后的取舍、"
+        "不可逆操作、关键参数缺失。调用后本轮立即暂停并弹出确认卡片。"
+        "不要在聊天正文里列出 A/B/C；把问题和选项放进本工具参数。"
+        "用户提交后下一轮会带着选择继续执行，不要把选项写进气泡后自己接着跑。"
+    ),
+    category="hitl",
+    mutates=False,
+    input_schema={
+        "type": "object",
+        "required": ["prompt", "options"],
+        "properties": {
+            "prompt": {
+                "type": "string",
+                "description": "需要用户确认的问题（一句中文）",
+            },
+            "options": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 2,
+                "maxItems": 5,
+                "description": "2～5 个互斥短选项；不要包含「其他」或「由你决定」",
+            },
+            "allow_custom": {
+                "type": "boolean",
+                "default": True,
+                "description": "是否允许用户自行输入。默认 true",
+            },
+        },
+        "additionalProperties": False,
+    },
+)
 
 _MCP_TOOLS_OPTIONAL_MODEL = frozenset(
     {
@@ -100,6 +147,7 @@ class _ExecutionProof:
     failed_tool_calls: int = 0
     recovered_failures: int = 0
     failure_notes: list[str] = field(default_factory=list)
+    user_questions: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -144,6 +192,10 @@ def _merge_proof(base: _ExecutionProof, delta: _ExecutionProof) -> _ExecutionPro
         base.failure_notes.extend(delta.failure_notes)
         if len(base.failure_notes) > 8:
             base.failure_notes = base.failure_notes[-8:]
+    if delta.user_questions:
+        base.user_questions.extend(delta.user_questions)
+        if len(base.user_questions) > 4:
+            base.user_questions = base.user_questions[:4]
     return base
 
 
@@ -182,6 +234,12 @@ def _compose_executor_extra_context(
             "### 已压缩的会话执行摘要（续跑上下文）\n"
             + compact_memory.strip()[:12_000]
         )
+    parts.append(
+        "### 需要用户拍板时\n"
+        "遇到多种方案、工具/积分失败后的取舍、或不可逆操作：必须调用 `ask_user`，"
+        "把问题和选项放进工具参数。不要在正文里列出 A/B/C 并继续执行。"
+        "调用后本轮会暂停；用户在确认卡片中选择后，下一轮带着选择继续。"
+    )
     return "\n\n".join(parts) if parts else None
 
 
@@ -232,7 +290,7 @@ async def _route_or_reuse_skills(state: SessionState) -> SkillRouteResult:
             return cached
     return await route_skills_for_task(
         user_id=state.get("user_id"),
-        user_message=last_human_turn_text(state),
+        user_message=(state.get("resume_goal") or last_human_turn_text(state)),
         task_frame=state.get("task_frame") if isinstance(state.get("task_frame"), dict) else None,
         plan=state.get("plan") if isinstance(state.get("plan"), dict) else None,
         skill_mode=state.get("skill_mode"),
@@ -423,6 +481,97 @@ def _delivery_recovery_tool_name(manifests: list[Any]) -> str | None:
     if "filesystem" in names:
         return "filesystem"
     return None
+
+
+def _with_ask_user_manifest(manifests: list[Any]) -> list[Any]:
+    out = [m for m in manifests if getattr(m, "name", None) != ASK_USER_TOOL_NAME]
+    out.append(ASK_USER_MANIFEST)
+    return out
+
+
+def _parse_ask_user_questions(args: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = {
+        "id": str(args.get("id") or "q1").strip() or "q1",
+        "prompt": str(args.get("prompt") or args.get("question") or "").strip(),
+        "options": args.get("options") or [],
+        "allow_custom": True,
+    }
+    questions = _coerce_clarification_questions([raw])
+    extra = args.get("questions")
+    if extra:
+        questions.extend(_coerce_clarification_questions(extra))
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for index, question in enumerate(questions, start=1):
+        qid = str(question.get("id") or f"q{index}").strip() or f"q{index}"
+        if qid in seen:
+            qid = f"q{index}"
+        seen.add(qid)
+        out.append({**question, "id": qid, "allow_custom": True})
+    if not out:
+        out = _coerce_clarification_questions(["请确认下一步如何继续。"])
+        for question in out:
+            question["allow_custom"] = True
+    return out[:4]
+
+
+async def _pause_for_user_decision(
+    state: SessionState,
+    *,
+    questions: list[dict[str, Any]],
+    proof: _ExecutionProof,
+    plan: dict[str, Any] | None,
+    working_messages: list,
+    compact_memory: str | None,
+    tool_turns: int,
+    total_agent_turns: int,
+    total_execution_tokens: int,
+    turn_text: str,
+) -> dict[str, Any]:
+    session_id = state["session_id"]
+    run_id = state.get("run_id")
+    frame = dict(state.get("task_frame") or {})
+    frame["needs_clarification"] = True
+    frame["awaiting_execute_decision"] = True
+    frame["clarification_questions"] = questions
+    goal = str(frame.get("execute_resume_goal") or "").strip() or last_human_turn_text(state)
+    frame["execute_resume_goal"] = goal[:2000]
+    await persist_task_frame_pointer(state, frame)
+    await _emit_task_frame_ui(session_id, run_id, frame)
+    await emit(
+        StatusEvent(
+            session_id=session_id,
+            run_id=run_id,
+            phase=SessionPhase.waiting_user,
+            message="等待您确认后再继续执行",
+        )
+    )
+    await _append_executor_progress(
+        state,
+        sandbox_id=state.get("sandbox_id") or str(session_id),
+        run_id=run_id,
+        tool_turns=tool_turns,
+        proof=proof,
+        note="waiting_user",
+    )
+    log.info(
+        "graph.execute.waiting_user",
+        session_id=str(session_id),
+        run_id=run_id,
+        n_questions=len(questions),
+    )
+    return {
+        "assistant_text": turn_text or "",
+        "messages": [m for m in working_messages if not isinstance(m, SystemMessage)],
+        "compact_memory": compact_memory,
+        "tool_turns": tool_turns,
+        "total_agent_turns": total_agent_turns,
+        "total_execution_tokens": total_execution_tokens,
+        "plan": plan,
+        "task_frame": frame,
+        "execution_summary": _summarize_execution(proof),
+        "finished": True,
+    }
 
 
 def _artifact_paths(proof: _ExecutionProof) -> set[str]:
@@ -651,13 +800,13 @@ async def execute_node(state: SessionState) -> SessionState:
     mcp_tool_models_map = effective_mcp_tool_models_map(state)
 
     client = get_async_openai()
-    manifests = list(tool_manifest_cache().values())
+    manifests = _with_ask_user_manifest(list(tool_manifest_cache().values()))
     manifest_by_name = {m.name: m for m in manifests}
-    tools_schema = manifests_to_openai_tools(manifests) if manifests else None
+    tools_schema = manifests_to_openai_tools(manifests)
 
     # Pull relevant long-term memories so the executor prompt starts with
     # whatever we already know about this user. No-op when memory is off.
-    user_message = last_human_turn_text(state)
+    user_message = str(state.get("resume_goal") or "").strip() or last_human_turn_text(state)
     memories = await search_memories(
         user_message,
         session_id=str(session_id),
@@ -678,6 +827,12 @@ async def execute_node(state: SessionState) -> SessionState:
         plan=state.get("plan"),
         compact_memory=state.get("compact_memory"),
     )
+    if state.get("resume_execute"):
+        resume_note = (
+            "### 用户刚在确认卡片中作出选择\n"
+            "请按最新用户消息中的选择继续执行，不要重新从零开始，也不要再问一遍相同的问题。"
+        )
+        extra_context = f"{extra_context}\n\n{resume_note}" if extra_context else resume_note
 
     system_prompt = build_system_prompt(
         session_id=str(session_id),
@@ -873,6 +1028,19 @@ async def execute_node(state: SessionState) -> SessionState:
                 proof=proof,
                 note="after_tools",
             )
+            if turn_proof.user_questions:
+                return await _pause_for_user_decision(
+                    state,
+                    questions=turn_proof.user_questions,
+                    proof=proof,
+                    plan=plan,
+                    working_messages=working_messages,
+                    compact_memory=compact_memory,
+                    tool_turns=tool_turns,
+                    total_agent_turns=total_agent_turns,
+                    total_execution_tokens=total_execution_tokens,
+                    turn_text=turn_text,
+                )
         else:
             log.warning("graph.execute.max_turns", session_id=str(session_id), turns=tool_turns)
             final_text = (
@@ -1063,6 +1231,41 @@ async def _run_tool_calls(
     proof = _ExecutionProof()
     for call_index, pc in enumerate(pending):
         args = _parse_args(pc.args_buf)
+        if pc.name == ASK_USER_TOOL_NAME:
+            questions = _parse_ask_user_questions(args)
+            result = ToolResult(
+                ok=True,
+                preview="已向用户弹出确认卡片，等待选择后继续。",
+                output={"waiting_user": True, "questions": questions},
+            )
+            await emit(
+                ToolCallEvent(
+                    session_id=session_id,
+                    run_id=run_id,
+                    id=pc.id,
+                    name=pc.name,
+                    args=args,
+                )
+            )
+            await emit(
+                ToolResultEvent(
+                    session_id=session_id,
+                    run_id=run_id,
+                    id=pc.id,
+                    ok=True,
+                    preview=result.preview,
+                    duration_ms=0,
+                )
+            )
+            working_messages.append(
+                ToolMessage(
+                    content=_render_tool_content(result),
+                    tool_call_id=pc.id,
+                    name=pc.name,
+                )
+            )
+            proof = _merge_proof(proof, _ExecutionProof(user_questions=questions))
+            continue
         result, delta = await _invoke_tool_with_events(
             mcp=mcp,
             tool_name=pc.name,

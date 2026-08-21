@@ -270,6 +270,8 @@ def format_task_frame_ui_summary(frame: dict[str, Any] | None) -> str:
         return "任务定调：未识别到有效描述，将向您追问。"
     if "skip_planner" in rs:
         return "任务定调：未启用规划模型配置，跳过大模型定调，将直接走规划与执行。"
+    if frame.get("awaiting_execute_decision"):
+        return "执行中需要你确认后再继续。"
     if frame.get("needs_clarification"):
         return "任务定调：需要先确认若干信息后再继续。"
     if not frame.get("should_invoke_planner", True):
@@ -340,6 +342,34 @@ async def task_frame_node(state: SessionState) -> SessionState:
         path = await persist_task_frame_pointer(state, frame_b)
         billing_error = await _authorize_frame_billing(state, frame_b)
         return {"task_frame": frame_b, "task_frame_path": path, **({"error": billing_error} if billing_error else {})}
+
+    if state.get("resume_execute"):
+        frame = dict(state.get("task_frame") or DEFAULT_TASK_FRAME)
+        frame["needs_clarification"] = False
+        frame["awaiting_execute_decision"] = False
+        frame["clarification_questions"] = []
+        log.info(
+            "graph.task_frame.resume_execute",
+            session_id=str(session_id),
+            run_id=run_id,
+        )
+        await emit(
+            StatusEvent(
+                session_id=session_id,
+                run_id=run_id,
+                phase=SessionPhase.planning,
+                message="根据你的选择继续执行",
+            )
+        )
+        await _emit_task_frame_ui(session_id, run_id, frame)
+        path = await persist_task_frame_pointer(state, frame)
+        billing_error = await _authorize_frame_billing(state, frame)
+        return {
+            "task_frame": frame,
+            "task_frame_path": path,
+            "resume_execute": True,
+            **({"error": billing_error} if billing_error else {}),
+        }
 
     if state.get("skip_planner"):
         tf = dict(DEFAULT_TASK_FRAME)

@@ -60,12 +60,26 @@ async def ingest_node(state: SessionState) -> SessionState:
     # ingest entry instead of duplicating the user's turn in checkpoint state.
     message_id = f"user:{run_id}" if run_id else None
     existing.append(HumanMessage(content=human_body, id=message_id))
-    return {
+    frame = state.get("task_frame") if isinstance(state.get("task_frame"), dict) else {}
+    resume_execute = bool(frame.get("awaiting_execute_decision"))
+    resume_goal = str(frame.get("execute_resume_goal") or "").strip() if resume_execute else ""
+    if resume_execute:
+        log.info(
+            "graph.ingest.resume_execute",
+            session_id=str(session_id),
+            run_id=run_id,
+        )
+    payload: dict = {
         "messages": existing,
         "sandbox_id": sandbox_id,
         "tool_turns": 0,
         "total_agent_turns": 0,
         "total_execution_tokens": 0,
-        "compact_memory": None,
-        "execution_summary": None,
+        "compact_memory": state.get("compact_memory") if resume_execute else None,
+        "execution_summary": state.get("execution_summary") if resume_execute else None,
+        "resume_execute": resume_execute,
+        "resume_goal": resume_goal or None,
     }
+    if resume_execute:
+        payload["plan"] = state.get("plan")
+    return payload

@@ -9,7 +9,7 @@ from uuid import uuid4
 import pytest
 
 from app.graph.nodes import task_frame as tf_mod
-from app.graph.session_graph import _route_after_task_frame
+from app.graph.session_graph import _route_after_execute, _route_after_task_frame
 from app.graph.state import SessionState
 
 
@@ -47,6 +47,22 @@ def test_route_plan_when_full_pipeline():
 def test_route_finalize_on_error():
     state: SessionState = {"error": "boom", "task_frame": {"needs_clarification": False}}
     assert _route_after_task_frame(state) == "finalize"
+
+
+def test_route_resume_execute_skips_plan_and_clarify():
+    state: SessionState = {
+        "resume_execute": True,
+        "task_frame": {
+            "needs_clarification": True,
+            "should_invoke_planner": True,
+        },
+    }
+    assert _route_after_task_frame(state) == "execute"
+
+
+def test_route_after_execute_waiting_user_skips_reflect():
+    assert _route_after_execute({"task_frame": {"needs_clarification": True}}) == "finalize"
+    assert _route_after_execute({"task_frame": {"needs_clarification": False}}) == "reflect"
 
 
 def test_normalize_forces_no_planner_when_clarify():
@@ -190,3 +206,53 @@ def test_coerce_skips_when_research_keywords():
     )
     tf_mod._maybe_coerce_simple_definitional_qa("搜索一下乔布斯是谁？", frame)
     assert frame["should_invoke_planner"] is True
+
+
+def test_format_task_frame_ui_summary_for_execute_pause():
+    summary = tf_mod.format_task_frame_ui_summary(
+        {
+            "awaiting_execute_decision": True,
+            "needs_clarification": True,
+            "reasoning_summary": "执行中等用户选择",
+        }
+    )
+    assert "执行中" in summary
+
+
+@pytest.mark.asyncio
+async def test_task_frame_resume_execute_skips_llm():
+    sid = uuid4()
+    create = AsyncMock()
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    with (
+        patch.object(tf_mod, "get_async_openai", return_value=client),
+        patch.object(tf_mod, "emit", AsyncMock()),
+        patch.object(tf_mod, "persist_task_frame_pointer", AsyncMock(return_value="p")),
+        patch.object(tf_mod, "_emit_task_frame_ui", AsyncMock()),
+        patch.object(tf_mod, "_authorize_frame_billing", AsyncMock(return_value=None)),
+    ):
+        out = await tf_mod.task_frame_node(
+            {
+                "session_id": sid,
+                "run_id": "r2",
+                "user_message": "针对你的确认，我的选择如下：\n回答：改免费方案",
+                "resume_execute": True,
+                "task_frame": {
+                    "needs_clarification": True,
+                    "awaiting_execute_decision": True,
+                    "clarification_questions": [{"id": "q1", "prompt": "怎么继续？", "options": ["A"]}],
+                    "deliverable_type": "video",
+                    "should_invoke_planner": True,
+                    "execute_resume_goal": "剪一个片头",
+                },
+            }
+        )
+
+    create.assert_not_called()
+    assert out["resume_execute"] is True
+    assert out["task_frame"]["needs_clarification"] is False
+    assert out["task_frame"]["awaiting_execute_decision"] is False
+    assert out["task_frame"]["clarification_questions"] == []
+    assert out["task_frame"]["execute_resume_goal"] == "剪一个片头"

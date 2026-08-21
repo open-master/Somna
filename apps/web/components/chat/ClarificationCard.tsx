@@ -8,7 +8,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { postMessage } from "@/lib/api/sessions";
 import { getExecutorEngine } from "@/lib/executor-engine";
 import { useChatStore } from "@/lib/store/chat";
-import { usePlanStore } from "@/lib/store/plan";
 import { useSessionStore } from "@/lib/store/session";
 import { useTaskFrameStore } from "@/lib/store/taskFrame";
 
@@ -25,7 +24,6 @@ export function ClarificationCard({
   const questions = useTaskFrameStore((state) => state.questions);
   const questionRunId = useTaskFrameStore((state) => state.runId);
   const clearTaskFrame = useTaskFrameStore((state) => state.clear);
-  const clearPlan = usePlanStore((state) => state.clear);
   const pushUser = useChatStore((state) => state.pushUser);
   const rollbackLastUserMessage = useChatStore((state) => state.rollbackLastUserMessage);
   const setPhase = useSessionStore((state) => state.setPhase);
@@ -102,7 +100,6 @@ export function ClarificationCard({
     pushUser(answerText);
     try {
       const response = await postMessage(sessionId, answerText, [], getExecutorEngine());
-      clearPlan();
       clearTaskFrame();
       setPhase("planning");
       setRunId(response.run_id);
@@ -143,10 +140,10 @@ export function ClarificationCard({
             </div>
             <div>
               <h2 id="clarification-title" className="text-sm font-semibold tracking-tight">
-                执行前需要你的确认
+                需要你的确认
               </h2>
               <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
-                快速选择或补充说明，确认后我会继续处理任务。
+                选择或补充后我会按你的决定继续，不会把选项写在对话里自行往下跑。
               </p>
             </div>
           </div>

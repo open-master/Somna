@@ -65,3 +65,40 @@ async def test_ingest_resets_compact_memory_for_new_user_turn():
     assert out["compact_memory"] is None
     assert out["execution_summary"] is None
     assert out["tool_turns"] == 0
+    assert out["resume_execute"] is False
+
+
+@pytest.mark.asyncio
+async def test_ingest_resume_execute_keeps_plan_and_proof():
+    sid = uuid4()
+    client = SimpleNamespace(ensure_sandbox=AsyncMock())
+    plan = {"todos": [{"id": "1", "text": "剪片头", "status": "in_progress"}]}
+    summary = {"written_paths": ["intro.mp4"], "successful_tool_calls": 2}
+
+    with (
+        patch.object(ingest_mod, "get_client", return_value=client),
+        patch.object(ingest_mod, "emit", AsyncMock()),
+    ):
+        out = await ingest_mod.ingest_node(
+            {
+                "session_id": sid,
+                "run_id": "run_resume",
+                "user_message": "针对你的确认，我的选择如下：\n1. 怎么继续？\n回答：改免费方案",
+                "attachments": [],
+                "messages": [],
+                "task_frame": {
+                    "awaiting_execute_decision": True,
+                    "execute_resume_goal": "剪一个片头",
+                    "needs_clarification": True,
+                },
+                "plan": plan,
+                "execution_summary": summary,
+                "compact_memory": "已准备素材",
+            }
+        )
+
+    assert out["resume_execute"] is True
+    assert out["resume_goal"] == "剪一个片头"
+    assert out["plan"] == plan
+    assert out["execution_summary"] == summary
+    assert out["compact_memory"] == "已准备素材"

@@ -93,6 +93,7 @@ def test_executor_extra_context_reinjects_plan_and_compact_memory():
     assert "[in_progress] 生成报告" in context
     assert "[pending] 验证结果" in context
     assert "此前已经收集数据集" in context
+    assert "ask_user" in context
 
 
 def test_proof_rehydration_avoids_false_delivery_missing_after_reflect():
@@ -1140,3 +1141,68 @@ async def test_execute_once_retry_recovers_timeout_and_allows_stop():
     assert state["execution_summary"]["recovered_failures"] == 1
     assert mcp.invoke.await_count == 2
     assert stream.calls == 2
+
+
+def test_parse_ask_user_questions_forces_custom_and_keeps_options():
+    questions = exe._parse_ask_user_questions(
+        {
+            "prompt": "积分不够，怎么继续？",
+            "options": ["充值后续", "改免费方案"],
+            "allow_custom": False,
+        }
+    )
+    assert questions[0]["prompt"] == "积分不够，怎么继续？"
+    assert questions[0]["options"] == ["充值后续", "改免费方案"]
+    assert questions[0]["allow_custom"] is True
+
+
+def test_with_ask_user_manifest_is_always_injected():
+    names = [m.name for m in exe._with_ask_user_manifest([])]
+    assert names == ["ask_user"]
+
+
+@pytest.mark.asyncio
+async def test_execute_ask_user_pauses_for_confirmation_card():
+    sid = uuid4()
+    args = (
+        '{"prompt":"积分不够，怎么继续？","options":["充值后续","改免费方案"]}'
+    )
+    stream = _StreamStub([("", [_pending("cid_ask", "ask_user", args)], (4, 2))])
+    mcp = AsyncMock()
+    mcp.invoke = AsyncMock(side_effect=AssertionError("ask_user must not hit MCP"))
+
+    with (
+        patch.object(exe, "_stream_one_turn", stream),
+        patch.object(exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))),
+        patch.object(exe, "emit", AsyncMock()),
+        patch.object(exe, "emit_model_usage", AsyncMock()),
+        patch.object(exe, "get_async_openai", return_value=object()),
+        patch.object(exe, "tool_manifest_cache", return_value={}),
+        patch.object(exe, "build_system_prompt", return_value="sys"),
+        patch.object(exe, "get_client", return_value=mcp),
+        patch.object(exe, "get_settings", return_value=_SettingsStub()),
+        patch.object(exe, "persist_task_frame_pointer", AsyncMock(return_value=None)),
+        patch.object(exe, "_emit_task_frame_ui", AsyncMock()),
+        patch.object(exe, "_append_executor_progress", AsyncMock()),
+    ):
+        state = await exe.execute_node(
+            {
+                "session_id": sid,
+                "run_id": "r1",
+                "executor_model": "agent-executor",
+                "sandbox_id": str(sid),
+                "user_message": "剪一个片头",
+                "messages": [],
+                "tool_turns": 0,
+                "task_frame": {"deliverable_type": "video", "should_invoke_planner": True},
+            }
+        )
+
+    assert "error" not in state
+    assert state["finished"] is True
+    assert state["task_frame"]["needs_clarification"] is True
+    assert state["task_frame"]["awaiting_execute_decision"] is True
+    assert state["task_frame"]["execute_resume_goal"] == "剪一个片头"
+    assert state["task_frame"]["clarification_questions"][0]["prompt"] == "积分不够，怎么继续？"
+    mcp.invoke.assert_not_called()
+    assert stream.calls == 1

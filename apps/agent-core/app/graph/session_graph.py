@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, START, StateGraph
 
 from app.config import get_settings
@@ -31,13 +30,20 @@ _saver_ctx = None
 
 
 def _route_after_execute(state: SessionState) -> str:
-    """Terminal `error` skips reflect. Recoverable execute crashes omit `error` so we still review."""
-    return "finalize" if state.get("error") else "reflect"
+    """Terminal `error` or mid-execute HITL skip reflect. Recoverable crashes omit `error` so we still review."""
+    if state.get("error"):
+        return "finalize"
+    frame = state.get("task_frame") or {}
+    if frame.get("needs_clarification"):
+        return "finalize"
+    return "reflect"
 
 
 def _route_after_task_frame(state: SessionState) -> str:
     if state.get("error"):
         return "finalize"
+    if state.get("resume_execute"):
+        return "execute"
     frame = state.get("task_frame") or {}
     if frame.get("needs_clarification"):
         return "clarify"
@@ -72,6 +78,7 @@ def build_graph() -> StateGraph:
             "clarify": "clarify",
             "direct_answer": "direct_answer",
             "plan": "plan",
+            "execute": "execute",
             "finalize": "finalize",
         },
     )
@@ -109,6 +116,8 @@ async def get_compiled_graph():
     We keep a single long-lived saver for the process. `AsyncPostgresSaver.from_conn_string`
     returns a context manager; we enter it once at startup.
     """
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
     global _graph, _saver_ctx
     if _graph is not None:
         return _graph

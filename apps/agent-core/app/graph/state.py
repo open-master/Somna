@@ -72,3 +72,7 @@ class SessionState(TypedDict, total=False):
     total_execution_tokens: int
     finished: bool
     error: str | None
+
+    # Mid-execute HITL: next user turn should skip re-plan and continue native execute.
+    resume_execute: bool
+    resume_goal: str | None
