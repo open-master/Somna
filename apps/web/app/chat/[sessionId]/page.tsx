@@ -179,7 +179,7 @@ export default function ChatSessionPage() {
     };
   }, [sessionId]);
 
-  useEventStream(sessionId, handlers);
+  const { bootstrapReady } = useEventStream(sessionId, handlers);
 
   const title = useSessionStore((s) =>
     s.sessions.find((x) => x.id === s.currentId)?.title ?? "新会话",
@@ -189,7 +189,9 @@ export default function ChatSessionPage() {
     <AppShell
       title={title}
       subtitle="Agent Workspace"
-      center={sessionId ? <ChatCenter sessionId={sessionId} /> : null}
+      center={
+        sessionId ? <ChatCenter sessionId={sessionId} streamReady={bootstrapReady} /> : null
+      }
       right={<LiveComputerPanel sessionId={sessionId ?? ""} />}
     />
   );

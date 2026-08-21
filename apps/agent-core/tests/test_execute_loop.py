@@ -744,6 +744,37 @@ def test_missing_delivery_reason_rejects_mutation_without_artifact_paths():
     assert "真实产物" in reason
 
 
+def test_missing_delivery_reason_rejects_verified_but_unwritten_artifact():
+    proof = exe._ExecutionProof(
+        successful_tool_calls=1,
+        non_search_tool_calls=1,
+        written_paths=set(),
+        verified_paths={"report.html"},
+    )
+    reason = exe._missing_delivery_reason(
+        user_message="帮我生成一个 HTML 报告",
+        plan=None,
+        proof=proof,
+    )
+    assert reason is not None
+    assert "没有检测到写文件" in reason
+
+
+def test_filesystem_stat_is_verification_not_write_proof():
+    proof = exe._proof_from_tool_result(
+        tool_name="filesystem",
+        args={"action": "stat", "path": "report.html"},
+        result=ToolResult(
+            ok=True,
+            preview="",
+            output={"path": "/tmp/sandbox/report.html", "is_file": True},
+        ),
+        manifest=SimpleNamespace(mutates=False),
+    )
+    assert "report.html" in proof.verified_paths
+    assert proof.written_paths == set()
+
+
 def test_missing_delivery_reason_task_frame_implies_artifact_without_keywords():
     proof = exe._ExecutionProof(successful_tool_calls=0)
     reason = exe._missing_delivery_reason(

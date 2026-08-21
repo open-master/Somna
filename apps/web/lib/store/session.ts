@@ -21,11 +21,14 @@ interface SessionState {
   currentId: string | null;
   phase: SessionPhase | "idle";
   runId: string | null;
+  messageSendSessionId: string | null;
   sessions: SessionSummary[];
   hydrateSessions: (sessions: SessionSummary[]) => void;
   setCurrent: (id: string | null) => void;
   setPhase: (phase: SessionPhase | "idle") => void;
   setRunId: (id: string | null) => void;
+  tryBeginMessageSend: (sessionId: string) => boolean;
+  endMessageSend: (sessionId: string) => void;
   upsertSession: (s: SessionSummary) => void;
   removeSession: (id: string) => void;
   resetRun: () => void;
@@ -35,6 +38,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   currentId: null,
   phase: "idle",
   runId: null,
+  messageSendSessionId: null,
   sessions: [],
   hydrateSessions: (sessions) =>
     set(() => ({
@@ -43,6 +47,19 @@ export const useSessionStore = create<SessionState>((set) => ({
   setCurrent: (id) => set({ currentId: id }),
   setPhase: (phase) => set({ phase }),
   setRunId: (id) => set({ runId: id }),
+  tryBeginMessageSend: (sessionId) => {
+    let acquired = false;
+    set((state) => {
+      if (state.messageSendSessionId !== null) return state;
+      acquired = true;
+      return { messageSendSessionId: sessionId };
+    });
+    return acquired;
+  },
+  endMessageSend: (sessionId) =>
+    set((state) =>
+      state.messageSendSessionId === sessionId ? { messageSendSessionId: null } : state,
+    ),
   upsertSession: (s) =>
     set((state) => {
       const existing = state.sessions.find((x) => x.id === s.id);

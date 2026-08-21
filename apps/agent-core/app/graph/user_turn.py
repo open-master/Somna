@@ -36,6 +36,33 @@ def last_human_turn_text(state: SessionState) -> str:
     return (raw if isinstance(raw, str) else str(raw or "")).strip()
 
 
+def executor_messages_for_current_turn(state: SessionState) -> list[Any]:
+    """Keep conversational history, but scope internal tool traffic to this user turn.
+
+    Checkpoint messages span the whole session. Replaying prior ToolMessages (or the
+    AI tool-call messages paired with them) into a new task wastes context and may
+    make providers reject an incomplete tool-call chain. Internal messages after the
+    latest HumanMessage belong to the current run and must remain available across
+    reflect → execute loops.
+    """
+    messages: list[Any] = list(state.get("messages") or [])
+    current_start: int | None = None
+    for index in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[index], HumanMessage):
+            current_start = index
+            break
+    if current_start is None:
+        return messages
+
+    prior: list[Any] = []
+    for message in messages[:current_start]:
+        if isinstance(message, HumanMessage):
+            prior.append(message)
+        elif isinstance(message, AIMessage) and not getattr(message, "tool_calls", None):
+            prior.append(message)
+    return prior + messages[current_start:]
+
+
 def prior_conversation_text(state: SessionState, *, max_chars: int = 8000) -> str:
     """Return recent user/assistant context before the current human turn.
 

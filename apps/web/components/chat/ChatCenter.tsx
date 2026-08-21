@@ -16,7 +16,13 @@ import { PlannerTimeline } from "./PlannerTimeline";
 import { SkillDebugPanel } from "./SkillDebugPanel";
 import { TaskFrameBanner } from "./TaskFrameBanner";
 
-export function ChatCenter({ sessionId }: { sessionId: string }) {
+export function ChatCenter({
+  sessionId,
+  streamReady,
+}: {
+  sessionId: string;
+  streamReady: boolean;
+}) {
   const messages = useChatStore((s) => s.messages);
   const hasConversation = messages.length > 0;
   const liveExpanded = useUiStore((s) => s.liveComputerExpanded);
@@ -51,9 +57,9 @@ export function ChatCenter({ sessionId }: { sessionId: string }) {
           </div>
         </div>
       ) : null}
-      <ClarificationCard sessionId={sessionId} />
+      <ClarificationCard sessionId={sessionId} streamReady={streamReady} />
       {hasConversation ? <CreateSkillFromSessionCard sessionId={sessionId} /> : null}
-      <Composer sessionId={sessionId} />
+      <Composer sessionId={sessionId} streamReady={streamReady} />
     </div>
   );
 }

@@ -1,5 +1,5 @@
 "use client";
-import { startTransition, useEffect, useRef } from "react";
+import { startTransition, useEffect, useRef, useState } from "react";
 import { unstable_batchedUpdates as batchedUpdates } from "react-dom";
 import { createDispatcher } from "@somna/event-schema/dispatcher";
 import type { HandlerMap } from "@somna/event-schema/dispatcher";
@@ -19,6 +19,7 @@ const POLL_MS = 1_500;
  * - **HTTP poll fallback**：轮询 `GET /events?since=`，与原先一致。
  */
 export function useEventStream(sessionId: string | null, handlers: HandlerMap) {
+  const [readySessionId, setReadySessionId] = useState<string | null>(null);
   const lastSeqRef = useRef(0);
   const appliedSeqRef = useRef(0);
   /** 会话切换或 StrictMode 卸载时递增，丢弃上一 effect 未完成 bootstrap/startLive，避免回放写错 store / 污染 seq */
@@ -28,6 +29,7 @@ export function useEventStream(sessionId: string | null, handlers: HandlerMap) {
 
   useEffect(() => {
     if (!sessionId) return;
+    setReadySessionId(null);
     effectGenerationRef.current += 1;
     const generation = effectGenerationRef.current;
     const stale = () => generation !== effectGenerationRef.current;
@@ -209,6 +211,7 @@ export function useEventStream(sessionId: string | null, handlers: HandlerMap) {
         appliedSeqRef.current = maxSeq;
         lastSeqRef.current = maxSeq;
       }
+      setReadySessionId(sessionId);
       startLive();
     };
 
@@ -222,7 +225,10 @@ export function useEventStream(sessionId: string | null, handlers: HandlerMap) {
     };
   }, [sessionId]);
 
-  return { lastSeq: () => lastSeqRef.current };
+  return {
+    lastSeq: () => lastSeqRef.current,
+    bootstrapReady: Boolean(sessionId && readySessionId === sessionId),
+  };
 }
 
 export { parseAgentEvent } from "@somna/event-schema";

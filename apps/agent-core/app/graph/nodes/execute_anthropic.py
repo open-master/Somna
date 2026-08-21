@@ -39,7 +39,7 @@ from app.graph.nodes.execute import (
 from app.graph.nodes.plan import advance_with_proof, mark_progress
 from app.graph.run_artifacts import sync_plan_artifact
 from app.graph.state import SessionState
-from app.graph.user_turn import last_human_turn_text
+from app.graph.user_turn import executor_messages_for_current_turn, last_human_turn_text
 from app.llm.client import get_async_anthropic
 from app.logging_setup import get_logger
 from app.memory import format_memories, search_memories
@@ -241,7 +241,7 @@ async def execute_anthropic_node(state: SessionState) -> SessionState:
         enabled_skill_names=[item.name for item in skill_route.selected],
     )
 
-    working_messages: list = list(state.get("messages") or [])
+    working_messages = executor_messages_for_current_turn(state)
     working_messages = _with_fresh_system_prompt(working_messages, system_prompt)
 
     system_merged, body_chain = _merge_system_prompt(working_messages)

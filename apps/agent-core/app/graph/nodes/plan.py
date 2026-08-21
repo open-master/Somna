@@ -360,8 +360,9 @@ async def advance_with_proof(
     """Update the current todo using concrete execution proof from one turn.
 
     Generic todos may complete after any successful tool call.
-    Artifact-producing todos require at least one written/read/stat/list path
-    to be observed before advancing to the next item.
+    Artifact-producing todos require at least one path written by this run
+    before advancing. Read/stat/list evidence may be recorded but cannot prove
+    that the requested artifact was produced.
     """
     todos = _plan_todos(plan)
     if not todos:
@@ -377,9 +378,7 @@ async def advance_with_proof(
 
     changed = _record_todo_evidence(current, proof)
     has_success = int(getattr(proof, "successful_tool_calls", 0) or 0) > 0
-    has_artifact_evidence = bool(
-        (getattr(proof, "written_paths", set()) or set()) or (getattr(proof, "verified_paths", set()) or set())
-    )
+    has_artifact_evidence = bool(getattr(proof, "written_paths", set()) or set())
 
     should_complete = has_success and (
         has_artifact_evidence if _todo_requires_artifact_proof(current) else True

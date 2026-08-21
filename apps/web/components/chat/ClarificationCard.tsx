@@ -14,7 +14,13 @@ import { useTaskFrameStore } from "@/lib/store/taskFrame";
 
 const DELEGATE_ANSWER = "由 Somna 根据目标选择合适方案";
 
-export function ClarificationCard({ sessionId }: { sessionId: string }) {
+export function ClarificationCard({
+  sessionId,
+  streamReady,
+}: {
+  sessionId: string;
+  streamReady: boolean;
+}) {
   const phase = useSessionStore((state) => state.phase);
   const questions = useTaskFrameStore((state) => state.questions);
   const questionRunId = useTaskFrameStore((state) => state.runId);
@@ -25,6 +31,9 @@ export function ClarificationCard({ sessionId }: { sessionId: string }) {
   const setPhase = useSessionStore((state) => state.setPhase);
   const setRunId = useSessionStore((state) => state.setRunId);
   const upsertSession = useSessionStore((state) => state.upsertSession);
+  const sharedSending = useSessionStore((state) => state.messageSendSessionId !== null);
+  const tryBeginMessageSend = useSessionStore((state) => state.tryBeginMessageSend);
+  const endMessageSend = useSessionStore((state) => state.endMessageSend);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [customAnswers, setCustomAnswers] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
@@ -72,6 +81,14 @@ export function ClarificationCard({ sessionId }: { sessionId: string }) {
 
   async function submit() {
     if (!complete || submitting) return;
+    if (!streamReady) {
+      setError("正在恢复会话记录，请稍候再确认");
+      return;
+    }
+    if (!tryBeginMessageSend(sessionId)) {
+      setError("已有消息正在提交，请稍候");
+      return;
+    }
     const answerText = [
       "针对你的确认，我的选择如下：",
       ...questions.map((question, index) => {
@@ -108,6 +125,7 @@ export function ClarificationCard({ sessionId }: { sessionId: string }) {
       setError(cause instanceof Error ? cause.message : "提交失败，请重试");
     } finally {
       setSubmitting(false);
+      endMessageSend(sessionId);
     }
   }
 
@@ -137,7 +155,7 @@ export function ClarificationCard({ sessionId }: { sessionId: string }) {
             size="sm"
             className="h-8 shrink-0 gap-1.5 rounded-full px-3 text-xs text-muted-foreground"
             onClick={delegateAll}
-            disabled={submitting}
+            disabled={sharedSending || !streamReady}
           >
             <Sparkles className="size-3.5" aria-hidden />
             全部交给 Somna
@@ -150,7 +168,7 @@ export function ClarificationCard({ sessionId }: { sessionId: string }) {
             const custom = customAnswers[question.id] ?? "";
             const choices = Array.from(new Set([...question.options, DELEGATE_ANSWER]));
             return (
-              <fieldset key={question.id} disabled={submitting} className="space-y-2.5">
+              <fieldset key={question.id} disabled={sharedSending} className="space-y-2.5">
                 <legend className="flex w-full gap-2 text-sm leading-6">
                   <span className="font-mono text-xs text-muted-foreground">
                     {String(index + 1).padStart(2, "0")}
@@ -204,14 +222,14 @@ export function ClarificationCard({ sessionId }: { sessionId: string }) {
             type="button"
             className="h-9 shrink-0 rounded-xl px-4"
             onClick={() => void submit()}
-            disabled={!complete || submitting}
+            disabled={!complete || sharedSending || !streamReady}
           >
             {submitting ? (
               <Loader2 className="mr-2 size-4 animate-spin" aria-hidden />
             ) : (
               <Check className="mr-2 size-4" aria-hidden />
             )}
-            {submitting ? "正在继续" : "确认并继续"}
+            {submitting ? "正在继续" : streamReady ? "确认并继续" : "恢复中…"}
           </Button>
         </footer>
       </div>

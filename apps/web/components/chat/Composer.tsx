@@ -19,7 +19,13 @@ import { useSessionStore } from "@/lib/store/session";
 import { useTaskFrameStore } from "@/lib/store/taskFrame";
 import { DEFAULT_SESSION_TITLE, isDefaultSessionTitle, titleFromUserMessage } from "@/lib/session-title";
 
-export function Composer({ sessionId }: { sessionId: string }) {
+export function Composer({
+  sessionId,
+  streamReady,
+}: {
+  sessionId: string;
+  streamReady: boolean;
+}) {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<SessionAttachmentRef[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -30,6 +36,9 @@ export function Composer({ sessionId }: { sessionId: string }) {
   const setPhase = useSessionStore((s) => s.setPhase);
   const setRunId = useSessionStore((s) => s.setRunId);
   const upsertSession = useSessionStore((s) => s.upsertSession);
+  const sharedSending = useSessionStore((s) => s.messageSendSessionId !== null);
+  const tryBeginMessageSend = useSessionStore((s) => s.tryBeginMessageSend);
+  const endMessageSend = useSessionStore((s) => s.endMessageSend);
   const clearPlan = usePlanStore((s) => s.clear);
   const clearTaskFrame = useTaskFrameStore((s) => s.clear);
 
@@ -59,6 +68,14 @@ export function Composer({ sessionId }: { sessionId: string }) {
   const send = useCallback(async () => {
     const value = text.trim();
     if ((!value && attachments.length === 0) || sending) return;
+    if (!streamReady) {
+      setSendError("正在恢复会话记录，请稍候再发送");
+      return;
+    }
+    if (!tryBeginMessageSend(sessionId)) {
+      setSendError("已有消息正在提交，请稍候");
+      return;
+    }
     setSendError(null);
     setSending(true);
     const pendingAtt = [...attachments];
@@ -145,12 +162,16 @@ export function Composer({ sessionId }: { sessionId: string }) {
       setSendError(e instanceof Error ? e.message : "发送失败");
     } finally {
       setSending(false);
+      endMessageSend(sessionId);
     }
   }, [
     text,
     attachments,
     sending,
+    streamReady,
     sessionId,
+    tryBeginMessageSend,
+    endMessageSend,
     pushUser,
     rollbackLastUserMessage,
     clearPlan,
@@ -170,7 +191,10 @@ export function Composer({ sessionId }: { sessionId: string }) {
     [send],
   );
 
-  const canSend = (text.trim().length > 0 || attachments.length > 0) && !sending;
+  const canSend =
+    (text.trim().length > 0 || attachments.length > 0) &&
+    streamReady &&
+    !sharedSending;
 
   return (
     <div className="mx-auto w-full max-w-3xl px-4 pb-4">
@@ -207,7 +231,7 @@ export function Composer({ sessionId }: { sessionId: string }) {
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKey}
-          placeholder="问点什么，或交给我一个任务..."
+          placeholder={streamReady ? "问点什么，或交给我一个任务..." : "正在恢复会话记录…"}
           rows={2}
           className="border-0 shadow-none min-h-[60px] px-4 py-3 text-sm focus-visible:ring-0 resize-none"
         />
@@ -219,7 +243,7 @@ export function Composer({ sessionId }: { sessionId: string }) {
                 variant="ghost"
                 aria-label="添加附件"
                 type="button"
-                disabled={uploading || sending}
+                disabled={uploading || sharedSending || !streamReady}
                 onClick={() => fileRef.current?.click()}
               >
                 <Paperclip className="size-4" />
@@ -238,7 +262,8 @@ export function Composer({ sessionId }: { sessionId: string }) {
             className="gap-1"
             type="button"
           >
-            <Send className="size-3.5" /> {sending ? "发送中…" : "发送"}
+            <Send className="size-3.5" />{" "}
+            {sending ? "发送中…" : streamReady ? "发送" : "恢复中…"}
           </Button>
         </div>
       </div>

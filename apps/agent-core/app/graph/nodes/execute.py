@@ -47,7 +47,7 @@ from app.graph.nodes.plan import advance_with_proof, mark_progress
 from app.graph.nodes.task_frame import deliverable_type_implies_artifact, format_task_frame_block
 from app.graph.run_artifacts import append_executor_progress_snapshot, sync_plan_artifact
 from app.graph.state import SessionState
-from app.graph.user_turn import last_human_turn_text
+from app.graph.user_turn import executor_messages_for_current_turn, last_human_turn_text
 from app.llm.client import get_async_openai
 from app.logging_setup import get_logger
 from app.memory import format_memories, search_memories
@@ -291,7 +291,9 @@ def _delivery_recovery_tool_name(manifests: list[Any]) -> str | None:
 
 
 def _artifact_paths(proof: _ExecutionProof) -> set[str]:
-    return set(proof.written_paths) | set(proof.verified_paths)
+    # Reading/stat-ing a pre-existing file proves only that it exists, not that
+    # this run produced the requested deliverable.
+    return set(proof.written_paths)
 
 
 def _summarize_execution(proof: _ExecutionProof, *, delivery_missing_reason: str | None = None) -> dict[str, Any]:
@@ -527,7 +529,7 @@ async def execute_node(state: SessionState) -> SessionState:
     )
 
     # Compose initial messages: system + history.
-    working_messages: list = list(state.get("messages") or [])
+    working_messages = executor_messages_for_current_turn(state)
     working_messages = _with_fresh_system_prompt(working_messages, system_prompt)
 
     _tf = state.get("task_frame") if isinstance(state.get("task_frame"), dict) else None
@@ -1417,14 +1419,6 @@ def _proof_from_tool_result(
                 normalized = _normalize_evidence_path(raw)
                 if normalized:
                     proof.verified_paths.add(normalized)
-            if isinstance(output, dict) and output.get("is_file") is True:
-                rel: str | None = None
-                if isinstance(path_arg, str) and path_arg.strip() not in {".", "..", ""}:
-                    rel = path_arg.strip().lstrip("./")
-                if not rel and isinstance(path_out, str):
-                    rel = Path(path_out).name
-                if rel and _is_deliverable_path_candidate(rel):
-                    proof.written_paths.add(rel)
         elif action == "read":
             path = output.get("path") or args.get("path")
             normalized = _normalize_evidence_path(path)

@@ -220,6 +220,11 @@ async def test_advance_with_proof_requires_artifact_evidence_for_build_todo():
         ]
     }
     install_only = SimpleNamespace(successful_tool_calls=1, written_paths=set(), verified_paths=set())
+    verified_only = SimpleNamespace(
+        successful_tool_calls=1,
+        written_paths=set(),
+        verified_paths={"/workspace/app/existing.tsx"},
+    )
     file_proof = SimpleNamespace(
         successful_tool_calls=1,
         written_paths={"/workspace/app/page.tsx"},
@@ -228,12 +233,23 @@ async def test_advance_with_proof_requires_artifact_evidence_for_build_todo():
 
     with patch.object(plan_mod, "emit", AsyncMock()):
         mid = await plan_mod.advance_with_proof(plan, session_id=sid, run_id="r1", proof=install_only)
-        out = await plan_mod.advance_with_proof(mid, session_id=sid, run_id="r1", proof=file_proof)
+        verified = await plan_mod.advance_with_proof(
+            mid, session_id=sid, run_id="r1", proof=verified_only
+        )
+        out = await plan_mod.advance_with_proof(
+            verified, session_id=sid, run_id="r1", proof=file_proof
+        )
 
     assert mid is not None
     assert mid["todos"][0]["status"] == TodoStatus.in_progress
     assert mid["todos"][1]["status"] == TodoStatus.pending
+    assert verified is not None
+    assert verified["todos"][0]["status"] == TodoStatus.in_progress
+    assert verified["todos"][1]["status"] == TodoStatus.pending
     assert out is not None
     assert out["todos"][0]["status"] == TodoStatus.done
     assert out["todos"][1]["status"] == TodoStatus.in_progress
-    assert out["todos"][0]["evidence_paths"] == ["/workspace/app/page.tsx"]
+    assert out["todos"][0]["evidence_paths"] == [
+        "/workspace/app/existing.tsx",
+        "/workspace/app/page.tsx",
+    ]
