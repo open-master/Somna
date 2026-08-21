@@ -119,6 +119,14 @@ async def maybe_compact(
         model=model,
         head_messages=len(head),
     )
+    await emit(
+        StatusEvent(
+            session_id=session_id,
+            run_id=run_id,
+            phase=SessionPhase.compacting,
+            message=f"正在压缩历史上下文（{len(head)} 条）",
+        )
+    )
     try:
         resp = await client.chat.completions.create(
             model=model,

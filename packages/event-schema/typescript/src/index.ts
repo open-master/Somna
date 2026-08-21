@@ -20,6 +20,7 @@ export const sessionPhaseSchema = z.enum([
   "interrupted",
   "stopped",
   "done",
+  "partial",
   "error",
 ]);
 export type SessionPhase = z.infer<typeof sessionPhaseSchema>;
@@ -142,6 +143,16 @@ export const taskFrameSchema = z
     type: z.literal("task.frame"),
     summary: z.string(),
     detail: z.string().default(""),
+    questions: z
+      .array(
+        z.object({
+          id: z.string(),
+          prompt: z.string(),
+          options: z.array(z.string()).default([]),
+          allow_custom: z.boolean().default(true),
+        }),
+      )
+      .default([]),
     ...baseFields,
   })
   .passthrough();

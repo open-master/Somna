@@ -80,11 +80,11 @@ async def run_session_graph(
                 "messages": [],
                 "tool_turns": 0,
                 "plan": None,
-                "compact_memory": None,
                 "execution_summary": None,
                 "reflection": None,
                 "reflection_count": 0,
                 "next_node": None,
+                "assistant_text": "",
                 "finished": False,
                 "error": None,
             }

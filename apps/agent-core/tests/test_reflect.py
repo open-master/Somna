@@ -15,7 +15,7 @@ def _mk_completion(content: str):
 
 
 @pytest.mark.asyncio
-async def test_reflect_finalize_marks_plan_done():
+async def test_reflect_rejects_finalize_while_plan_has_pending_todos():
     sid = uuid4()
     client = SimpleNamespace(
         chat=SimpleNamespace(
@@ -45,13 +45,14 @@ async def test_reflect_finalize_marks_plan_done():
             }
         )
 
-    assert out["next_node"] == "finalize"
-    assert out["plan"]["todos"][1]["status"] == "done"
+    assert out["next_node"] == "execute"
+    assert out["plan"]["todos"][1]["status"] == "pending"
+    assert "未完成 TODO" in out["reflection"]["reason"]
 
 
 @pytest.mark.asyncio
-async def test_reflect_finalize_mode2_skips_finish_all():
-    """模式二 finalize 不强行标满 TODO，保留执行阶段真实进度。"""
+async def test_reflect_at_cap_closes_unfinished_todos_truthfully():
+    """反思预算耗尽时可收口，但未完成项不能被伪装成 done。"""
     sid = uuid4()
     client = SimpleNamespace(
         chat=SimpleNamespace(
@@ -72,12 +73,13 @@ async def test_reflect_finalize_mode2_skips_finish_all():
                 "session_id": sid,
                 "run_id": "r1",
                 "executor_engine": "anthropic",
+                "reflection_count": 2,
                 "user_message": "词云",
                 "assistant_text": "已完成",
                 "execution_summary": {},
                 "plan": {
                     "todos": [
-                        {"id": "1", "text": "步骤一", "status": "done"},
+                        {"id": "1", "text": "步骤一", "status": "in_progress"},
                         {"id": "2", "text": "步骤二", "status": "pending"},
                     ]
                 },
@@ -85,7 +87,8 @@ async def test_reflect_finalize_mode2_skips_finish_all():
         )
 
     assert out["next_node"] == "finalize"
-    assert out["plan"]["todos"][1]["status"] == "pending"
+    assert out["plan"]["todos"][0]["status"] == "failed"
+    assert out["plan"]["todos"][1]["status"] == "skipped"
 
 
 @pytest.mark.asyncio
@@ -108,10 +111,12 @@ async def test_reflect_continue_execute_appends_guidance_message():
                     ]
                 },
                 "messages": [],
+                "tool_turns": 40,
             }
         )
 
     assert out["next_node"] == "execute"
+    assert out["tool_turns"] == 0
     assert isinstance(out["messages"][-1], SystemMessage)
     assert "继续执行" in out["messages"][-1].content
 
@@ -137,10 +142,14 @@ async def test_reflect_replan_on_multi_step_gap():
                     ]
                 },
                 "messages": [],
+                "tool_turns": 40,
+                "skip_planner": True,
             }
         )
 
     assert out["next_node"] == "plan"
+    assert out["tool_turns"] == 0
+    assert out["skip_planner"] is True
     assert isinstance(out["messages"][-1], SystemMessage)
     assert "重新规划" in out["messages"][-1].content
 

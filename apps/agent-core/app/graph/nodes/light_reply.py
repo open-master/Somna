@@ -11,7 +11,7 @@ from somna_events import MessageDeltaEvent, SessionPhase, StatusEvent
 from app.config import get_settings
 from app.events.emitter import emit
 from app.graph.state import SessionState
-from app.graph.user_turn import last_human_turn_text
+from app.graph.user_turn import last_human_turn_text, prior_conversation_text
 from app.llm.client import get_async_openai
 from app.logging_setup import get_logger
 from app.services.billing import emit_model_usage
@@ -83,15 +83,20 @@ async def clarify_node(state: SessionState) -> SessionState:
 
     lines = ["在开始执行前，需要先确认以下内容：", ""]
     for i, q in enumerate(qs, start=1):
-        if str(q).strip():
-            lines.append(f"{i}. {q}")
+        prompt = (
+            str(q.get("prompt") or "").strip()
+            if isinstance(q, dict)
+            else str(q).strip()
+        )
+        if prompt:
+            lines.append(f"{i}. {prompt}")
     text = "\n".join(lines).strip() or "请补充更多任务细节后再继续。"
 
     await emit(
         StatusEvent(
             session_id=session_id,
             run_id=run_id,
-            phase=SessionPhase.executing,
+            phase=SessionPhase.waiting_user,
             message="需要您补充信息",
         )
     )
@@ -114,6 +119,9 @@ async def direct_answer_node(state: SessionState) -> SessionState:
     cm = (state.get("compact_memory") or "").strip()
     if cm:
         parts.append(f"### 会话摘要（供参考）\n{cm}\n")
+    prior_context = prior_conversation_text(state)
+    if prior_context:
+        parts.append(f"### 最近对话（用于理解指代和追问）\n{prior_context}\n")
     parts.append("### 任务定调（供你对齐语气与深度，勿照抄给用户）\n")
     parts.append(f"task_mode={frame.get('task_mode')} effort={frame.get('effort_level')} deliverable={frame.get('deliverable_type')}")
     sc = frame.get("success_criteria") or []

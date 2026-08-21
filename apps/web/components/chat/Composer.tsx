@@ -14,7 +14,9 @@ import {
 } from "@/lib/api/sessions";
 import { getExecutorEngine } from "@/lib/executor-engine";
 import { useChatStore } from "@/lib/store/chat";
+import { usePlanStore } from "@/lib/store/plan";
 import { useSessionStore } from "@/lib/store/session";
+import { useTaskFrameStore } from "@/lib/store/taskFrame";
 import { DEFAULT_SESSION_TITLE, isDefaultSessionTitle, titleFromUserMessage } from "@/lib/session-title";
 
 export function Composer({ sessionId }: { sessionId: string }) {
@@ -28,6 +30,8 @@ export function Composer({ sessionId }: { sessionId: string }) {
   const setPhase = useSessionStore((s) => s.setPhase);
   const setRunId = useSessionStore((s) => s.setRunId);
   const upsertSession = useSessionStore((s) => s.upsertSession);
+  const clearPlan = usePlanStore((s) => s.clear);
+  const clearTaskFrame = useTaskFrameStore((s) => s.clear);
 
   const [sendError, setSendError] = useState<string | null>(null);
 
@@ -95,6 +99,8 @@ export function Composer({ sessionId }: { sessionId: string }) {
         resp = await postMessage(sessionId, value, pendingAtt, execEngine);
       }
 
+      clearPlan();
+      clearTaskFrame();
       setPhase("planning");
       setRunId(resp.run_id);
       const existing = useSessionStore.getState().sessions.find((session) => session.id === sessionId);
@@ -147,6 +153,8 @@ export function Composer({ sessionId }: { sessionId: string }) {
     sessionId,
     pushUser,
     rollbackLastUserMessage,
+    clearPlan,
+    clearTaskFrame,
     setPhase,
     setRunId,
     upsertSession,

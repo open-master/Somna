@@ -47,6 +47,7 @@ from app.graph.nodes.plan import advance_with_proof, mark_progress
 from app.graph.nodes.task_frame import deliverable_type_implies_artifact, format_task_frame_block
 from app.graph.run_artifacts import append_executor_progress_snapshot, sync_plan_artifact
 from app.graph.state import SessionState
+from app.graph.user_turn import last_human_turn_text
 from app.llm.client import get_async_openai
 from app.logging_setup import get_logger
 from app.memory import format_memories, search_memories
@@ -199,7 +200,7 @@ async def _route_or_reuse_skills(state: SessionState) -> SkillRouteResult:
             return cached
     return await route_skills_for_task(
         user_id=state.get("user_id"),
-        user_message=state.get("user_message") or "",
+        user_message=last_human_turn_text(state),
         task_frame=state.get("task_frame") if isinstance(state.get("task_frame"), dict) else None,
         plan=state.get("plan") if isinstance(state.get("plan"), dict) else None,
         skill_mode=state.get("skill_mode"),
@@ -501,7 +502,7 @@ async def execute_node(state: SessionState) -> SessionState:
 
     # Pull relevant long-term memories so the executor prompt starts with
     # whatever we already know about this user. No-op when memory is off.
-    user_message = state.get("user_message") or ""
+    user_message = last_human_turn_text(state)
     memories = await search_memories(
         user_message,
         session_id=str(session_id),
@@ -651,7 +652,6 @@ async def execute_node(state: SessionState) -> SessionState:
                             "execution_summary": _summarize_execution(
                                 proof, delivery_missing_reason=reason
                             ),
-                            "error": f"模型试图结束运行，但未检测到真实交付证据：{reason}",
                             "finished": True,
                         }
                     forced_tool_name = _delivery_recovery_tool_name(manifests)

@@ -63,7 +63,9 @@ def frame_for_blank_user_message() -> dict[str, Any]:
     """Deterministic framing when there is no text intent (no LLM)."""
     out = dict(DEFAULT_TASK_FRAME)
     out["needs_clarification"] = True
-    out["clarification_questions"] = ["请用一句话描述你想完成的任务或问题。"]
+    out["clarification_questions"] = _coerce_clarification_questions(
+        ["请用一句话描述你想完成的任务或问题。"]
+    )
     out["should_invoke_planner"] = False
     out["task_mode"] = "direct_answer"
     out["deliverable_type"] = "unspecified"
@@ -131,6 +133,37 @@ def _coerce_str_list(raw: Any) -> list[str]:
     return []
 
 
+def _coerce_clarification_questions(raw: Any) -> list[dict[str, Any]]:
+    if raw is None:
+        return []
+    items = raw if isinstance(raw, list) else [raw]
+    out: list[dict[str, Any]] = []
+    for index, item in enumerate(items[:4], start=1):
+        if isinstance(item, str):
+            prompt = item.strip()
+            options: list[str] = []
+            allow_custom = True
+            question_id = f"q{index}"
+        elif isinstance(item, dict):
+            prompt = str(item.get("prompt") or item.get("question") or item.get("text") or "").strip()
+            options = _coerce_str_list(item.get("options"))[:5]
+            allow_custom = bool(item.get("allow_custom", True))
+            question_id = str(item.get("id") or f"q{index}").strip() or f"q{index}"
+        else:
+            continue
+        if not prompt:
+            continue
+        out.append(
+            {
+                "id": question_id[:80],
+                "prompt": prompt[:500],
+                "options": [option[:160] for option in options],
+                "allow_custom": allow_custom,
+            }
+        )
+    return out
+
+
 def _parse_frame_json(raw: str) -> dict[str, Any] | None:
     if not raw:
         return None
@@ -154,7 +187,9 @@ def normalize_task_frame(parsed: dict[str, Any] | None) -> dict[str, Any]:
         return out
 
     out["needs_clarification"] = bool(parsed.get("needs_clarification"))
-    out["clarification_questions"] = _coerce_str_list(parsed.get("clarification_questions"))
+    out["clarification_questions"] = _coerce_clarification_questions(
+        parsed.get("clarification_questions")
+    )
     out["task_mode"] = normalize_task_mode(parsed.get("task_mode") or out["task_mode"])
     out["effort_level"] = normalize_effort_level(parsed.get("effort_level") or out["effort_level"])
     _al = str(parsed.get("autonomy_level") or "").strip().lower()
@@ -175,7 +210,9 @@ def normalize_task_frame(parsed: dict[str, Any] | None) -> dict[str, Any]:
         out["should_invoke_planner"] = False
 
     if out["needs_clarification"] and not out["clarification_questions"]:
-        out["clarification_questions"] = ["请补充关键约束后再继续（例如目标、范围、交付形式）。"]
+        out["clarification_questions"] = _coerce_clarification_questions(
+            ["请补充关键约束后再继续（例如目标、范围、交付形式）。"]
+        )
     return out
 
 
@@ -257,12 +294,14 @@ async def _format_enabled_skills_for_framing(state: SessionState) -> str:
 
 
 async def _emit_task_frame_ui(session_id, run_id: str | None, frame: dict[str, Any]) -> None:
+    questions = _coerce_clarification_questions(frame.get("clarification_questions"))
     await emit(
         TaskFrameEvent(
             session_id=session_id,
             run_id=run_id,
             summary=format_task_frame_ui_summary(frame),
             detail=format_task_frame_block(frame),
+            questions=questions,
         )
     )
 

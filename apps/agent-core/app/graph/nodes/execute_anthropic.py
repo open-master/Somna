@@ -39,6 +39,7 @@ from app.graph.nodes.execute import (
 from app.graph.nodes.plan import advance_with_proof, mark_progress
 from app.graph.run_artifacts import sync_plan_artifact
 from app.graph.state import SessionState
+from app.graph.user_turn import last_human_turn_text
 from app.llm.client import get_async_anthropic
 from app.logging_setup import get_logger
 from app.memory import format_memories, search_memories
@@ -216,7 +217,7 @@ async def execute_anthropic_node(state: SessionState) -> SessionState:
     manifest_by_name = {m.name: m for m in manifests}
     tools_schema = manifests_to_anthropic_tools(manifests) if manifests else None
 
-    user_message = state.get("user_message") or ""
+    user_message = last_human_turn_text(state)
     memories = await search_memories(
         user_message,
         session_id=str(session_id),
@@ -368,7 +369,6 @@ async def execute_anthropic_node(state: SessionState) -> SessionState:
                             "execution_summary": _summarize_execution(
                                 proof, delivery_missing_reason=reason
                             ),
-                            "error": f"模型试图结束运行，但未检测到真实交付证据：{reason}",
                             "finished": True,
                         }
                     forced_tool_name = _delivery_recovery_tool_name(manifests)

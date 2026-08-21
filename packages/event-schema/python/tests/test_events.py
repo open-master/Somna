@@ -57,10 +57,23 @@ def test_status_phase_enum():
 def test_task_frame_event_roundtrip():
     from somna_events import TaskFrameEvent
 
-    e = TaskFrameEvent(session_id=_sid(), run_id="r1", summary="定调摘要", detail="a\nb")
+    e = TaskFrameEvent(
+        session_id=_sid(),
+        run_id="r1",
+        summary="定调摘要",
+        detail="a\nb",
+        questions=[
+            {
+                "id": "q1",
+                "prompt": "交付什么格式？",
+                "options": ["Markdown", "PDF"],
+            }
+        ],
+    )
     data = e.model_dump(mode="json")
     assert data["type"] == "task.frame"
     assert data["summary"] == "定调摘要"
+    assert data["questions"][0]["options"] == ["Markdown", "PDF"]
 
 
 def test_unknown_type_rejected():

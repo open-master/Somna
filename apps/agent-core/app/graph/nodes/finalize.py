@@ -20,6 +20,13 @@ async def finalize_node(state: SessionState) -> SessionState:
     run_id = state.get("run_id")
     err = state.get("error")
     frame = state.get("task_frame") or {}
+    plan = state.get("plan") if isinstance(state.get("plan"), dict) else {}
+    todos = plan.get("todos") if isinstance(plan.get("todos"), list) else []
+    has_unfinished = any(
+        isinstance(todo, dict)
+        and str(todo.get("status") or "") in {"pending", "in_progress", "failed", "skipped"}
+        for todo in todos
+    )
 
     if err:
         billing_outcome = "failure"
@@ -63,6 +70,15 @@ async def finalize_node(state: SessionState) -> SessionState:
                     message="等待您补充信息后再继续",
                 )
             )
+        elif has_unfinished:
+            await emit(
+                StatusEvent(
+                    session_id=session_id,
+                    run_id=run_id,
+                    phase=SessionPhase.partial,
+                    message="本轮已结束，但部分步骤未完成",
+                )
+            )
         else:
             await emit(
                 StatusEvent(
@@ -84,7 +100,7 @@ async def finalize_node(state: SessionState) -> SessionState:
 
     # Opportunistically capture a takeaway into long-term memory so next
     # sessions can reference it. Gated by MEMORY_ENABLED — failure is silent.
-    if not err and memory_enabled():
+    if not err and not frame.get("needs_clarification") and not has_unfinished and memory_enabled():
         user_msg = (state.get("user_message") or "").strip()
         answer = (state.get("assistant_text") or "").strip()
         if user_msg and answer:

@@ -25,6 +25,7 @@ function statusFromPhase(phase: string): string {
     case "waiting_user":
       return "active";
     case "done":
+    case "partial":
       return "active";
     case "error":
       return "error";
@@ -116,6 +117,8 @@ export default function ChatSessionPage() {
           lastRunTerminal = null;
         } else if (p === "done") {
           lastRunTerminal = "success";
+        } else if (p === "partial") {
+          lastRunTerminal = "partial";
         } else if (p === "error") {
           lastRunTerminal = "error";
         } else if (p === "waiting_user") {
@@ -155,6 +158,9 @@ export default function ChatSessionPage() {
         live.track(e);
       },
       error: (e) => {
+        chat.pushAssistantNotice(
+          `运行未完成：${e.message}${e.retryable ? "\n\n你可以调整要求后重新发送，或直接重试本次任务。" : ""}`,
+        );
         session.setPhase("error");
         const existing = session.sessions.find((item) => item.id === sessionId);
         session.upsertSession({

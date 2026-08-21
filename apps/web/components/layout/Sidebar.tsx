@@ -180,7 +180,7 @@ export function Sidebar() {
   const runningCount = sessions.filter((s) => s.status === "running").length;
   const completedCount = sessions.filter((s) => s.lastRunTerminal === "success").length;
   const waitingCount = sessions.filter(
-    (s) => s.awaitingUser || (s.status === "active" && s.lastRunTerminal !== "success"),
+    (s) => s.awaitingUser || (s.status === "active" && !s.lastRunTerminal),
   ).length;
 
   async function handleNew() {
@@ -575,6 +575,7 @@ function MetricCard({
 function sessionRowVisual(s: SessionSummary): { dot: string; label: string } {
   if (s.awaitingUser) return { dot: "waiting_user", label: "等待您补充" };
   if (s.lastRunTerminal === "success") return { dot: "run_success", label: "本轮已完成" };
+  if (s.lastRunTerminal === "partial") return { dot: "partial", label: "本轮部分完成" };
   if (s.lastRunTerminal === "error") return { dot: "error", label: "上轮出错" };
   switch (s.status) {
     case "running":
@@ -597,6 +598,7 @@ function SessionStatusDot({ variant }: { variant: string }) {
         "mt-0.5 inline-flex size-2.5 rounded-full",
         variant === "running" && "bg-emerald-500",
         variant === "run_success" && "bg-primary",
+        variant === "partial" && "bg-amber-500",
         variant === "waiting_user" && "bg-amber-500",
         variant === "error" && "bg-destructive",
         variant === "interrupted" && "bg-amber-500",

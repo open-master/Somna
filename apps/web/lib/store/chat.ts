@@ -35,6 +35,8 @@ interface ChatState {
   }) => void;
   /** 新一轮 run 开始（如 status.planning）时切断上一轮助手气泡拼接 */
   beginAssistantTurn: () => void;
+  /** 将运行错误作为独立助手提示展示，避免错误只存在于顶栏和轨迹。 */
+  pushAssistantNotice: (text: string) => void;
   /** postMessage 失败时撤销最后一条乐观插入的用户消息 */
   rollbackLastUserMessage: () => void;
   onMessageDelta: (e: MessageDeltaEvent) => void;
@@ -60,6 +62,7 @@ export const useChatStore = create<ChatState>((set) => ({
           ...(attachments?.length ? { attachments } : {}),
         },
       ],
+      activeAssistantId: null,
     })),
   pushUserHydrated: (row) =>
     set((s) => ({
@@ -73,8 +76,22 @@ export const useChatStore = create<ChatState>((set) => ({
           ...(row.attachments?.length ? { attachments: row.attachments } : {}),
         },
       ],
+      activeAssistantId: null,
     })),
   beginAssistantTurn: () => set({ activeAssistantId: null }),
+  pushAssistantNotice: (text) =>
+    set((s) => ({
+      messages: [
+        ...s.messages,
+        {
+          kind: "assistant",
+          id: `notice_${Date.now()}`,
+          text,
+          createdAt: Date.now(),
+        },
+      ],
+      activeAssistantId: null,
+    })),
   rollbackLastUserMessage: () =>
     set((s) => {
       const m = s.messages;

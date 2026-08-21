@@ -8,6 +8,7 @@ import { useChatStore } from "@/lib/store/chat";
 import { useUiStore } from "@/lib/store/ui";
 
 import { Composer } from "./Composer";
+import { ClarificationCard } from "./ClarificationCard";
 import { CreateSkillFromSessionCard } from "./CreateSkillFromSessionCard";
 import { DeliverablesHub } from "./DeliverablesHub";
 import { MessageList } from "./MessageList";
@@ -50,6 +51,7 @@ export function ChatCenter({ sessionId }: { sessionId: string }) {
           </div>
         </div>
       ) : null}
+      <ClarificationCard sessionId={sessionId} />
       {hasConversation ? <CreateSkillFromSessionCard sessionId={sessionId} /> : null}
       <Composer sessionId={sessionId} />
     </div>

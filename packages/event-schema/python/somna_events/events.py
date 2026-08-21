@@ -34,6 +34,7 @@ class SessionPhase(str, Enum):
     interrupted = "interrupted"
     stopped = "stopped"
     done = "done"
+    partial = "partial"
     error = "error"
 
 
@@ -137,12 +138,20 @@ class PlanUpdateEvent(BaseEvent):
     todos: List[TodoItem]
 
 
+class ClarificationQuestion(BaseModel):
+    id: str
+    prompt: str
+    options: List[str] = Field(default_factory=list)
+    allow_custom: bool = True
+
+
 class TaskFrameEvent(BaseEvent):
     """阶段 A 任务定调结果，供前端在「任务计划」上方展示。"""
 
     type: Literal["task.frame"] = "task.frame"
     summary: str = Field(..., description="一行中文结论")
     detail: str = Field(default="", description="定调要点（多行），可折叠展示")
+    questions: List[ClarificationQuestion] = Field(default_factory=list)
 
 
 class SkillDebugEvent(BaseEvent):

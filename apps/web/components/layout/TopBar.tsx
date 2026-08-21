@@ -18,6 +18,7 @@ const PHASE_LABEL: Record<string, string> = {
   interrupted: "已中断",
   stopped: "已停止",
   done: "本轮已完成",
+  partial: "部分完成",
   error: "出错",
 };
 
@@ -30,6 +31,7 @@ const PHASE_VARIANT: Record<string, "default" | "secondary" | "success" | "warni
   interrupted: "secondary",
   stopped: "secondary",
   done: "success",
+  partial: "warning",
   error: "destructive",
 };
 

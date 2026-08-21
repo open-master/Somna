@@ -9,6 +9,8 @@ export function PlannerTimeline() {
   if (todos.length === 0) return null;
 
   const done = todos.filter((t) => t.status === "done").length;
+  const failed = todos.filter((t) => t.status === "failed").length;
+  const skipped = todos.filter((t) => t.status === "skipped").length;
 
   return (
     <details className="mx-auto w-full max-w-3xl rounded-lg border bg-card px-3 py-2 group">
@@ -23,7 +25,10 @@ export function PlannerTimeline() {
         </span>
         <span>
           任务计划（<span className="font-mono">{done}</span>/<span className="font-mono">{todos.length}</span>{" "}
-          已完成）
+          已完成
+          {failed > 0 ? <> · <span className="font-mono text-destructive">{failed}</span> 失败</> : null}
+          {skipped > 0 ? <> · <span className="font-mono text-muted-foreground">{skipped}</span> 跳过</> : null}
+          ）
         </span>
         <ChevronDown className="ml-auto size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
       </summary>

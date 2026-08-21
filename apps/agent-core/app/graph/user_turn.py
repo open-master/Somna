@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from app.graph.state import SessionState
 
@@ -34,3 +34,35 @@ def last_human_turn_text(state: SessionState) -> str:
             return _human_message_body(m).strip()
     raw = state.get("user_message")
     return (raw if isinstance(raw, str) else str(raw or "")).strip()
+
+
+def prior_conversation_text(state: SessionState, *, max_chars: int = 8000) -> str:
+    """Return recent user/assistant context before the current human turn.
+
+    Direct-answer mode must still understand follow-up questions such as
+    “那他的妻子呢？”. Tool/System messages are intentionally omitted to keep
+    the lightweight prompt compact and avoid leaking execution internals.
+    """
+    messages: list[Any] = list(state.get("messages") or [])
+    if messages and isinstance(messages[-1], HumanMessage):
+        messages = messages[:-1]
+
+    lines: list[str] = []
+    for message in messages:
+        if isinstance(message, HumanMessage):
+            text = _human_message_body(message).strip()
+            if text:
+                lines.append(f"用户：{text}")
+        elif isinstance(message, AIMessage):
+            content = getattr(message, "content", "")
+            text = content if isinstance(content, str) else str(content or "")
+            text = text.strip()
+            if text:
+                lines.append(f"助手：{text}")
+
+    if not lines:
+        return ""
+    blob = "\n".join(lines)
+    if len(blob) > max_chars:
+        blob = "…\n" + blob[-max_chars:]
+    return blob

@@ -337,7 +337,8 @@ async def test_execute_rejects_fake_done_for_artifact_goal_without_tool_proof():
         )
 
     assert state["finished"] is True
-    assert "未检测到真实交付证据" in state["error"]
+    assert "error" not in state
+    assert "未检测到真实交付证据" in state["execution_summary"]["delivery_missing_reason"]
 
 
 @pytest.mark.asyncio
@@ -388,7 +389,8 @@ async def test_execute_forces_shell_tool_after_missing_delivery_proof():
     assert stream.await_count == 2
     assert stream.await_args_list[0].kwargs["forced_tool_name"] is None
     assert stream.await_args_list[1].kwargs["forced_tool_name"] == "shell"
-    assert "未检测到真实交付证据" in state["error"]
+    assert "error" not in state
+    assert "未检测到真实交付证据" in state["execution_summary"]["delivery_missing_reason"]
 
 
 @pytest.mark.asyncio

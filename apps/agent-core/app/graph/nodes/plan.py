@@ -20,6 +20,7 @@ from app.events.emitter import emit
 from app.graph.nodes.task_frame import format_task_frame_block
 from app.graph.run_artifacts import persist_plan_pointer
 from app.graph.state import SessionState
+from app.graph.user_turn import last_human_turn_text
 from app.llm.client import get_async_openai
 from app.logging_setup import get_logger
 from app.memory import format_memories, search_memories
@@ -109,7 +110,7 @@ async def plan_node(state: SessionState) -> SessionState:
         return {"plan": None}
 
     planner_model = state.get("planner_model") or settings.agent_default_planner
-    user_message = state.get("user_message") or ""
+    user_message = last_human_turn_text(state)
 
     manifests = list(tool_manifest_cache().values())
     skill_route = await route_skills_for_task(
@@ -409,6 +410,7 @@ async def mark_progress(
     start_next: bool = False,
     fail_current: bool = False,
     finish_all: bool = False,
+    close_unfinished: bool = False,
 ) -> dict[str, Any] | None:
     """Mutate the plan's todo statuses and emit a PlanUpdateEvent.
 
@@ -416,6 +418,8 @@ async def mark_progress(
     - `fail_current`: mark the first in_progress item as `failed`.
     - `start_next`: mark the first `pending` item as `in_progress`.
     - `finish_all`: mark every remaining `pending` / `in_progress` item as `done`.
+    - `close_unfinished`: mark `in_progress` as `failed` and `pending` as `skipped`.
+      Use only when the run must stop without proving the remaining work.
     Returns the new plan dict (or the original if nothing changed / no plan).
     """
     todos = _plan_todos(plan)
@@ -428,6 +432,15 @@ async def mark_progress(
         for t in todos:
             if t.get("status") in {TodoStatus.pending, TodoStatus.in_progress}:
                 t["status"] = TodoStatus.done
+                changed = True
+
+    if close_unfinished:
+        for t in todos:
+            if t.get("status") == TodoStatus.in_progress:
+                t["status"] = TodoStatus.failed
+                changed = True
+            elif t.get("status") == TodoStatus.pending:
+                t["status"] = TodoStatus.skipped
                 changed = True
 
     if (complete_current or fail_current) and any(

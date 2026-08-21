@@ -96,6 +96,36 @@
       "title": "ArtifactEvent",
       "type": "object"
     },
+    "ClarificationQuestion": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Options",
+          "type": "array"
+        },
+        "allow_custom": {
+          "default": true,
+          "title": "Allow Custom",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "prompt"
+      ],
+      "title": "ClarificationQuestion",
+      "type": "object"
+    },
     "ErrorEvent": {
       "properties": {
         "type": {
@@ -472,6 +502,7 @@
         "interrupted",
         "stopped",
         "done",
+        "partial",
         "error"
       ],
       "title": "SessionPhase",
@@ -717,6 +748,13 @@
           "description": "定调要点（多行），可折叠展示",
           "title": "Detail",
           "type": "string"
+        },
+        "questions": {
+          "items": {
+            "$ref": "#/$defs/ClarificationQuestion"
+          },
+          "title": "Questions",
+          "type": "array"
         }
       },
       "required": [

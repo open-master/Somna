@@ -107,3 +107,64 @@ async def test_finalize_emits_waiting_user_after_clarify_path():
     status_events = [c.args[0] for c in emit.await_args_list if c.args[0].type == "status"]
     assert status_events and status_events[-1].phase == SessionPhase.waiting_user
     assert "补充" in (status_events[-1].message or "")
+
+
+@pytest.mark.asyncio
+async def test_finalize_does_not_store_clarification_as_long_term_memory():
+    sid = uuid4()
+    add_memory = AsyncMock(return_value=True)
+
+    with (
+        patch.object(fin, "emit", AsyncMock()),
+        patch.object(fin, "get_pool", return_value=_Pool()),
+        patch.object(fin, "memory_enabled", return_value=True),
+        patch.object(fin, "add_memory", add_memory),
+    ):
+        await fin.finalize_node(
+            {
+                "session_id": sid,
+                "run_id": "r1",
+                "user_message": "帮我生成报告",
+                "assistant_text": "请补充报告范围和格式。",
+                "error": None,
+                "task_frame": {"needs_clarification": True},
+            }
+        )
+
+    add_memory.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_finalize_emits_partial_and_skips_memory_for_unfinished_plan():
+    from somna_events import SessionPhase
+
+    sid = uuid4()
+    emit = AsyncMock()
+    add_memory = AsyncMock(return_value=True)
+
+    with (
+        patch.object(fin, "emit", emit),
+        patch.object(fin, "get_pool", return_value=_Pool()),
+        patch.object(fin, "memory_enabled", return_value=True),
+        patch.object(fin, "add_memory", add_memory),
+    ):
+        await fin.finalize_node(
+            {
+                "session_id": sid,
+                "run_id": "r1",
+                "user_message": "生成报告",
+                "assistant_text": "完成了可完成的部分。",
+                "error": None,
+                "task_frame": {"needs_clarification": False},
+                "plan": {
+                    "todos": [
+                        {"id": "1", "text": "收集资料", "status": "done"},
+                        {"id": "2", "text": "生成报告", "status": "failed"},
+                    ]
+                },
+            }
+        )
+
+    status_events = [c.args[0] for c in emit.await_args_list if c.args[0].type == "status"]
+    assert status_events[-1].phase == SessionPhase.partial
+    add_memory.assert_not_awaited()

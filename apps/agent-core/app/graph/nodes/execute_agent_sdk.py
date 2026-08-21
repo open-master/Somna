@@ -55,6 +55,7 @@ from app.graph.nodes.execute import (
 from app.graph.nodes.plan import advance_with_proof, mark_progress
 from app.graph.run_artifacts import append_executor_progress_snapshot, sync_plan_artifact
 from app.graph.state import SessionState
+from app.graph.user_turn import last_human_turn_text
 from app.llm.client import anthropic_subprocess_env
 from app.logging_setup import get_logger
 from app.memory import format_memories, search_memories
@@ -293,7 +294,7 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
     exec_alias = (state.get("executor_model") or settings.agent_default_executor).strip()
     coder_alias = (state.get("coder_model") or settings.agent_default_coder).strip()
     sandbox_id = state.get("sandbox_id") or str(session_id)
-    user_message = state.get("user_message") or ""
+    user_message = last_human_turn_text(state)
     _tf = state.get("task_frame") if isinstance(state.get("task_frame"), dict) else None
     _eff_auto = effective_autonomy_level(_tf)
     _sdk_max_delivery_rounds = delivery_validation_policy(_eff_auto).max_sdk_delivery_rounds
@@ -523,7 +524,6 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
                     "execution_summary": _summarize_execution(
                         proof, delivery_missing_reason=delivery_reason
                     ),
-                    "error": f"模型试图结束运行，但未检测到真实交付证据：{delivery_reason}",
                     "finished": True,
                 }
 

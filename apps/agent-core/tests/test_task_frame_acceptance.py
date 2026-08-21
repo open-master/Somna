@@ -59,6 +59,31 @@ def test_normalize_forces_no_planner_when_clarify():
     out = tf_mod.normalize_task_frame(parsed)
     assert out["needs_clarification"] is True
     assert out["should_invoke_planner"] is False
+    assert out["clarification_questions"][0]["prompt"] == "范围？"
+
+
+def test_normalize_structured_clarification_questions():
+    out = tf_mod.normalize_task_frame(
+        {
+            "needs_clarification": True,
+            "clarification_questions": [
+                {
+                    "id": "format",
+                    "prompt": "希望交付什么格式？",
+                    "options": ["Markdown", "PDF"],
+                    "allow_custom": True,
+                }
+            ],
+        }
+    )
+    assert out["clarification_questions"] == [
+        {
+            "id": "format",
+            "prompt": "希望交付什么格式？",
+            "options": ["Markdown", "PDF"],
+            "allow_custom": True,
+        }
+    ]
 
 
 def test_normalize_autonomy_level_invalid_keeps_default():

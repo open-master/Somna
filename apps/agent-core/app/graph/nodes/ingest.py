@@ -29,8 +29,8 @@ async def ingest_node(state: SessionState) -> SessionState:
         StatusEvent(
             session_id=session_id,
             run_id=run_id,
-            phase=SessionPhase.executing,
-            message="收到任务，开始处理",
+            phase=SessionPhase.planning,
+            message="收到任务，正在准备",
         )
     )
 
@@ -55,5 +55,9 @@ async def ingest_node(state: SessionState) -> SessionState:
 
     human_body = text + "".join(extra_lines)
     existing = list(state.get("messages") or [])
-    existing.append(HumanMessage(content=human_body))
+    # Temporal may retry the whole activity with the same run_id. A stable
+    # message id lets LangGraph's add_messages reducer replace the retried
+    # ingest entry instead of duplicating the user's turn in checkpoint state.
+    message_id = f"user:{run_id}" if run_id else None
+    existing.append(HumanMessage(content=human_body, id=message_id))
     return {"messages": existing, "sandbox_id": sandbox_id, "tool_turns": 0}

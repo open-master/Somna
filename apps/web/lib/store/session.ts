@@ -2,7 +2,7 @@ import { create } from "zustand";
 import type { SessionPhase } from "@somna/event-schema";
 
 /** 客户端根据 `status.done` / `status.error` 等事件推断，便于与后端 `sessions.status=active` 对齐。刷新页面后可能丢失。 */
-export type LastRunTerminal = "success" | "error";
+export type LastRunTerminal = "success" | "partial" | "error";
 
 export interface SessionSummary {
   id: string;

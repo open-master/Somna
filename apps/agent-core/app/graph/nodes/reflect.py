@@ -26,12 +26,6 @@ _JSON_BLOCK_RE = re.compile(r"\{[\s\S]*\}", re.MULTILINE)
 _MAX_REFLECTIONS = 3
 
 
-def _is_mode2_executor(state: SessionState) -> bool:
-    """模式二：Anthropic Messages 协议（与 post_message executor_engine 一致）。"""
-    eng = (state.get("executor_engine") or "native").strip().lower()
-    return eng in ("anthropic", "anthropic_compat", "mode2")
-
-
 def _parse_reflection(raw: str) -> dict[str, Any] | None:
     if not raw:
         return None
@@ -290,6 +284,15 @@ async def reflect_node(state: SessionState) -> SessionState:
         reason = block_reason
         focus = block_focus
 
+    # A model decision must not make the UI claim that unfinished plan items
+    # are complete. Keep executing while a retry budget remains; when the
+    # reflection cap is reached, finalize truthfully with failed/skipped items.
+    pending_before_finalize = _pending_todos(state.get("plan"))
+    if route == "finalize" and pending_before_finalize and reflections < _MAX_REFLECTIONS:
+        route = "continue_execute"
+        reason = "仍有未完成 TODO，暂不能宣告任务完成"
+        focus = str(pending_before_finalize[0].get("text") or "继续完成并验证剩余步骤")
+
     route, reason, focus = _coerce_route_for_high_autonomy(state, route, reason, focus)
     if route == "finalize" and blocked:
         route = "continue_execute"
@@ -316,16 +319,23 @@ async def reflect_node(state: SessionState) -> SessionState:
     messages = list(state.get("messages") or [])
 
     if route == "finalize":
-        if _is_mode2_executor(state):
-            # 模式一在 finalize 时仍用 finish_all 勾选剩余步骤；模式二则保留 execute/advance 的真实状态，
-            # 避免「工具失败仍显示全完成」。
+        unfinished = _pending_todos(plan)
+        if unfinished:
+            # Reaching finalize with unfinished work means the retry/reflection
+            # budget is exhausted. Preserve truth in the timeline instead of
+            # force-marking every remaining item as done.
+            plan = await mark_progress(
+                plan,
+                session_id=session_id,
+                run_id=run_id,
+                close_unfinished=True,
+            )
             log.info(
-                "graph.reflect.finalize_mode2",
+                "graph.reflect.finalize_with_unfinished",
                 session_id=str(session_id),
                 run_id=run_id,
+                unfinished=len(unfinished),
             )
-        else:
-            plan = await mark_progress(plan, session_id=session_id, run_id=run_id, finish_all=True)
         return {
             "plan": plan,
             "reflection": {"decision": route, "reason": reason, "focus": focus, "raw": raw},
@@ -348,7 +358,8 @@ async def reflect_node(state: SessionState) -> SessionState:
             "reflection": {"decision": route, "reason": reason, "focus": focus, "raw": raw},
             "reflection_count": reflections,
             "next_node": "plan",
-            "skip_planner": False,
+            "skip_planner": bool(state.get("skip_planner")),
+            "tool_turns": 0,
         }
 
     messages.append(
@@ -365,4 +376,5 @@ async def reflect_node(state: SessionState) -> SessionState:
         "reflection": {"decision": route, "reason": reason, "focus": focus, "raw": raw},
         "reflection_count": reflections,
         "next_node": "execute",
+        "tool_turns": 0,
     }
