@@ -314,7 +314,13 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
     state["skill_route_resolved"] = True
     await _emit_skill_debug_event(session_id, run_id, skill_route)
     skill_block = skill_route.prompt_block
-    extra_context = _compose_executor_extra_context(memory_block, state.get("task_frame"), skill_block)
+    extra_context = _compose_executor_extra_context(
+        memory_block,
+        state.get("task_frame"),
+        skill_block,
+        plan=state.get("plan"),
+        compact_memory=state.get("compact_memory"),
+    )
 
     system_prompt = build_system_prompt(
         session_id=str(session_id),
@@ -390,6 +396,7 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
             )
             if did_compact and summary:
                 compact_memory = summary
+            bridge.working_messages = working_messages
 
             system_merged, body_chain = _merge_system_prompt(working_messages)
             if not system_merged.strip():
@@ -554,6 +561,14 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
         return {
             "error": str(exc),
             "finished": True,
+            "assistant_text": final_text,
+            "messages": [
+                message
+                for message in bridge.working_messages
+                if not isinstance(message, SystemMessage)
+            ],
+            "compact_memory": compact_memory,
+            "tool_turns": max(tool_turns, bridge.tool_round),
             "plan": plan,
             "execution_summary": _summarize_execution(bridge.proof),
         }

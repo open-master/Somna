@@ -53,6 +53,8 @@ interface LiveState {
   usage: Usage;
   terminalLines: string[];
   recentEvents: RecentEvent[];
+  seenArtifactEventKeys: Record<string, true>;
+  seenUsageEventKeys: Record<string, true>;
   onScreenshot: (e: ScreenshotEvent) => void;
   onArtifact: (e: ArtifactEvent) => void;
   onUsage: (e: TokenUsageEvent) => void;
@@ -75,6 +77,8 @@ export const useLiveStore = create<LiveState>((set) => ({
   usage: emptyUsage,
   terminalLines: [],
   recentEvents: [],
+  seenArtifactEventKeys: {},
+  seenUsageEventKeys: {},
   onScreenshot: (e) =>
     set((s) => {
       const shot: Shot = {
@@ -86,6 +90,11 @@ export const useLiveStore = create<LiveState>((set) => ({
     }),
   onArtifact: (e) =>
     set((s) => {
+      const eventKey =
+        typeof e.seq === "number"
+          ? `seq:${e.seq}`
+          : `${e.run_id ?? "none"}:${e.ts}:${e.name}:${e.url}`;
+      if (s.seenArtifactEventKeys[eventKey]) return s;
       const descNorm = e.description?.trim()
         ? normalizeWorkspacePath(e.description.trim())
         : undefined;
@@ -107,10 +116,16 @@ export const useLiveStore = create<LiveState>((set) => ({
       return {
         artifacts: [artifact, ...s.artifacts].slice(0, 100),
         fileItems: nextFiles,
+        seenArtifactEventKeys: { ...s.seenArtifactEventKeys, [eventKey]: true },
       };
     }),
   onUsage: (e) =>
     set((s) => {
+      const eventKey =
+        typeof e.seq === "number"
+          ? `seq:${e.seq}`
+          : `${e.run_id ?? "none"}:${e.ts}:${e.model}:${e.input}:${e.output}`;
+      if (s.seenUsageEventKeys[eventKey]) return s;
       const prev = s.usage.byModel[e.model] ?? { input: 0, output: 0, cost: 0 };
       const next = {
         input: prev.input + e.input,
@@ -124,6 +139,7 @@ export const useLiveStore = create<LiveState>((set) => ({
           cost: s.usage.cost + (e.cost_usd ?? 0),
           byModel: { ...s.usage.byModel, [e.model]: next },
         },
+        seenUsageEventKeys: { ...s.seenUsageEventKeys, [eventKey]: true },
       };
     }),
   onToolCall: (e) =>
@@ -164,6 +180,8 @@ export const useLiveStore = create<LiveState>((set) => ({
       usage: emptyUsage,
       terminalLines: [],
       recentEvents: [],
+      seenArtifactEventKeys: {},
+      seenUsageEventKeys: {},
     }),
 }));
 

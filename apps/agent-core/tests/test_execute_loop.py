@@ -11,6 +11,7 @@ from uuid import uuid4
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.graph.nodes import execute as exe
 from app.tools.client import ToolManifest, ToolResult
@@ -48,6 +49,25 @@ def _pending(id_: str, name: str, args_json: str):
 
 
 # --- tests ---
+
+
+def test_executor_extra_context_reinjects_plan_and_compact_memory():
+    context = exe._compose_executor_extra_context(
+        "长期记忆",
+        {"task_mode": "build", "should_invoke_planner": True},
+        plan={
+            "todos": [
+                {"id": "1", "text": "生成报告", "status": "in_progress"},
+                {"id": "2", "text": "验证结果", "status": "pending"},
+            ]
+        },
+        compact_memory="此前已经收集数据集。",
+    )
+
+    assert context is not None
+    assert "[in_progress] 生成报告" in context
+    assert "[pending] 验证结果" in context
+    assert "此前已经收集数据集" in context
 
 
 def test_proof_rehydration_avoids_false_delivery_missing_after_reflect():
@@ -125,6 +145,50 @@ async def test_text_only_turn_finishes_without_tool_calls():
     assert stream.calls == 1
     # token.usage fired
     assert any(type(e).__name__ == "TokenUsageEvent" for e in emitted)
+
+
+@pytest.mark.asyncio
+async def test_execute_exception_preserves_checkpoint_messages_and_turn_state():
+    sid = uuid4()
+    tool_message = ToolMessage(content="已执行", tool_call_id="call_1")
+    messages = [
+        HumanMessage(content="当前任务"),
+        AIMessage(
+            content="",
+            tool_calls=[{"name": "shell", "args": {"cmd": "pwd"}, "id": "call_1"}],
+        ),
+        tool_message,
+    ]
+
+    with (
+        patch.object(exe, "_stream_one_turn", AsyncMock(side_effect=RuntimeError("boom"))),
+        patch.object(
+            exe,
+            "maybe_compact",
+            AsyncMock(return_value=(messages, False, None)),
+        ),
+        patch.object(exe, "emit", AsyncMock()),
+        patch.object(exe, "get_async_openai", return_value=object()),
+        patch.object(exe, "tool_manifest_cache", return_value={}),
+        patch.object(exe, "build_system_prompt", return_value="sys"),
+        patch.object(exe, "get_settings", return_value=_SettingsStub()),
+    ):
+        state = await exe.execute_node(
+            {
+                "session_id": sid,
+                "run_id": "r1",
+                "executor_model": "agent-executor",
+                "sandbox_id": str(sid),
+                "messages": messages,
+                "tool_turns": 3,
+                "compact_memory": "已有摘要",
+            }
+        )
+
+    assert state["error"] == "boom"
+    assert state["tool_turns"] == 3
+    assert state["compact_memory"] == "已有摘要"
+    assert tool_message in state["messages"]
 
 
 @pytest.mark.asyncio

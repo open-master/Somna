@@ -141,6 +141,9 @@ def _compose_executor_extra_context(
     memory_block: str | None,
     task_frame: dict[str, Any] | None,
     skill_block: str | None = None,
+    *,
+    plan: dict[str, Any] | None = None,
+    compact_memory: str | None = None,
 ) -> str | None:
     parts: list[str] = []
     if memory_block and str(memory_block).strip():
@@ -150,6 +153,25 @@ def _compose_executor_extra_context(
     block = format_task_frame_block(task_frame).strip()
     if block and block != "(无)":
         parts.append(f"### 任务定调（phase A framing，供对齐范围与交付）\n{block}")
+    todos = plan.get("todos") if isinstance(plan, dict) else None
+    if isinstance(todos, list) and todos:
+        todo_lines: list[str] = []
+        for todo in todos[:30]:
+            if not isinstance(todo, dict):
+                continue
+            text = str(todo.get("text") or "").strip()
+            if not text:
+                continue
+            todo_lines.append(
+                f"- [{str(todo.get('status') or 'pending')}] {text}"
+            )
+        if todo_lines:
+            parts.append("### 当前执行计划（续跑时必须保持进度）\n" + "\n".join(todo_lines))
+    if compact_memory and compact_memory.strip():
+        parts.append(
+            "### 已压缩的会话执行摘要（续跑上下文）\n"
+            + compact_memory.strip()[:12_000]
+        )
     return "\n\n".join(parts) if parts else None
 
 
@@ -518,7 +540,13 @@ async def execute_node(state: SessionState) -> SessionState:
     state["skill_route_resolved"] = True
     await _emit_skill_debug_event(session_id, run_id, skill_route)
     skill_block = skill_route.prompt_block
-    extra_context = _compose_executor_extra_context(memory_block, state.get("task_frame"), skill_block)
+    extra_context = _compose_executor_extra_context(
+        memory_block,
+        state.get("task_frame"),
+        skill_block,
+        plan=state.get("plan"),
+        compact_memory=state.get("compact_memory"),
+    )
 
     system_prompt = build_system_prompt(
         session_id=str(session_id),
@@ -734,6 +762,14 @@ async def execute_node(state: SessionState) -> SessionState:
         return {
             "error": str(exc),
             "finished": True,
+            "assistant_text": final_text,
+            "messages": [
+                message
+                for message in working_messages
+                if not isinstance(message, SystemMessage)
+            ],
+            "compact_memory": compact_memory,
+            "tool_turns": tool_turns,
             "plan": plan,
             "execution_summary": _summarize_execution(proof),
         }

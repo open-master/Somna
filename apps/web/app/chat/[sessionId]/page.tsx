@@ -158,8 +158,13 @@ export default function ChatSessionPage() {
         live.track(e);
       },
       error: (e) => {
+        const noticeId =
+          typeof e.seq === "number"
+            ? `error_notice_seq_${e.seq}`
+            : `error_notice_${e.run_id ?? "none"}_${e.code}`;
         chat.pushAssistantNotice(
           `运行未完成：${e.message}${e.retryable ? "\n\n你可以调整要求后重新发送，或直接重试本次任务。" : ""}`,
+          noticeId,
         );
         session.setPhase("error");
         const existing = session.sessions.find((item) => item.id === sessionId);
