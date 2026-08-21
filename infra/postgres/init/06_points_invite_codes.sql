@@ -126,6 +126,14 @@ CREATE TABLE IF NOT EXISTS point_billing_usage (
 CREATE INDEX IF NOT EXISTS idx_point_billing_usage_run
     ON point_billing_usage(run_id, created_at);
 
+CREATE TABLE IF NOT EXISTS point_billing_reservations (
+    idempotency_key      TEXT PRIMARY KEY,
+    run_id               TEXT NOT NULL REFERENCES point_billing_runs(run_id) ON DELETE CASCADE,
+    tool_name             TEXT NOT NULL,
+    points                INTEGER NOT NULL DEFAULT 0 CHECK (points >= 0),
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 DO $$ BEGIN
     CREATE TRIGGER trg_point_accounts_touch BEFORE UPDATE ON point_accounts
         FOR EACH ROW EXECUTE FUNCTION touch_updated_at();

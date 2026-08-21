@@ -69,6 +69,8 @@ class Settings(BaseSettings):
     agent_compact_model: str = Field(default="agent-cheap", alias="AGENT_COMPACT_MODEL")
     agent_embed_model: str = Field(default="agent-embed", alias="AGENT_EMBED_MODEL")
     agent_max_turns: int = Field(default=40, alias="AGENT_MAX_TURNS")
+    agent_max_total_turns: int = Field(default=80, alias="AGENT_MAX_TOTAL_TURNS")
+    agent_max_total_tokens: int = Field(default=500000, alias="AGENT_MAX_TOTAL_TOKENS")
     agent_compact_token_threshold: int = Field(default=80000, alias="AGENT_COMPACT_TOKEN_THRESHOLD")
 
     # ---- Langfuse (optional in dev) ----

@@ -79,6 +79,8 @@ async def run_session_graph(
                 "plan_path": None,
                 "messages": [],
                 "tool_turns": 0,
+                "total_agent_turns": 0,
+                "total_execution_tokens": 0,
                 "plan": None,
                 "execution_summary": None,
                 "reflection": None,

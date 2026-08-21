@@ -92,6 +92,30 @@ async def test_reflect_at_cap_closes_unfinished_todos_truthfully():
 
 
 @pytest.mark.asyncio
+async def test_reflect_finalizes_when_global_tool_budget_is_exhausted():
+    sid = uuid4()
+    with patch.object(reflect_mod, "emit", AsyncMock()):
+        out = await reflect_mod.reflect_node(
+            {
+                "session_id": sid,
+                "run_id": "r-budget",
+                "tool_turns": reflect_mod.get_settings().agent_max_turns,
+                "plan": {
+                    "todos": [
+                        {"id": "1", "text": "继续执行", "status": "in_progress"},
+                        {"id": "2", "text": "验收", "status": "pending"},
+                    ]
+                },
+            }
+        )
+
+    assert out["next_node"] == "finalize"
+    assert out["reflection"]["reason"] == "已达到本轮全局执行预算上限"
+    assert out["plan"]["todos"][0]["status"] == "failed"
+    assert out["plan"]["todos"][1]["status"] == "skipped"
+
+
+@pytest.mark.asyncio
 async def test_reflect_continue_execute_appends_guidance_message():
     sid = uuid4()
     with (
@@ -111,12 +135,12 @@ async def test_reflect_continue_execute_appends_guidance_message():
                     ]
                 },
                 "messages": [],
-                "tool_turns": 40,
+                "tool_turns": 3,
             }
         )
 
     assert out["next_node"] == "execute"
-    assert out["tool_turns"] == 0
+    assert "tool_turns" not in out
     assert isinstance(out["messages"][-1], SystemMessage)
     assert "继续执行" in out["messages"][-1].content
 
@@ -142,13 +166,13 @@ async def test_reflect_replan_on_multi_step_gap():
                     ]
                 },
                 "messages": [],
-                "tool_turns": 40,
+                "tool_turns": 3,
                 "skip_planner": True,
             }
         )
 
     assert out["next_node"] == "plan"
-    assert out["tool_turns"] == 0
+    assert "tool_turns" not in out
     assert out["skip_planner"] is True
     assert isinstance(out["messages"][-1], SystemMessage)
     assert "重新规划" in out["messages"][-1].content

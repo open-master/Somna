@@ -19,6 +19,7 @@ from app.tools.client import ToolManifest, ToolResult
 
 class _SettingsStub:
     agent_max_turns = 40
+    agent_max_total_turns = 80
     agent_default_executor = "agent-executor"
     agent_default_coder = "agent-coder"
 
@@ -49,6 +50,21 @@ def _pending(id_: str, name: str, args_json: str):
 
 
 # --- tests ---
+
+
+def test_tool_operation_key_is_stable_and_argument_sensitive():
+    base = {
+        "run_id": "run-1",
+        "operation_index": "0:4:1",
+        "tool_name": "filesystem",
+    }
+    first = exe._tool_operation_key(args={"path": "a", "action": "write"}, **base)
+    reordered = exe._tool_operation_key(args={"action": "write", "path": "a"}, **base)
+    changed = exe._tool_operation_key(args={"action": "write", "path": "b"}, **base)
+
+    assert first == reordered
+    assert first != changed
+    assert first.startswith("run-1:tool:0:4:1:filesystem:")
 
 
 def test_executor_extra_context_reinjects_plan_and_compact_memory():
@@ -142,6 +158,8 @@ async def test_text_only_turn_finishes_without_tool_calls():
     assert state["finished"] is True
     assert state["assistant_text"] == "hello world"
     assert state["tool_turns"] == 0
+    assert state["total_agent_turns"] == 1
+    assert state["total_execution_tokens"] == 15
     assert stream.calls == 1
     # token.usage fired
     assert any(type(e).__name__ == "TokenUsageEvent" for e in emitted)
@@ -278,6 +296,12 @@ async def test_tool_call_turn_invokes_mcp_and_loops_again():
     assert state["tool_turns"] == 1
     assert stream.calls == 2
     mcp.invoke.assert_awaited_once()
+    assert mcp.invoke.await_args.kwargs["idempotency_key"] == exe._tool_operation_key(
+        run_id="r1",
+        operation_index="0:1:0",
+        tool_name="shell",
+        args={"cmd": "echo hi"},
+    )
     # tool.call + tool.result events fired
     types = [type(e).__name__ for e in emitted]
     assert "ToolCallEvent" in types
@@ -327,7 +351,7 @@ async def test_max_turns_short_circuits():
         )
 
     assert state["finished"] is True
-    assert "最大工具" in state["assistant_text"]
+    assert "全局执行预算" in state["assistant_text"]
     assert state["tool_turns"] == 2
 
 

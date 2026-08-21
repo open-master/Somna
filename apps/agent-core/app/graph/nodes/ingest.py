@@ -60,4 +60,10 @@ async def ingest_node(state: SessionState) -> SessionState:
     # ingest entry instead of duplicating the user's turn in checkpoint state.
     message_id = f"user:{run_id}" if run_id else None
     existing.append(HumanMessage(content=human_body, id=message_id))
-    return {"messages": existing, "sandbox_id": sandbox_id, "tool_turns": 0}
+    return {
+        "messages": existing,
+        "sandbox_id": sandbox_id,
+        "tool_turns": 0,
+        "total_agent_turns": 0,
+        "total_execution_tokens": 0,
+    }

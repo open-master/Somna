@@ -65,6 +65,9 @@ class SessionState(TypedDict, total=False):
 
     # Execution result
     assistant_text: str
+    # Run-global budgets. These remain monotonic across reflect → execute passes.
     tool_turns: int
+    total_agent_turns: int
+    total_execution_tokens: int
     finished: bool
     error: str | None

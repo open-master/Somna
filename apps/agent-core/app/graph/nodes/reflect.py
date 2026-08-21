@@ -197,6 +197,30 @@ async def reflect_node(state: SessionState) -> SessionState:
     run_id = state.get("run_id")
     if state.get("error"):
         return {"next_node": "finalize"}
+    settings = get_settings()
+    if (
+        int(state.get("tool_turns") or 0) >= max(1, int(settings.agent_max_turns))
+        or int(state.get("total_agent_turns") or 0) >= max(1, int(settings.agent_max_total_turns))
+        or int(state.get("total_execution_tokens") or 0)
+        >= max(1, int(settings.agent_max_total_tokens))
+    ):
+        plan = await mark_progress(
+            state.get("plan"),
+            session_id=session_id,
+            run_id=run_id,
+            close_unfinished=True,
+        )
+        return {
+            "plan": plan,
+            "reflection": {
+                "decision": "finalize",
+                "reason": "已达到本轮全局执行预算上限",
+                "focus": "",
+                "raw": "",
+            },
+            "reflection_count": int(state.get("reflection_count") or 0),
+            "next_node": "finalize",
+        }
 
     reflections = int(state.get("reflection_count") or 0) + 1
     await emit(
@@ -359,7 +383,6 @@ async def reflect_node(state: SessionState) -> SessionState:
             "reflection_count": reflections,
             "next_node": "plan",
             "skip_planner": bool(state.get("skip_planner")),
-            "tool_turns": 0,
         }
 
     messages.append(
@@ -376,5 +399,4 @@ async def reflect_node(state: SessionState) -> SessionState:
         "reflection": {"decision": route, "reason": reason, "focus": focus, "raw": raw},
         "reflection_count": reflections,
         "next_node": "execute",
-        "tool_turns": 0,
     }

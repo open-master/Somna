@@ -17,6 +17,7 @@ Stops early at `agent_max_turns` to prevent runaway loops.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import mimetypes
 import re
@@ -578,7 +579,11 @@ async def execute_node(state: SessionState) -> SessionState:
 
     prompt_tokens_total = completion_tokens_total = 0
     tool_turns = int(state.get("tool_turns") or 0)
-    max_turns = settings.agent_max_turns
+    total_agent_turns = int(state.get("total_agent_turns") or 0)
+    total_execution_tokens = int(state.get("total_execution_tokens") or 0)
+    max_turns = max(1, int(settings.agent_max_turns))
+    max_total_turns = max(1, int(getattr(settings, "agent_max_total_turns", 80)))
+    max_total_tokens = max(1, int(getattr(settings, "agent_max_total_tokens", 500000)))
     final_text = ""
     compact_memory = state.get("compact_memory")
     plan = state.get("plan")
@@ -593,7 +598,11 @@ async def execute_node(state: SessionState) -> SessionState:
     await sync_plan_artifact(state, plan)
 
     try:
-        while tool_turns < max_turns:
+        while (
+            tool_turns < max_turns
+            and total_agent_turns < max_total_turns
+            and total_execution_tokens < max_total_tokens
+        ):
             # Compact older history if the context is getting heavy.
             working_messages, did_compact, summary = await maybe_compact(
                 working_messages,
@@ -620,6 +629,8 @@ async def execute_node(state: SessionState) -> SessionState:
                 run_id=run_id,
                 forced_tool_name=forced_tool_name,
             )
+            total_agent_turns += 1
+            total_execution_tokens += max(0, usage[0]) + max(0, usage[1])
             prompt_tokens_total += usage[0]
             completion_tokens_total += usage[1]
             if usage[0] or usage[1]:
@@ -678,6 +689,8 @@ async def execute_node(state: SessionState) -> SessionState:
                             "messages": [m for m in working_messages if not isinstance(m, SystemMessage)],
                             "compact_memory": compact_memory,
                             "tool_turns": tool_turns,
+                            "total_agent_turns": total_agent_turns,
+                            "total_execution_tokens": total_execution_tokens,
                             "plan": plan,
                             "execution_summary": _summarize_execution(
                                 proof, delivery_missing_reason=reason
@@ -709,6 +722,7 @@ async def execute_node(state: SessionState) -> SessionState:
                 manifests=manifests,
                 mcp_tool_models=mcp_tool_models_map,
                 billing_enabled=bool(state.get("user_id")),
+                operation_scope=f"{int(state.get('reflection_count') or 0)}:{tool_turns}",
             )
             proof = _merge_proof(proof, turn_proof)
             finish_validation_failures = 0
@@ -731,7 +745,7 @@ async def execute_node(state: SessionState) -> SessionState:
         else:
             log.warning("graph.execute.max_turns", session_id=str(session_id), turns=tool_turns)
             final_text = (
-                "（已达到最大工具调用轮数上限，未能完成任务。请尝试拆小或直接提问。）"
+                "（已达到本轮全局执行预算上限，未能完成任务。请尝试拆小或直接提问。）"
             )
             plan = await mark_progress(
                 plan, session_id=session_id, run_id=run_id, fail_current=True
@@ -770,6 +784,8 @@ async def execute_node(state: SessionState) -> SessionState:
             ],
             "compact_memory": compact_memory,
             "tool_turns": tool_turns,
+            "total_agent_turns": total_agent_turns,
+            "total_execution_tokens": total_execution_tokens,
             "plan": plan,
             "execution_summary": _summarize_execution(proof),
         }
@@ -800,6 +816,8 @@ async def execute_node(state: SessionState) -> SessionState:
         "messages": new_messages,
         "compact_memory": compact_memory,
         "tool_turns": tool_turns,
+        "total_agent_turns": total_agent_turns,
+        "total_execution_tokens": total_execution_tokens,
         "plan": plan,
         "execution_summary": _summarize_execution(proof),
         "finished": True,
@@ -893,12 +911,13 @@ async def _run_tool_calls(
     manifests: list,
     mcp_tool_models: dict[str, str] | None = None,
     billing_enabled: bool = False,
+    operation_scope: str = "0:0",
 ) -> _ExecutionProof:
     """Invoke each tool via MCP Hub, emit events, append tool messages."""
     mcp = get_client()
     manifest_by_name = {m.name: m for m in manifests}
     proof = _ExecutionProof()
-    for pc in pending:
+    for call_index, pc in enumerate(pending):
         args = _parse_args(pc.args_buf)
         result, delta = await _invoke_tool_with_events(
             mcp=mcp,
@@ -912,6 +931,7 @@ async def _run_tool_calls(
             manifest=manifest_by_name.get(pc.name),
             mcp_tool_models=mcp_tool_models,
             billing_enabled=billing_enabled,
+            operation_index=f"{operation_scope}:{call_index}",
         )
         proof = _merge_proof(proof, delta)
 
@@ -936,6 +956,7 @@ async def _run_tool_calls(
                 manifest=manifest_by_name.get("shell"),
                 mcp_tool_models=mcp_tool_models,
                 billing_enabled=billing_enabled,
+                operation_index=f"{operation_scope}:{call_index}:recover_install",
             )
             proof = _merge_proof(proof, install_proof)
             if install_result.ok:
@@ -951,6 +972,7 @@ async def _run_tool_calls(
                     manifest=manifest_by_name.get(pc.name),
                     mcp_tool_models=mcp_tool_models,
                     billing_enabled=billing_enabled,
+                    operation_index=f"{operation_scope}:{call_index}:recover_retry",
                 )
                 proof = _merge_proof(proof, retry_proof)
     return proof
@@ -1055,6 +1077,7 @@ async def _invoke_tool_with_events(
     manifest,
     mcp_tool_models: dict[str, str] | None = None,
     billing_enabled: bool = False,
+    operation_index: str | None = None,
 ) -> tuple[Any, _ExecutionProof]:
     eff_args = args
     if (
@@ -1065,16 +1088,29 @@ async def _invoke_tool_with_events(
         dm = (mcp_tool_models.get(tool_name) or "").strip()
         if dm:
             eff_args = {**args, "model": dm}
+    operation_key = _tool_operation_key(
+        run_id=run_id,
+        operation_index=operation_index or event_id,
+        tool_name=tool_name,
+        args=eff_args,
+    )
     if billing_enabled and run_id:
         allowed, required, current = await reserve_tool_points(
             run_id=run_id,
+            idempotency_key=f"{operation_key}:reserve",
             tool_name=tool_name,
             args=eff_args,
         )
         if not allowed:
+            if required <= 0:
+                error_message = "当前任务计费状态已关闭，已阻止重复工具调用"
+            else:
+                error_message = (
+                    f"积分不足，调用 {tool_name} 还需冻结 {required} 积分，当前可用 {current}"
+                )
             result = ToolResult(
                 ok=False,
-                error=f"积分不足，调用 {tool_name} 还需冻结 {required} 积分，当前可用 {current}",
+                error=error_message,
             )
             await emit(
                 ToolCallEvent(
@@ -1115,6 +1151,7 @@ async def _invoke_tool_with_events(
         args=eff_args,
         session_id=str(session_id),
         run_id=run_id,
+        idempotency_key=operation_key,
     )
     duration_ms = result.duration_ms
     if duration_ms is None:
@@ -1134,7 +1171,7 @@ async def _invoke_tool_with_events(
     if billing_enabled:
         await record_tool_usage(
             run_id=run_id,
-            idempotency_key=f"{run_id}:tool:{event_id}",
+            idempotency_key=operation_key,
             tool_name=tool_name,
             args=eff_args,
             result=result,
@@ -1164,6 +1201,19 @@ async def _invoke_tool_with_events(
         proof=proof,
     )
     return result, proof
+
+
+def _tool_operation_key(
+    *,
+    run_id: str | None,
+    operation_index: str,
+    tool_name: str,
+    args: dict[str, Any],
+) -> str:
+    """Build a retry-stable key from the logical position and effective arguments."""
+    canonical = json.dumps(args, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    args_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:20]
+    return f"{run_id or 'no-run'}:tool:{operation_index}:{tool_name}:{args_hash}"
 
 
 def _detect_shell_recovery(*, args: dict[str, Any], result) -> _ShellRecoveryPlan | None:

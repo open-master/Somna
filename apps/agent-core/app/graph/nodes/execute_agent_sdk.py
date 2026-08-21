@@ -80,13 +80,21 @@ class _SomnaBridge:
     proof: _ExecutionProof
     plan: dict[str, Any] | None
     artifact_state: dict[str, Any]
+    reflection_count: int = 0
     mcp_tool_models: dict[str, str] | None = None
     billing_enabled: bool = False
     tool_round: int = 0
+    max_tool_turns: int = 40
 
     async def run_tool(self, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
         """MCP 工具 handler：桥接 MCP Hub + 事件 + proof/plan（与模式一同一套）。"""
+        if self.tool_round >= self.max_tool_turns:
+            return {
+                "content": [{"type": "text", "text": "全局工具调用预算已用尽，不能继续调用工具。"}],
+                "is_error": True,
+            }
         self.tool_round += 1
+        operation_scope = f"{self.reflection_count}:{self.tool_round}:0"
         pc = _PendingToolCall()
         pc.id = f"call_{uuid4().hex[:12]}"
         pc.name = tool_name
@@ -105,6 +113,7 @@ class _SomnaBridge:
             manifest=manifest,
             mcp_tool_models=self.mcp_tool_models,
             billing_enabled=self.billing_enabled,
+            operation_index=operation_scope,
         )
         proof_acc = delta
 
@@ -129,6 +138,7 @@ class _SomnaBridge:
                 manifest=self.manifest_by_name.get("shell"),
                 mcp_tool_models=self.mcp_tool_models,
                 billing_enabled=self.billing_enabled,
+                operation_index=f"{operation_scope}:recover_install",
             )
             proof_acc = _merge_proof(proof_acc, install_proof)
             if install_result.ok:
@@ -144,6 +154,7 @@ class _SomnaBridge:
                     manifest=manifest,
                     mcp_tool_models=self.mcp_tool_models,
                     billing_enabled=self.billing_enabled,
+                    operation_index=f"{operation_scope}:recover_retry",
                 )
                 proof_acc = _merge_proof(proof_acc, retry_proof)
 
@@ -349,8 +360,11 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
         proof=proof,
         plan=state.get("plan"),
         artifact_state=artifact_state,
+        reflection_count=int(state.get("reflection_count") or 0),
         mcp_tool_models=mcp_maps,
         billing_enabled=bool(state.get("user_id")),
+        tool_round=int(state.get("tool_turns") or 0),
+        max_tool_turns=max(1, int(settings.agent_max_turns)),
     )
     somna = create_sdk_mcp_server(
         name=_SOMNA_MCP_SERVER_NAME,
@@ -377,7 +391,10 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
     )
 
     prompt_tokens_total = completion_tokens_total = 0
-    tool_turns = int(state.get("tool_turns") or 0)
+    total_agent_turns = int(state.get("total_agent_turns") or 0)
+    total_execution_tokens = int(state.get("total_execution_tokens") or 0)
+    max_total_turns = max(1, int(getattr(settings, "agent_max_total_turns", 80)))
+    max_total_tokens = max(1, int(getattr(settings, "agent_max_total_tokens", 500000)))
     final_text = ""
     finish_validation_failures = 0
     retry_instruction: str | None = None
@@ -386,6 +403,14 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
     try:
         t_start = time.perf_counter()
         while finish_validation_failures < _sdk_max_delivery_rounds:
+            remaining_agent_turns = max_total_turns - total_agent_turns
+            if remaining_agent_turns <= 0 or total_execution_tokens >= max_total_tokens:
+                delivery_reason = "已达到全局 Agent turn 或 executor token 预算上限"
+                plan = await mark_progress(
+                    bridge.plan, session_id=session_id, run_id=run_id, fail_current=True
+                )
+                bridge.plan = plan
+                break
             working_messages, did_compact, summary = await maybe_compact(
                 working_messages,
                 session_id=session_id,
@@ -420,7 +445,7 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
                 allowed_tools=[m.name for m in manifests],
                 permission_mode="bypassPermissions",
                 model=turn_model,
-                max_turns=settings.agent_max_turns,
+                max_turns=min(max(1, int(settings.agent_max_turns)), remaining_agent_turns),
                 env=dict(anthropic_subprocess_env()),
                 system_prompt=system_merged,
                 include_partial_messages=True,
@@ -463,6 +488,7 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
                         if pi or co:
                             prompt_tokens_total += pi
                             completion_tokens_total += co
+                            total_execution_tokens += max(0, pi) + max(0, co)
                             sdk_cost = float(getattr(message, "total_cost_usd", 0.0) or 0.0)
                             await emit_model_usage(
                                 session_id=session_id,
@@ -485,7 +511,7 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
             proof = bridge.proof
             plan = bridge.plan
             if last_result:
-                tool_turns = max(tool_turns, int(last_result.num_turns or 0))
+                total_agent_turns += max(0, int(last_result.num_turns or 0))
 
             delivery_reason = _missing_delivery_reason(
                 user_message=user_message,
@@ -526,7 +552,9 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
                     "assistant_text": final_text,
                     "messages": new_messages,
                     "compact_memory": compact_memory,
-                    "tool_turns": tool_turns,
+                    "tool_turns": bridge.tool_round,
+                    "total_agent_turns": total_agent_turns,
+                    "total_execution_tokens": total_execution_tokens,
                     "plan": plan,
                     "execution_summary": _summarize_execution(
                         proof, delivery_missing_reason=delivery_reason
@@ -568,7 +596,9 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
                 if not isinstance(message, SystemMessage)
             ],
             "compact_memory": compact_memory,
-            "tool_turns": max(tool_turns, bridge.tool_round),
+            "tool_turns": bridge.tool_round,
+            "total_agent_turns": total_agent_turns,
+            "total_execution_tokens": total_execution_tokens,
             "plan": plan,
             "execution_summary": _summarize_execution(bridge.proof),
         }
@@ -576,7 +606,7 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
     log.info(
         "graph.execute_agent_sdk.done",
         session_id=str(session_id),
-        turns=tool_turns,
+        turns=bridge.tool_round,
         chars=len(final_text),
         in_tokens=prompt_tokens_total,
         out_tokens=completion_tokens_total,
@@ -602,7 +632,9 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
         "assistant_text": final_text,
         "messages": new_messages,
         "compact_memory": compact_memory,
-        "tool_turns": tool_turns,
+        "tool_turns": bridge.tool_round,
+        "total_agent_turns": total_agent_turns,
+        "total_execution_tokens": total_execution_tokens,
         "plan": plan,
         "execution_summary": _summarize_execution(proof),
         "finished": True,

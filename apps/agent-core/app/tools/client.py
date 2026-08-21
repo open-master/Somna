@@ -109,6 +109,7 @@ class McpHubClient:
         args: dict[str, Any],
         session_id: str | None = None,
         run_id: str | None = None,
+        idempotency_key: str | None = None,
         timeout: float | None = None,
     ) -> ToolResult:
         payload = {"sandbox_id": sandbox_id, "args": args}
@@ -116,6 +117,8 @@ class McpHubClient:
             payload["session_id"] = session_id
         if run_id:
             payload["run_id"] = run_id
+        if idempotency_key:
+            payload["idempotency_key"] = idempotency_key
         try:
             r = await self._client.post(
                 f"/v1/tools/{name}/invoke",

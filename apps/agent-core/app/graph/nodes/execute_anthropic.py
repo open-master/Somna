@@ -269,7 +269,11 @@ async def execute_anthropic_node(state: SessionState) -> SessionState:
 
     prompt_tokens_total = completion_tokens_total = 0
     tool_turns = int(state.get("tool_turns") or 0)
-    max_turns = settings.agent_max_turns
+    total_agent_turns = int(state.get("total_agent_turns") or 0)
+    total_execution_tokens = int(state.get("total_execution_tokens") or 0)
+    max_turns = max(1, int(settings.agent_max_turns))
+    max_total_turns = max(1, int(getattr(settings, "agent_max_total_turns", 80)))
+    max_total_tokens = max(1, int(getattr(settings, "agent_max_total_tokens", 500000)))
     final_text = ""
     compact_memory = state.get("compact_memory")
     plan = state.get("plan")
@@ -281,7 +285,11 @@ async def execute_anthropic_node(state: SessionState) -> SessionState:
     await sync_plan_artifact(state, plan)
 
     try:
-        while tool_turns < max_turns:
+        while (
+            tool_turns < max_turns
+            and total_agent_turns < max_total_turns
+            and total_execution_tokens < max_total_tokens
+        ):
             working_messages, did_compact, summary = await maybe_compact(
                 working_messages,
                 session_id=session_id,
@@ -314,6 +322,8 @@ async def execute_anthropic_node(state: SessionState) -> SessionState:
                 run_id=run_id,
                 forced_tool_name=forced_tool_name,
             )
+            total_agent_turns += 1
+            total_execution_tokens += max(0, usage[0]) + max(0, usage[1])
             prompt_tokens_total += usage[0]
             completion_tokens_total += usage[1]
             if usage[0] or usage[1]:
@@ -371,6 +381,8 @@ async def execute_anthropic_node(state: SessionState) -> SessionState:
                             "messages": [m for m in working_messages if not isinstance(m, SystemMessage)],
                             "compact_memory": compact_memory,
                             "tool_turns": tool_turns,
+                            "total_agent_turns": total_agent_turns,
+                            "total_execution_tokens": total_execution_tokens,
                             "plan": plan,
                             "execution_summary": _summarize_execution(
                                 proof, delivery_missing_reason=reason
@@ -402,6 +414,7 @@ async def execute_anthropic_node(state: SessionState) -> SessionState:
                 manifests=manifests,
                 mcp_tool_models=mcp_tool_models_map,
                 billing_enabled=bool(state.get("user_id")),
+                operation_scope=f"{int(state.get('reflection_count') or 0)}:{tool_turns}",
             )
             proof = _merge_proof(proof, turn_proof)
             finish_validation_failures = 0
@@ -423,7 +436,7 @@ async def execute_anthropic_node(state: SessionState) -> SessionState:
             )
         else:
             log.warning("graph.execute_anthropic.max_turns", session_id=str(session_id), turns=tool_turns)
-            final_text = "（已达到最大工具调用轮数上限，未能完成任务。请尝试拆小或直接提问。）"
+            final_text = "（已达到本轮全局执行预算上限，未能完成任务。请尝试拆小或直接提问。）"
             plan = await mark_progress(
                 plan, session_id=session_id, run_id=run_id, fail_current=True
             )
@@ -461,6 +474,8 @@ async def execute_anthropic_node(state: SessionState) -> SessionState:
             ],
             "compact_memory": compact_memory,
             "tool_turns": tool_turns,
+            "total_agent_turns": total_agent_turns,
+            "total_execution_tokens": total_execution_tokens,
             "plan": plan,
             "execution_summary": _summarize_execution(proof),
         }
@@ -490,6 +505,8 @@ async def execute_anthropic_node(state: SessionState) -> SessionState:
         "messages": new_messages,
         "compact_memory": compact_memory,
         "tool_turns": tool_turns,
+        "total_agent_turns": total_agent_turns,
+        "total_execution_tokens": total_execution_tokens,
         "plan": plan,
         "execution_summary": _summarize_execution(proof),
         "finished": True,

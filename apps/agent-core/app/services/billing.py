@@ -293,6 +293,13 @@ async def ensure_billing_tables() -> None:
                 metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT now()
             );
+            CREATE TABLE IF NOT EXISTS point_billing_reservations (
+                idempotency_key TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL REFERENCES point_billing_runs(run_id) ON DELETE CASCADE,
+                tool_name TEXT NOT NULL,
+                points INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            );
             CREATE INDEX IF NOT EXISTS idx_point_billing_runs_user
                 ON point_billing_runs(user_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_point_billing_runs_status_expiry
@@ -534,16 +541,32 @@ def _config_from_run(run: Any) -> dict[str, Any]:
     return normalize_billing_config(raw if isinstance(raw, dict) else None)
 
 
-async def reserve_tool_points(*, run_id: str, tool_name: str, args: dict[str, Any]) -> tuple[bool, int, int]:
+async def reserve_tool_points(
+    *,
+    run_id: str,
+    idempotency_key: str,
+    tool_name: str,
+    args: dict[str, Any],
+) -> tuple[bool, int, int]:
     pool = get_pool()
     async with pool.acquire() as conn, conn.transaction():
         preview = await conn.fetchrow("SELECT user_id, status FROM point_billing_runs WHERE run_id = $1", run_id)
-        if preview is None or str(preview["status"]) != "authorized":
+        if preview is None:
             return True, 0, 0
+        if str(preview["status"]) != "authorized":
+            return False, 0, 0
         account = await ensure_point_account(conn, preview["user_id"], for_update=True)
         run = await conn.fetchrow("SELECT * FROM point_billing_runs WHERE run_id = $1 FOR UPDATE", run_id)
-        if run is None or str(run["status"]) != "authorized":
+        if run is None:
             return True, 0, 0
+        if str(run["status"]) != "authorized":
+            return False, 0, _account_total(account)
+        existing = await conn.fetchrow(
+            "SELECT points FROM point_billing_reservations WHERE idempotency_key = $1",
+            idempotency_key,
+        )
+        if existing is not None:
+            return True, int(existing["points"]), _account_total(account)
         config = _config_from_run(run)
         quote = tool_point_quote(config, tool_name, args)
         if quote <= 0:
@@ -583,6 +606,16 @@ async def reserve_tool_points(*, run_id: str, tool_name: str, args: dict[str, An
             monthly,
             permanent,
             int(config["reservation_ttl_seconds"]),
+        )
+        await conn.execute(
+            """
+            INSERT INTO point_billing_reservations (idempotency_key, run_id, tool_name, points)
+            VALUES ($1, $2, $3, $4)
+            """,
+            idempotency_key,
+            run_id,
+            tool_name,
+            quote,
         )
         return True, quote, current
 
