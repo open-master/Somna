@@ -32,6 +32,8 @@ async def finalize_node(state: SessionState) -> SessionState:
         billing_outcome = "failure"
     elif frame.get("needs_clarification"):
         billing_outcome = "clarification"
+    elif has_unfinished:
+        billing_outcome = "partial"
     else:
         billing_outcome = "success"
     if state.get("user_id"):

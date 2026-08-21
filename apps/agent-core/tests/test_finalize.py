@@ -141,17 +141,20 @@ async def test_finalize_emits_partial_and_skips_memory_for_unfinished_plan():
     sid = uuid4()
     emit = AsyncMock()
     add_memory = AsyncMock(return_value=True)
+    settle = AsyncMock()
 
     with (
         patch.object(fin, "emit", emit),
         patch.object(fin, "get_pool", return_value=_Pool()),
         patch.object(fin, "memory_enabled", return_value=True),
         patch.object(fin, "add_memory", add_memory),
+        patch.object(fin, "settle_billing_run", settle),
     ):
         await fin.finalize_node(
             {
                 "session_id": sid,
                 "run_id": "r1",
+                "user_id": "u1",
                 "user_message": "生成报告",
                 "assistant_text": "完成了可完成的部分。",
                 "error": None,
@@ -168,3 +171,4 @@ async def test_finalize_emits_partial_and_skips_memory_for_unfinished_plan():
     status_events = [c.args[0] for c in emit.await_args_list if c.args[0].type == "status"]
     assert status_events[-1].phase == SessionPhase.partial
     add_memory.assert_not_awaited()
+    settle.assert_awaited_once_with(run_id="r1", outcome="partial")

@@ -107,7 +107,7 @@ async def plan_node(state: SessionState) -> SessionState:
     run_id = state.get("run_id")
     if state.get("skip_planner"):
         log.info("graph.plan.skipped", session_id=str(session_id), reason="skip_planner")
-        return {"plan": None}
+        return {}
 
     planner_model = state.get("planner_model") or settings.agent_default_planner
     user_message = last_human_turn_text(state)

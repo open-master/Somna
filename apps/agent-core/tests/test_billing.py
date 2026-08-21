@@ -86,6 +86,37 @@ def test_tool_quotes_use_successful_output_and_ignore_mock_search() -> None:
         assert billing.tool_usage_points(TEST_CONFIG, "wan_t2v", {}, failed) == 0
 
 
+def test_settlement_charges_partial_keeps_usage_but_not_task_base() -> None:
+    assert billing.settlement_charges(
+        outcome="success",
+        base_points=5,
+        model_points=2,
+        all_tool_points=8,
+        failure_tool_points=4,
+    ) == (5, 8, 2)
+    assert billing.settlement_charges(
+        outcome="partial",
+        base_points=5,
+        model_points=2,
+        all_tool_points=8,
+        failure_tool_points=4,
+    ) == (0, 8, 2)
+    assert billing.settlement_charges(
+        outcome="failure",
+        base_points=5,
+        model_points=2,
+        all_tool_points=8,
+        failure_tool_points=4,
+    ) == (0, 4, 0)
+    assert billing.settlement_charges(
+        outcome="clarification",
+        base_points=5,
+        model_points=2,
+        all_tool_points=8,
+        failure_tool_points=4,
+    ) == (0, 0, 0)
+
+
 def test_only_irreversible_media_is_billable_when_later_task_fails() -> None:
     assert billing.tool_bills_on_failure("wan_text2image") is True
     assert billing.tool_bills_on_failure("wan_t2v") is True

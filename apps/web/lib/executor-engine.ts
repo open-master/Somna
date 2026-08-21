@@ -15,5 +15,5 @@ export function setExecutorEngine(mode: ExecutorEngine): void {
 }
 
 export function executorEngineLabel(mode: ExecutorEngine): string {
-  return mode === "anthropic" ? "模式二 · Anthropic 协议" : "模式一 · OpenAI 协议";
+  return mode === "anthropic" ? "模式二 · Claude Agent SDK" : "模式一 · OpenAI 协议";
 }

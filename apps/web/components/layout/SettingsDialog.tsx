@@ -333,7 +333,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                     >
                       <p className="font-medium">{executorEngineLabel("anthropic")}</p>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        Messages API（<code className="rounded bg-muted px-1">/v1/messages</code> 经 LiteLLM），工具与沙盒与模式一相同。
+                        Claude Agent SDK（经 LiteLLM），工具与沙盒与模式一相同。旧设置值 <code className="rounded bg-muted px-1">anthropic</code> 仍映射到本模式。
                       </p>
                     </button>
                   </div>

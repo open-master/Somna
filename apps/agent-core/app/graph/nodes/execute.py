@@ -507,6 +507,7 @@ def _content_str(content: Any) -> str:
 
 async def execute_node(state: SessionState) -> SessionState:
     engine = (state.get("executor_engine") or "native").lower()
+    # 模式二历史取值 anthropic / mode2：固定走 Claude Agent SDK，不再维护独立 Messages loop。
     if engine in ("anthropic", "anthropic_compat", "mode2"):
         from app.graph.nodes.execute_agent_sdk import execute_agent_sdk_node
 

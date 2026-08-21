@@ -185,9 +185,14 @@ async def test_plan_node_respects_skip_flag():
                 "user_message": "x",
                 "messages": [],
                 "skip_planner": True,
+                "plan": {
+                    "todos": [
+                        {"id": "1", "text": "已有步骤", "status": "in_progress"},
+                    ]
+                },
             }
         )
-    assert out == {"plan": None}
+    assert "plan" not in out
 
 
 @pytest.mark.asyncio

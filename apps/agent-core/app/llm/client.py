@@ -11,7 +11,6 @@ from functools import lru_cache
 
 import httpx
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
 
 from app.config import get_settings
@@ -54,25 +53,11 @@ def _anthropic_api_key() -> str:
 
 
 def anthropic_subprocess_env() -> dict[str, str]:
-    """LiteLLM 根 URL + key，供 Claude Agent SDK（子进程 CLI）走与 Messages API 一致的路由。"""
+    """LiteLLM 根 URL + key，供 Claude Agent SDK（子进程 CLI）走统一别名路由。"""
     return {
         "ANTHROPIC_API_KEY": _anthropic_api_key(),
         "ANTHROPIC_BASE_URL": _anthropic_base_url(),
     }
-
-
-@lru_cache
-def get_async_anthropic() -> AsyncAnthropic:
-    """Anthropic Messages API pointed at LiteLLM unified `/v1/messages` (same aliases as OpenAI /v1).
-
-    `base_url` 为 LiteLLM 根地址，而非 `/anthropic` 子路径（后者为直通 Anthropic 官方，无别名）。
-    """
-    return AsyncAnthropic(
-        api_key=_anthropic_api_key(),
-        base_url=_anthropic_base_url(),
-        timeout=_LLM_HTTP_TIMEOUT,
-        max_retries=_LLM_MAX_RETRIES,
-    )
 
 
 @lru_cache

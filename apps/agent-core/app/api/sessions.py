@@ -397,6 +397,7 @@ async def post_message(
         )
 
     engine = (req.executor_engine or "native").strip().lower()
+    # native = OpenAI Chat Completions loop；anthropic / mode2 为模式二，路由到 Claude Agent SDK。
     if engine not in ("native", "anthropic", "anthropic_compat", "mode2"):
         engine = "native"
     if engine in ("anthropic_compat", "mode2"):

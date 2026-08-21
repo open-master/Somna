@@ -46,28 +46,6 @@ def manifests_to_openai_tools(manifests: list[ToolManifest]) -> list[dict[str, A
     return [manifest_to_openai(m) for m in manifests]
 
 
-def manifest_to_anthropic(manifest: ToolManifest) -> dict[str, Any]:
-    schema = dict(manifest.input_schema or {"type": "object", "properties": {}})
-    if schema.get("type") != "object":
-        schema = {"type": "object", "properties": {}}
-    schema.setdefault("properties", {})
-    return {
-        "name": _safe_name(manifest.name),
-        "description": manifest.description[:1024],
-        "input_schema": schema,
-    }
-
-
-def manifests_to_anthropic_tools(manifests: list[ToolManifest]) -> list[dict[str, Any]]:
-    return [manifest_to_anthropic(m) for m in manifests]
-
-
-def anthropic_tool_choice(forced: str | None) -> dict[str, Any]:
-    if forced is None:
-        return {"type": "auto"}
-    return {"type": "tool", "name": _safe_name(forced)}
-
-
 def tool_manifest_cache() -> dict[str, ToolManifest]:
     return dict(_CACHE)
 

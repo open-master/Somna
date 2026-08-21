@@ -757,10 +757,30 @@ async def _restore_unused(conn: Any, run: Any, unused: int) -> None:
     )
 
 
+def settlement_charges(
+    *,
+    outcome: str,
+    base_points: int,
+    model_points: int,
+    all_tool_points: int,
+    failure_tool_points: int,
+) -> tuple[int, int, int]:
+    """Return (base, tool, model) points to keep for a settled run."""
+    if outcome == "success":
+        return int(base_points), int(all_tool_points), int(model_points)
+    if outcome in {"cancelled", "partial"}:
+        return 0, int(all_tool_points), int(model_points)
+    if outcome == "failure":
+        return 0, int(failure_tool_points), 0
+    return 0, 0, 0
+
+
 async def settle_billing_run(*, run_id: str | None, outcome: str) -> dict[str, Any] | None:
     if not run_id:
         return None
-    normalized_outcome = outcome if outcome in {"success", "clarification", "cancelled", "failure"} else "failure"
+    normalized_outcome = (
+        outcome if outcome in {"success", "partial", "clarification", "cancelled", "failure"} else "failure"
+    )
     pool = get_pool()
     async with pool.acquire() as conn, conn.transaction():
         preview = await conn.fetchrow("SELECT user_id, status FROM point_billing_runs WHERE run_id = $1", run_id)
@@ -798,21 +818,13 @@ async def settle_billing_run(*, run_id: str | None, outcome: str) -> dict[str, A
         )
         config = _config_from_run(run)
         model_points = model_usage_points(config, int(usage["input_tokens"]), int(usage["output_tokens"]))
-        all_tool_points = int(usage["tool_points"])
-        if normalized_outcome == "success":
-            base_points = int(run["base_points"])
-            tool_points = all_tool_points
-            charge_model_points = model_points
-        elif normalized_outcome == "cancelled":
-            base_points = 0
-            tool_points = all_tool_points
-            charge_model_points = model_points
-        elif normalized_outcome == "failure":
-            base_points = 0
-            tool_points = int(usage["failure_tool_points"])
-            charge_model_points = 0
-        else:
-            base_points = tool_points = charge_model_points = 0
+        base_points, tool_points, charge_model_points = settlement_charges(
+            outcome=normalized_outcome,
+            base_points=int(run["base_points"]),
+            model_points=model_points,
+            all_tool_points=int(usage["tool_points"]),
+            failure_tool_points=int(usage["failure_tool_points"]),
+        )
         calculated = base_points + charge_model_points + tool_points
         billed = min(calculated, int(run["reserved_points"]))
         unused = int(run["reserved_points"]) - billed
