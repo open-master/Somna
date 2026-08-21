@@ -1,8 +1,8 @@
 """plan node — produces a TODO list before the executor starts.
 
 Uses the planner prompt template and the `agent-planner` model alias. Failure
-is non-fatal: if the planner model returns unparseable JSON or errors out,
-we log a warning and continue straight to execute with no plan.
+is non-fatal: if the planner model errors or returns unusable JSON, we emit a
+minimal TODO list derived from the task frame instead of continuing with no plan.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from somna_events import PlanUpdateEvent, SessionPhase, SkillDebugEvent, StatusE
 
 from app.config import get_settings
 from app.events.emitter import emit
-from app.graph.nodes.task_frame import format_task_frame_block
+from app.graph.nodes.task_frame import deliverable_type_implies_artifact, format_task_frame_block
 from app.graph.run_artifacts import persist_plan_pointer
 from app.graph.state import SessionState
 from app.graph.user_turn import last_human_turn_text
@@ -101,6 +101,107 @@ def _coerce_todos(items: Any) -> list[TodoItem]:
     return out
 
 
+def _fallback_plan_from_task_frame(
+    *,
+    user_message: str,
+    task_frame: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Minimal TODOs from framing when the planner LLM fails. Not a new planner."""
+    tf = task_frame if isinstance(task_frame, dict) else {}
+    todos: list[TodoItem] = []
+    seen: set[str] = set()
+
+    def _add(text: str) -> None:
+        cleaned = " ".join(text.split()).strip()[:300]
+        if not cleaned or cleaned in seen or len(todos) >= 4:
+            return
+        seen.add(cleaned)
+        todos.append(
+            TodoItem(id=str(len(todos) + 1), text=cleaned, status=TodoStatus.pending)
+        )
+
+    criteria = tf.get("success_criteria") if isinstance(tf.get("success_criteria"), list) else []
+    for item in criteria:
+        _add(str(item).strip())
+
+    goal = (user_message or "").strip()
+    if len(goal) > 80:
+        goal = goal[:80].rstrip() + "…"
+    if not todos:
+        _add(f"按定调完成：{goal}" if goal else "完成本轮任务")
+        if deliverable_type_implies_artifact(str(tf.get("deliverable_type") or "")):
+            _add("生成并验证交付文件")
+        else:
+            _add("核对结果是否满足任务要求")
+    elif deliverable_type_implies_artifact(str(tf.get("deliverable_type") or "")):
+        blob = " ".join(t.text for t in todos)
+        if not any(k in blob for k in ("文件", "交付", "产物", "artifact")):
+            _add("验证交付文件已写入沙盒")
+
+    return {
+        "id": f"plan_fallback_{uuid4().hex[:8]}",
+        "reasoning": "planner 失败，按任务定调生成最小 TODO",
+        "todos": [t.model_dump() for t in todos],
+        "estimated_steps": len(todos),
+        "fallback_from_task_frame": True,
+    }
+
+
+async def _publish_plan(
+    state: SessionState,
+    plan_obj: dict[str, Any],
+    skill_update: dict[str, Any],
+) -> SessionState:
+    session_id = state["session_id"]
+    run_id = state.get("run_id")
+    todos = _coerce_todos(plan_obj.get("todos"))
+    await emit(
+        PlanUpdateEvent(
+            session_id=session_id,
+            run_id=run_id,
+            todos=todos,
+        )
+    )
+    await emit(
+        StatusEvent(
+            session_id=session_id,
+            run_id=run_id,
+            phase=SessionPhase.executing,
+            message=f"计划已生成，共 {len(todos)} 步",
+        )
+    )
+    bullet_lines = "\n".join(f"{i + 1}. {t.text}" for i, t in enumerate(todos))
+    nudge = SystemMessage(
+        content=(
+            "以下是刚刚为本任务生成的 TODO 列表，请按顺序执行；"
+            "如果需要调整，先告诉用户再改动。\n\n" + bullet_lines
+        )
+    )
+    new_messages = list(state.get("messages") or [])
+    new_messages.append(nudge)
+    plan_path = await persist_plan_pointer(state, plan_obj)
+    return {"plan": plan_obj, "plan_path": plan_path, "messages": new_messages, **skill_update}
+
+
+async def _publish_fallback_plan(
+    state: SessionState,
+    skill_update: dict[str, Any],
+    *,
+    reason: str,
+) -> SessionState:
+    plan_obj = _fallback_plan_from_task_frame(
+        user_message=last_human_turn_text(state),
+        task_frame=state.get("task_frame") if isinstance(state.get("task_frame"), dict) else None,
+    )
+    log.warning(
+        "graph.plan.fallback_from_task_frame",
+        session_id=str(state.get("session_id")),
+        reason=reason,
+        n=len(plan_obj.get("todos") or []),
+    )
+    return await _publish_plan(state, plan_obj, skill_update)
+
+
 async def plan_node(state: SessionState) -> SessionState:
     settings = get_settings()
     session_id = state["session_id"]
@@ -136,7 +237,7 @@ async def plan_node(state: SessionState) -> SessionState:
     template = load_template("planner", "v1")
     if not template:
         log.warning("graph.plan.template_missing")
-        return {"plan": None, **skill_update}
+        return await _publish_fallback_plan(state, skill_update, reason="template_missing")
 
     memories = await search_memories(
         user_message,
@@ -182,7 +283,7 @@ async def plan_node(state: SessionState) -> SessionState:
         )
     except Exception as exc:  # noqa: BLE001
         log.warning("graph.plan.llm_failed", error=str(exc), model=planner_model)
-        return {"plan": None, **skill_update}
+        return await _publish_fallback_plan(state, skill_update, reason="llm_failed")
 
     raw = (resp.choices[0].message.content or "").strip()
     usage = getattr(resp, "usage", None)
@@ -201,12 +302,12 @@ async def plan_node(state: SessionState) -> SessionState:
     parsed = _parse_plan(raw)
     if not parsed:
         log.warning("graph.plan.unparseable", raw_preview=raw[:200])
-        return {"plan": None, **skill_update}
+        return await _publish_fallback_plan(state, skill_update, reason="unparseable")
 
     todos = _coerce_todos(parsed.get("todos"))
     if not todos:
         log.info("graph.plan.empty", reasoning=parsed.get("reasoning"))
-        return {"plan": None, **skill_update}
+        return await _publish_fallback_plan(state, skill_update, reason="empty_todos")
 
     plan_id = f"plan_{uuid4().hex[:8]}"
     plan_obj = {
@@ -216,22 +317,6 @@ async def plan_node(state: SessionState) -> SessionState:
         "estimated_steps": parsed.get("estimated_steps"),
     }
 
-    await emit(
-        PlanUpdateEvent(
-            session_id=session_id,
-            run_id=run_id,
-            todos=todos,
-        )
-    )
-    await emit(
-        StatusEvent(
-            session_id=session_id,
-            run_id=run_id,
-            phase=SessionPhase.executing,
-            message=f"计划已生成，共 {len(todos)} 步",
-        )
-    )
-
     log.info(
         "graph.plan.ready",
         session_id=str(session_id),
@@ -239,21 +324,7 @@ async def plan_node(state: SessionState) -> SessionState:
         n=len(todos),
         model=planner_model,
     )
-
-    # Inject a compact plan summary for the executor as a system-level nudge.
-    bullet_lines = "\n".join(f"{i + 1}. {t.text}" for i, t in enumerate(todos))
-    nudge = SystemMessage(
-        content=(
-            "以下是刚刚为本任务生成的 TODO 列表，请按顺序执行；"
-            "如果需要调整，先告诉用户再改动。\n\n" + bullet_lines
-        )
-    )
-    new_messages = list(state.get("messages") or [])
-    new_messages.append(nudge)
-
-    plan_path = await persist_plan_pointer(state, plan_obj)
-
-    return {"plan": plan_obj, "plan_path": plan_path, "messages": new_messages, **skill_update}
+    return await _publish_plan(state, plan_obj, skill_update)
 
 
 # ------------------------------------------------------------------

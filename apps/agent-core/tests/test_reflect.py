@@ -406,3 +406,39 @@ async def test_reflect_high_autonomy_does_not_coerce_unrecovered_failures():
 
     assert out["next_node"] == "execute"
     assert out["reflection"]["decision"] == "continue_execute"
+
+
+@pytest.mark.asyncio
+async def test_reflect_execute_exception_with_progress_continues():
+    sid = uuid4()
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                create=AsyncMock(return_value=_mk_completion('{"decision":"finalize","reason":"可以结束","focus":""}'))
+            )
+        )
+    )
+
+    with (
+        patch.object(reflect_mod, "emit", AsyncMock()),
+        patch.object(reflect_mod, "get_async_openai", return_value=client),
+        patch.object(reflect_mod, "load_template", return_value="tpl"),
+        patch.object(reflect_mod, "render", return_value="x"),
+    ):
+        out = await reflect_mod.reflect_node(
+            {
+                "session_id": sid,
+                "run_id": "r1",
+                "user_message": "跑脚本",
+                "assistant_text": "中断前已写出文件",
+                "execution_summary": {
+                    "written_paths": ["/workspace/out.txt"],
+                    "successful_tool_calls": 1,
+                    "execute_exception": "hub down",
+                },
+                "plan": {"todos": [{"id": "1", "text": "执行脚本", "status": "done"}]},
+            }
+        )
+
+    assert out["next_node"] == "execute"
+    assert "异常" in out["reflection"]["reason"]

@@ -68,6 +68,14 @@ def test_tool_operation_key_is_stable_and_argument_sensitive():
     assert first.startswith("run-1:tool:0:4:1:filesystem:")
 
 
+def test_has_execution_progress_requires_tool_activity():
+    empty = exe._ExecutionProof()
+    assert exe._has_execution_progress(empty) is False
+    assert exe._has_execution_progress(exe._ExecutionProof(successful_tool_calls=1)) is True
+    assert exe._has_execution_progress(exe._ExecutionProof(failed_tool_calls=1)) is True
+    assert exe._has_execution_progress(exe._ExecutionProof(written_paths={"a.html"})) is True
+
+
 def test_executor_extra_context_reinjects_plan_and_compact_memory():
     context = exe._compose_executor_extra_context(
         "长期记忆",
@@ -208,6 +216,55 @@ async def test_execute_exception_preserves_checkpoint_messages_and_turn_state():
     assert state["tool_turns"] == 3
     assert state["compact_memory"] == "已有摘要"
     assert tool_message in state["messages"]
+
+
+@pytest.mark.asyncio
+async def test_execute_exception_with_proof_does_not_set_terminal_error():
+    sid = uuid4()
+
+    class _BoomAfterTools(_StreamStub):
+        async def __call__(self, **kwargs):
+            if self.calls == 0:
+                self.calls += 1
+                return self._turns.pop(0)
+            self.calls += 1
+            raise RuntimeError("hub down")
+
+    stream = _BoomAfterTools(
+        [("", [_pending("cid_1", "shell", '{"cmd":"echo hi"}')], (8, 4))]
+    )
+    mcp = AsyncMock()
+    mcp.invoke = AsyncMock(
+        return_value=ToolResult(ok=True, preview="hi\n", output={"exit_code": 0, "cmd": "echo hi"})
+    )
+
+    with (
+        patch.object(exe, "_stream_one_turn", stream),
+        patch.object(exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))),
+        patch.object(exe, "emit", AsyncMock()),
+        patch.object(exe, "emit_model_usage", AsyncMock()),
+        patch.object(exe, "get_async_openai", return_value=object()),
+        patch.object(exe, "tool_manifest_cache", return_value={}),
+        patch.object(exe, "build_system_prompt", return_value="sys"),
+        patch.object(exe, "get_client", return_value=mcp),
+        patch.object(exe, "get_settings", return_value=_SettingsStub()),
+    ):
+        state = await exe.execute_node(
+            {
+                "session_id": sid,
+                "run_id": "r1",
+                "executor_model": "agent-executor",
+                "sandbox_id": str(sid),
+                "user_message": "说一声 hi",
+                "messages": [],
+                "tool_turns": 0,
+            }
+        )
+
+    assert "error" not in state
+    assert state["finished"] is True
+    assert "hub down" in (state["execution_summary"].get("execute_exception") or "")
+    assert int(state["execution_summary"].get("successful_tool_calls") or 0) >= 1
 
 
 @pytest.mark.asyncio

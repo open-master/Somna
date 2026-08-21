@@ -31,6 +31,7 @@ _saver_ctx = None
 
 
 def _route_after_execute(state: SessionState) -> str:
+    """Terminal `error` skips reflect. Recoverable execute crashes omit `error` so we still review."""
     return "finalize" if state.get("error") else "reflect"
 
 

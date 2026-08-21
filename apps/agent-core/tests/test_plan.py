@@ -48,6 +48,30 @@ def test_coerce_todos_filters_empty_and_defaults_id():
     assert out[1].id == "2"  # default = index + 1
 
 
+def test_fallback_plan_from_task_frame_uses_success_criteria():
+    plan = plan_mod._fallback_plan_from_task_frame(
+        user_message="做网站",
+        task_frame={
+            "deliverable_type": "website",
+            "success_criteria": ["首页可打开", "有图表"],
+        },
+    )
+    texts = [t["text"] for t in plan["todos"]]
+    assert texts[:2] == ["首页可打开", "有图表"]
+    assert plan["fallback_from_task_frame"] is True
+    assert any("交付" in t or "文件" in t for t in texts)
+
+
+def test_fallback_plan_from_task_frame_without_criteria():
+    plan = plan_mod._fallback_plan_from_task_frame(
+        user_message="解释一下量子纠缠",
+        task_frame={"deliverable_type": "chat_answer"},
+    )
+    texts = [t["text"] for t in plan["todos"]]
+    assert len(texts) >= 2
+    assert any("量子纠缠" in t or "定调" in t for t in texts)
+
+
 @pytest.mark.asyncio
 async def test_plan_node_happy_path_emits_event_and_state():
     sid = uuid4()
@@ -138,7 +162,7 @@ async def test_plan_node_injects_retrieved_memories_into_prompt():
 
 
 @pytest.mark.asyncio
-async def test_plan_node_llm_failure_returns_no_plan():
+async def test_plan_node_llm_failure_falls_back_to_task_frame_todos():
     sid = uuid4()
     client = SimpleNamespace(
         chat=SimpleNamespace(
@@ -149,26 +173,45 @@ async def test_plan_node_llm_failure_returns_no_plan():
     with (
         patch.object(plan_mod, "get_async_openai", return_value=client),
         patch.object(plan_mod, "emit", AsyncMock()),
+        patch.object(plan_mod, "persist_plan_pointer", AsyncMock(return_value=None)),
         patch.object(plan_mod, "tool_manifest_cache", return_value={}),
         patch.object(plan_mod, "load_template", return_value="prompt"),
     ):
         out = await plan_mod.plan_node(
-            {"session_id": sid, "run_id": "r1", "user_message": "x", "messages": []}
+            {
+                "session_id": sid,
+                "run_id": "r1",
+                "user_message": "做一个房价分析网站",
+                "messages": [],
+                "task_frame": {
+                    "deliverable_type": "website",
+                    "success_criteria": ["写出可打开的首页", "图表能显示房价"],
+                },
+            }
         )
 
-    assert out == {"plan": None}
+    assert out["plan"] is not None
+    assert out["plan"]["fallback_from_task_frame"] is True
+    texts = [t["text"] for t in out["plan"]["todos"]]
+    assert "写出可打开的首页" in texts
+    assert "图表能显示房价" in texts
 
 
 @pytest.mark.asyncio
-async def test_plan_node_missing_template_skips():
+async def test_plan_node_missing_template_falls_back_to_task_frame():
     sid = uuid4()
     with (
         patch.object(plan_mod, "load_template", return_value=""),
+        patch.object(plan_mod, "emit", AsyncMock()),
+        patch.object(plan_mod, "persist_plan_pointer", AsyncMock(return_value=None)),
+        patch.object(plan_mod, "tool_manifest_cache", return_value={}),
     ):
         out = await plan_mod.plan_node(
             {"session_id": sid, "run_id": "r1", "user_message": "x", "messages": []}
         )
-    assert out == {"plan": None}
+    assert out["plan"] is not None
+    assert out["plan"]["fallback_from_task_frame"] is True
+    assert len(out["plan"]["todos"]) >= 2
 
 
 @pytest.mark.asyncio

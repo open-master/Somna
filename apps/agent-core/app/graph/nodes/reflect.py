@@ -121,6 +121,12 @@ def _unrecovered_tool_failures(summary: dict[str, Any] | None) -> int:
     return max(0, failed - recovered)
 
 
+def _execute_exception_note(summary: dict[str, Any] | None) -> str:
+    if not isinstance(summary, dict):
+        return ""
+    return str(summary.get("execute_exception") or "").strip()
+
+
 def _should_block_skill_finalize(state: SessionState) -> tuple[bool, str, str]:
     if not (state.get("selected_skills") or []):
         return False, "", ""
@@ -160,6 +166,13 @@ def _fallback_decision(state: SessionState) -> dict[str, Any]:
         if "多步计划" in reason or "步骤" in reason:
             return {"decision": "replan", "reason": reason, "focus": "基于当前结果重新拆解剩余步骤"}
         return {"decision": "continue_execute", "reason": reason, "focus": "补齐缺失的真实执行和验证"}
+    note = _execute_exception_note(summary)
+    if note:
+        return {
+            "decision": "continue_execute",
+            "reason": "执行节点异常但已有进度，从中断处继续",
+            "focus": note[:120],
+        }
     unrecovered = _unrecovered_tool_failures(summary)
     if unrecovered > 0:
         notes = summary.get("failure_notes") or []
@@ -201,6 +214,8 @@ def _coerce_route_for_high_autonomy(state: SessionState, route: str, reason: str
     if str(summary.get("delivery_missing_reason") or "").strip():
         return route, reason, focus
     if _unrecovered_tool_failures(summary) > 0:
+        return route, reason, focus
+    if _execute_exception_note(summary):
         return route, reason, focus
     if _pending_todos(state.get("plan")):
         return route, reason, focus
@@ -353,6 +368,12 @@ async def reflect_node(state: SessionState) -> SessionState:
         route = "continue_execute"
         reason = "本轮有未恢复的工具失败，暂不能宣告任务完成"
         focus = str(last)[:120]
+
+    exc_note = _execute_exception_note(state.get("execution_summary") or {})
+    if route == "finalize" and exc_note and reflections < _MAX_REFLECTIONS:
+        route = "continue_execute"
+        reason = "执行节点异常但已有进度，暂不能宣告任务完成"
+        focus = exc_note[:120]
 
     route, reason, focus = _coerce_route_for_high_autonomy(state, route, reason, focus)
     if route == "finalize" and blocked:

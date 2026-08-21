@@ -304,6 +304,15 @@ def _missing_delivery_reason(
     return None
 
 
+def _has_execution_progress(proof: _ExecutionProof) -> bool:
+    """True when this run already produced tool activity worth reflecting on."""
+    return (
+        int(proof.successful_tool_calls or 0) > 0
+        or int(proof.failed_tool_calls or 0) > 0
+        or bool(proof.written_paths)
+    )
+
+
 def _unrecovered_failure_count(proof: _ExecutionProof) -> int:
     return max(0, int(proof.failed_tool_calls) - int(proof.recovered_failures))
 
@@ -422,7 +431,12 @@ def _artifact_paths(proof: _ExecutionProof) -> set[str]:
     return set(proof.written_paths)
 
 
-def _summarize_execution(proof: _ExecutionProof, *, delivery_missing_reason: str | None = None) -> dict[str, Any]:
+def _summarize_execution(
+    proof: _ExecutionProof,
+    *,
+    delivery_missing_reason: str | None = None,
+    execute_exception: str | None = None,
+) -> dict[str, Any]:
     return {
         "successful_tool_calls": proof.successful_tool_calls,
         "mutating_tool_calls": proof.mutating_tool_calls,
@@ -435,6 +449,7 @@ def _summarize_execution(proof: _ExecutionProof, *, delivery_missing_reason: str
         "unrecovered_failures": _unrecovered_failure_count(proof),
         "failure_notes": list(proof.failure_notes[-8:]),
         "delivery_missing_reason": delivery_missing_reason,
+        "execute_exception": execute_exception,
     }
 
 
@@ -877,10 +892,12 @@ async def execute_node(state: SessionState) -> SessionState:
             )
     except Exception as exc:  # noqa: BLE001
         log.exception("graph.execute.failed", error=str(exc))
-        plan = await mark_progress(
-            plan, session_id=session_id, run_id=run_id, fail_current=True
-        )
-        await sync_plan_artifact(state, plan)
+        recoverable = _has_execution_progress(proof)
+        if not recoverable:
+            plan = await mark_progress(
+                plan, session_id=session_id, run_id=run_id, fail_current=True
+            )
+            await sync_plan_artifact(state, plan)
         await _append_executor_progress(
             state,
             sandbox_id=sandbox_id,
@@ -889,8 +906,7 @@ async def execute_node(state: SessionState) -> SessionState:
             proof=proof,
             note=f"exception:{str(exc)[:120]}",
         )
-        return {
-            "error": str(exc),
+        payload: dict[str, Any] = {
             "finished": True,
             "assistant_text": final_text,
             "messages": [
@@ -903,8 +919,20 @@ async def execute_node(state: SessionState) -> SessionState:
             "total_agent_turns": total_agent_turns,
             "total_execution_tokens": total_execution_tokens,
             "plan": plan,
-            "execution_summary": _summarize_execution(proof),
+            "execution_summary": _summarize_execution(
+                proof, execute_exception=str(exc)[:240]
+            ),
         }
+        if recoverable:
+            log.warning(
+                "graph.execute.failed_recoverable",
+                session_id=str(session_id),
+                run_id=run_id,
+                error=str(exc)[:160],
+            )
+        else:
+            payload["error"] = str(exc)
+        return payload
 
     log.info(
         "graph.execute.done",
