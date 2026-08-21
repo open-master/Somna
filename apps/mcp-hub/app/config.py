@@ -87,6 +87,9 @@ class Settings(BaseSettings):
     minimax_tts_voice_id: str = Field(default="male-qn-qingse", alias="MCP_MINIMAX_TTS_VOICE_ID")
     minimax_request_timeout_sec: float = Field(default=120.0, alias="MCP_MINIMAX_REQUEST_TIMEOUT_SEC")
 
+    # Shared with agent-core. Empty token rejects /v1 with 503; /healthz stays public.
+    mcp_internal_token: str = Field(default="", alias="MCP_HUB_INTERNAL_TOKEN")
+
 
 @lru_cache
 def get_settings() -> Settings:

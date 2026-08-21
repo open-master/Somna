@@ -92,6 +92,7 @@ class Settings(BaseSettings):
 
     # ---- MCP Hub ----
     mcp_hub_url: str = Field(default="http://mcp-hub:8090", alias="MCP_HUB_URL")
+    mcp_hub_internal_token: str = Field(default="", alias="MCP_HUB_INTERNAL_TOKEN")
     # Empty = emit same-origin /api/v1/... artifact URLs (Next rewrites to agent-core).
     public_api_base: str = Field(default="", alias="NEXT_PUBLIC_API_BASE")
 

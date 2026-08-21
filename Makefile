@@ -8,6 +8,7 @@ help: ## 显示可用命令
 
 env: ## 初始化 .env（从 .env.example 复制，不覆盖已有文件）
 	@if [ ! -f .env ]; then cp .env.example .env && echo "✓ .env created"; else echo "✓ .env already exists"; fi
+	@python3 scripts/ensure_mcp_hub_token.py
 
 bootstrap: env ## 首次准备：创建 .env、网络、数据卷
 	@bash scripts/bootstrap.sh

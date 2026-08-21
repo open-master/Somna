@@ -25,6 +25,8 @@ else
     say ".env already exists — skip"
 fi
 
+python3 scripts/ensure_mcp_hub_token.py
+
 say "Creating external docker network for sandboxes..."
 docker network inspect somna_sandbox_net >/dev/null 2>&1 \
     || docker network create somna_sandbox_net >/dev/null

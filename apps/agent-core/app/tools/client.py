@@ -54,9 +54,19 @@ class ToolResult(BaseModel):
 class McpHubClient:
     """Thin async wrapper around MCP Hub's REST API."""
 
-    def __init__(self, base_url: str, *, timeout: float = 120.0) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        timeout: float = 120.0,
+        internal_token: str = "",
+    ) -> None:
         self.base_url = base_url.rstrip("/")
-        self._client = httpx.AsyncClient(base_url=self.base_url, timeout=timeout)
+        headers: dict[str, str] = {}
+        token = (internal_token or "").strip()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        self._client = httpx.AsyncClient(base_url=self.base_url, timeout=timeout, headers=headers)
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -128,6 +138,8 @@ class McpHubClient:
         except httpx.HTTPError as exc:
             log.warning("tool.invoke.http_error", tool=name, error=str(exc))
             return ToolResult(ok=False, error=f"mcp-hub transport error: {exc}")
+        if r.status_code == 401:
+            return ToolResult(ok=False, error="mcp-hub unauthorized: check MCP_HUB_INTERNAL_TOKEN")
         if r.status_code == 404:
             return ToolResult(ok=False, error=f"tool {name!r} not registered on mcp-hub")
         if r.status_code >= 400:
@@ -137,7 +149,8 @@ class McpHubClient:
 
 @lru_cache
 def get_client() -> McpHubClient:
-    return McpHubClient(get_settings().mcp_hub_url)
+    settings = get_settings()
+    return McpHubClient(settings.mcp_hub_url, internal_token=settings.mcp_hub_internal_token)
 
 
 async def close_client() -> None:

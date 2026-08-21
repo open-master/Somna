@@ -10,7 +10,7 @@ from app.tools.client import McpHubClient, ToolResult
 @pytest.mark.asyncio
 async def test_list_tools_ok():
     async with respx.mock(base_url="http://mcphub") as mock:
-        mock.get("/v1/tools").mock(
+        route = mock.get("/v1/tools").mock(
             return_value=httpx.Response(
                 200,
                 json=[
@@ -22,10 +22,24 @@ async def test_list_tools_ok():
                 ],
             )
         )
-        client = McpHubClient("http://mcphub")
+        client = McpHubClient("http://mcphub", internal_token="hub-secret")
         tools = await client.list_tools()
         await client.close()
     assert [t.name for t in tools] == ["shell"]
+    assert route.calls[0].request.headers["authorization"] == "Bearer hub-secret"
+
+
+@pytest.mark.asyncio
+async def test_invoke_401_returns_error_result():
+    async with respx.mock(base_url="http://mcphub") as mock:
+        mock.post("/v1/tools/shell/invoke").mock(
+            return_value=httpx.Response(401, text="unauthorized")
+        )
+        client = McpHubClient("http://mcphub", internal_token="hub-secret")
+        res = await client.invoke("shell", sandbox_id="s", args={"cmd": "echo hi"})
+        await client.close()
+    assert res.ok is False
+    assert "unauthorized" in (res.error or "")
 
 
 @pytest.mark.asyncio

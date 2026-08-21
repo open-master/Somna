@@ -33,7 +33,7 @@ check "temporal"           "docker compose exec -T temporal tctl --address tempo
 check "temporal-ui"        "curl -fsS -o /dev/null -w '%{http_code}' http://localhost:8233 | grep -qE '200|301|302'"
 check "litellm"            "curl -fsS http://localhost:4000/health/liveliness"
 check "langfuse"           "curl -fsS http://localhost:3001/api/public/health"
-check "mcp-hub"            "curl -fsS http://localhost:8090/healthz"
+check "mcp-hub"            "docker compose exec -T mcp-hub curl -fsS http://localhost:8090/healthz"
 check "agent-core"         "curl -fsS http://localhost:8000/healthz"
 check "web"                "curl -fsS http://localhost:3000/api/health"
 echo "=========================================================="

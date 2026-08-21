@@ -147,7 +147,7 @@ make restart      # docker compose restart
 | Web（前端） | http://localhost:3000 |
 | BFF | http://localhost:8080 |
 | Agent Core | http://localhost:8000 |
-| MCP Hub | http://localhost:8090 |
+| MCP Hub | Docker 内网 `http://mcp-hub:8090`（不映射宿主端口） |
 | LiteLLM Proxy | http://localhost:4000 |
 | Temporal UI | http://localhost:8233 |
 | Langfuse | http://localhost:3001 |

@@ -5,20 +5,54 @@ from uuid import uuid4
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app.config import get_settings
 from app.main import app
+
+_TEST_TOKEN = "test-mcp-internal-token"
 
 
 @pytest.fixture
 async def client():
     transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {_TEST_TOKEN}"},
+    ) as c:
+        yield c
+
+
+@pytest.fixture
+async def anon_client():
+    transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
 
 
-async def test_healthz(client: AsyncClient):
-    r = await client.get("/healthz")
+async def test_healthz_is_public(anon_client: AsyncClient):
+    r = await anon_client.get("/healthz")
     assert r.status_code == 200
     assert r.json()["service"] == "mcp-hub"
+
+
+async def test_tools_require_internal_token(anon_client: AsyncClient):
+    r = await anon_client.get("/v1/tools")
+    assert r.status_code == 401
+
+
+async def test_tools_reject_wrong_token(anon_client: AsyncClient):
+    r = await anon_client.get("/v1/tools", headers={"Authorization": "Bearer wrong-token"})
+    assert r.status_code == 401
+
+
+async def test_missing_token_is_unavailable(anon_client: AsyncClient, monkeypatch):
+    monkeypatch.setenv("MCP_HUB_INTERNAL_TOKEN", "")
+    get_settings.cache_clear()
+    try:
+        r = await anon_client.get("/v1/tools")
+        assert r.status_code == 503
+    finally:
+        get_settings.cache_clear()
 
 
 async def test_list_tools(client: AsyncClient):

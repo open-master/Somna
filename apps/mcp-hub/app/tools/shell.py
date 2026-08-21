@@ -8,17 +8,70 @@ M3: delegate to a per-session container, same request shape.
 from __future__ import annotations
 
 import asyncio
-import os
-from pathlib import Path
 import shlex
 import time
-from typing import Any
 import venv
+from pathlib import Path
+from typing import Any
 
 from app.config import get_settings
 
 from .base import BaseTool, ToolContext, ToolResult
 from .registry import register
+
+# Names that look like credentials must never reach the sandbox subprocess.
+_SECRET_ENV_MARKERS = (
+    "KEY",
+    "SECRET",
+    "TOKEN",
+    "PASSWORD",
+    "PASSWD",
+    "CREDENTIAL",
+    "DATABASE_URL",
+    "POSTGRES",
+    "MYSQL",
+    "REDIS",
+    "MONGO",
+    "SMTP",
+    "AWS_",
+    "S3_",
+    "JWT",
+    "PRIVATE",
+)
+
+_BASE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+
+def _is_denied_env_name(name: str) -> bool:
+    upper = name.upper()
+    return any(marker in upper for marker in _SECRET_ENV_MARKERS)
+
+
+def sandbox_shell_environ(
+    *,
+    home: str,
+    venv_dir: Path,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    """Minimal env for sandbox bash. Do not copy the Hub process environment."""
+    env = {
+        "HOME": home,
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TERM": "dumb",
+        "PS1": "$ ",
+        "PYTHONUNBUFFERED": "1",
+        "VIRTUAL_ENV": str(venv_dir),
+        "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+        "PATH": f"{venv_dir / 'bin'}:{_BASE_PATH}",
+    }
+    for key, value in (extra or {}).items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            continue
+        if not key or _is_denied_env_name(key):
+            continue
+        env[key] = value
+    return env
 
 
 @register
@@ -69,7 +122,7 @@ class ShellTool(BaseTool):
 
         cwd_arg = args.get("cwd") or "."
         # Use sandbox.safe_join via the caller, fall back to relative under workdir
-        from app.sandbox.manager import get_sandbox_manager, PathEscapeError
+        from app.sandbox.manager import PathEscapeError, get_sandbox_manager
 
         try:
             sm = get_sandbox_manager(settings)
@@ -84,20 +137,11 @@ class ShellTool(BaseTool):
         except OSError as e:
             return ToolResult(ok=False, error=f"failed to initialize python venv: {e}")
 
-        env = os.environ.copy()
-        env.update(
-            {
-                "PS1": "$ ",
-                "PYTHONUNBUFFERED": "1",
-                "HOME": ctx.workdir,
-                "VIRTUAL_ENV": str(venv_dir),
-                "PIP_DISABLE_PIP_VERSION_CHECK": "1",
-            }
+        env = sandbox_shell_environ(
+            home=ctx.workdir,
+            venv_dir=venv_dir,
+            extra=args.get("env") if isinstance(args.get("env"), dict) else None,
         )
-        env["PATH"] = f"{venv_dir / 'bin'}:{env.get('PATH', '')}"
-        for k, v in (args.get("env") or {}).items():
-            if isinstance(k, str) and isinstance(v, str):
-                env[k] = v
 
         started = time.perf_counter()
         try:

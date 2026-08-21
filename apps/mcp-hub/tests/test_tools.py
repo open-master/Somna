@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 import app.tools  # noqa: F401 — registers tools
-
 from app.config import get_settings
 from app.sandbox.manager import get_sandbox_manager
 from app.tools import registry
@@ -24,6 +25,41 @@ async def test_shell_echo(ctx):
     assert res.ok is True
     assert "hello" in res.output["stdout"]
     assert res.output["exit_code"] == 0
+
+
+def test_sandbox_shell_environ_omits_secrets():
+    from app.tools.shell import sandbox_shell_environ
+
+    env = sandbox_shell_environ(
+        home="/tmp/sbx",
+        venv_dir=Path("/tmp/sbx/.venv"),
+        extra={
+            "FOO": "bar",
+            "POSTGRES_PASSWORD": "nope",
+            "DASHSCOPE_API_KEY": "sk-test",
+            "MCP_HUB_INTERNAL_TOKEN": "hub",
+        },
+    )
+    assert env["FOO"] == "bar"
+    assert env["HOME"] == "/tmp/sbx"
+    assert "POSTGRES_PASSWORD" not in env
+    assert "DASHSCOPE_API_KEY" not in env
+    assert "MCP_HUB_INTERNAL_TOKEN" not in env
+
+
+async def test_shell_does_not_inherit_process_env(ctx, monkeypatch):
+    monkeypatch.setenv("POSTGRES_PASSWORD", "super-secret")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-test")
+    tool = registry.get("shell")
+    res = await tool.invoke(
+        ctx,
+        {"cmd": "printenv POSTGRES_PASSWORD; printenv DASHSCOPE_API_KEY; echo done"},
+    )
+    assert res.ok is True
+    stdout = res.output["stdout"]
+    assert "super-secret" not in stdout
+    assert "sk-test" not in stdout
+    assert "done" in stdout
 
 
 async def test_shell_auto_bootstraps_python_venv(ctx):

@@ -11,6 +11,7 @@ import pytest
 # Configure the sandbox root BEFORE importing app modules.
 _TMP = tempfile.TemporaryDirectory(prefix="somna_mcp_hub_tests_")
 os.environ["SANDBOX_ROOT"] = _TMP.name
+os.environ["MCP_HUB_INTERNAL_TOKEN"] = "test-mcp-internal-token"
 
 from app.config import get_settings
 from app.sandbox import manager as sbx_mod

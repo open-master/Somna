@@ -51,22 +51,27 @@ app/
 
 ## 本地运行
 
+工具与沙盒 API 需要 `Authorization: Bearer $MCP_HUB_INTERNAL_TOKEN`（与 agent-core 共用）。`/healthz` 无需鉴权。
+
 ```bash
 cd apps/mcp-hub
 uv pip install -e .[dev]      # 或者 pip install -e .[dev]
+export MCP_HUB_INTERNAL_TOKEN=dev-token
 uvicorn app.main:app --port 8090 --reload
 
 # 列工具
-curl localhost:8090/v1/tools | jq
+curl -H "Authorization: Bearer $MCP_HUB_INTERNAL_TOKEN" localhost:8090/v1/tools | jq
 
 # 建沙箱
 curl -sX POST localhost:8090/v1/sandbox \
   -H 'content-type: application/json' \
+  -H "Authorization: Bearer $MCP_HUB_INTERNAL_TOKEN" \
   -d '{"session_id":"demo"}' | jq
 
 # 跑 shell
 curl -sX POST localhost:8090/v1/tools/shell/invoke \
   -H 'content-type: application/json' \
+  -H "Authorization: Bearer $MCP_HUB_INTERNAL_TOKEN" \
   -d '{"sandbox_id":"demo","args":{"cmd":"echo hello && pwd"}}' | jq
 ```
 

@@ -17,7 +17,7 @@
 | Web (前端) | 3000 | Next.js |
 | BFF | 8080 | Node.js Hono |
 | Agent Core | 8000 | FastAPI |
-| MCP Hub | 8090 | FastAPI |
+| MCP Hub | （无宿主端口） | FastAPI，仅 Docker 内网 `mcp-hub:8090`；调用需 `MCP_HUB_INTERNAL_TOKEN` |
 | LiteLLM | 4000 | LLM 网关 |
 | Temporal gRPC | 7233 | |
 | Temporal UI | 8233 | |
