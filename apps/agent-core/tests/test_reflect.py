@@ -20,7 +20,9 @@ async def test_reflect_rejects_finalize_while_plan_has_pending_todos():
     client = SimpleNamespace(
         chat=SimpleNamespace(
             completions=SimpleNamespace(
-                create=AsyncMock(return_value=_mk_completion('{"decision":"finalize","reason":"可以结束","focus":""}'))
+                create=AsyncMock(
+                    return_value=_mk_completion('{"decision":"finalize","reason":"可以结束","focus":""}')
+                )
             )
         )
     )
@@ -57,7 +59,9 @@ async def test_reflect_at_cap_closes_unfinished_todos_truthfully():
     client = SimpleNamespace(
         chat=SimpleNamespace(
             completions=SimpleNamespace(
-                create=AsyncMock(return_value=_mk_completion('{"decision":"finalize","reason":"模型结论","focus":""}'))
+                create=AsyncMock(
+                    return_value=_mk_completion('{"decision":"finalize","reason":"模型结论","focus":""}')
+                )
             )
         )
     )
@@ -128,7 +132,9 @@ async def test_reflect_continue_execute_appends_guidance_message():
                 "run_id": "r1",
                 "user_message": "帮我做一个网站",
                 "assistant_text": "网站已完成",
-                "execution_summary": {"delivery_missing_reason": "任务要求交付真实产物，但没有检测到写文件/修改沙盒的证据"},
+                "execution_summary": {
+                    "delivery_missing_reason": "任务要求交付真实产物，但没有检测到写文件/修改沙盒的证据"
+                },
                 "plan": {
                     "todos": [
                         {"id": "1", "text": "写前端页面", "status": "in_progress"},
@@ -158,7 +164,9 @@ async def test_reflect_replan_on_multi_step_gap():
                 "run_id": "r1",
                 "user_message": "做一个多步骤任务",
                 "assistant_text": "先给一个口头结论",
-                "execution_summary": {"delivery_missing_reason": "存在多步计划，但模型没有实际调用工具就试图结束"},
+                "execution_summary": {
+                    "delivery_missing_reason": "存在多步计划，但模型没有实际调用工具就试图结束"
+                },
                 "plan": {
                     "todos": [
                         {"id": "1", "text": "抓数据", "status": "in_progress"},
@@ -176,6 +184,39 @@ async def test_reflect_replan_on_multi_step_gap():
     assert out["skip_planner"] is True
     assert isinstance(out["messages"][-1], SystemMessage)
     assert "重新规划" in out["messages"][-1].content
+
+
+@pytest.mark.asyncio
+async def test_reflect_replans_internal_scheduler_conflict_without_user_confirmation():
+    sid = uuid4()
+    with (
+        patch.object(reflect_mod, "emit", AsyncMock()),
+        patch.object(reflect_mod, "load_template", return_value=""),
+    ):
+        out = await reflect_mod.reflect_node(
+            {
+                "session_id": sid,
+                "run_id": "r1",
+                "user_message": "生成视频",
+                "assistant_text": "工具与当前步骤不匹配",
+                "execution_summary": {
+                    "scheduler_rejections": 1,
+                    "failure_notes": ["scheduler_todo_mismatch:wan_i2v"],
+                },
+                "plan": {
+                    "todos": [
+                        {"id": "1", "text": "编写分镜脚本", "status": "in_progress"},
+                        {"id": "2", "text": "生成视频", "status": "pending"},
+                    ]
+                },
+                "messages": [],
+                "tool_turns": 1,
+            }
+        )
+
+    assert out["next_node"] == "plan"
+    assert "内部调度冲突" in out["reflection"]["reason"]
+    assert "授权绕过" in out["messages"][-1].content
 
 
 @pytest.mark.asyncio
@@ -206,7 +247,9 @@ async def test_reflect_low_autonomy_success_criteria_first_pass_fallback_continu
 
     assert out["next_node"] == "execute"
     assert out["reflection"]["decision"] == "continue_execute"
-    assert "success_criteria" in (out["reflection"]["reason"] or "") or "自检" in (out["reflection"]["reason"] or "")
+    assert "success_criteria" in (out["reflection"]["reason"] or "") or "自检" in (
+        out["reflection"]["reason"] or ""
+    )
 
 
 @pytest.mark.asyncio
@@ -366,7 +409,9 @@ async def test_reflect_blocks_skill_finalize_when_only_verified_paths_exist():
     client = SimpleNamespace(
         chat=SimpleNamespace(
             completions=SimpleNamespace(
-                create=AsyncMock(return_value=_mk_completion('{"decision":"finalize","reason":"文件已在","focus":""}'))
+                create=AsyncMock(
+                    return_value=_mk_completion('{"decision":"finalize","reason":"文件已在","focus":""}')
+                )
             )
         )
     )
@@ -400,7 +445,9 @@ async def test_reflect_unrecovered_failures_blocks_finalize():
     client = SimpleNamespace(
         chat=SimpleNamespace(
             completions=SimpleNamespace(
-                create=AsyncMock(return_value=_mk_completion('{"decision":"finalize","reason":"可以结束","focus":""}'))
+                create=AsyncMock(
+                    return_value=_mk_completion('{"decision":"finalize","reason":"可以结束","focus":""}')
+                )
             )
         )
     )
@@ -480,7 +527,9 @@ async def test_reflect_execute_exception_with_progress_continues():
     client = SimpleNamespace(
         chat=SimpleNamespace(
             completions=SimpleNamespace(
-                create=AsyncMock(return_value=_mk_completion('{"decision":"finalize","reason":"可以结束","focus":""}'))
+                create=AsyncMock(
+                    return_value=_mk_completion('{"decision":"finalize","reason":"可以结束","focus":""}')
+                )
             )
         )
     )

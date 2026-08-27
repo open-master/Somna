@@ -27,6 +27,7 @@ from app.graph.nodes.task_frame import (
 )
 from app.graph.run_artifacts import persist_plan_pointer, persist_task_frame_pointer
 from app.graph.state import SessionState
+from app.graph.tool_policy import manifests_allowed_by_task_frame, normalize_tool_hint
 from app.graph.user_turn import last_human_turn_text
 from app.llm.client import get_async_openai
 from app.logging_setup import get_logger
@@ -121,7 +122,12 @@ def _coerce_nonnegative_int(raw: Any, *, default: int = 0) -> int:
         return max(0, default)
 
 
-def _coerce_todos(items: Any, *, preserve_status: bool = True) -> list[TodoItem]:
+def _coerce_todos(
+    items: Any,
+    *,
+    preserve_status: bool = True,
+    manifests: list[Any] | None = None,
+) -> list[TodoItem]:
     """Normalize planner TODOs and enforce a deterministic sequential chain.
 
     The planner may suggest a dependency graph, but Somna currently promises
@@ -171,7 +177,7 @@ def _coerce_todos(items: Any, *, preserve_status: bool = True) -> list[TodoItem]
                 if item.get("parent_id") is not None
                 else None,
                 depends_on=depends_on,
-                tool_hint=(str(item.get("tool_hint") or "").strip() or None),
+                tool_hint=normalize_tool_hint(item.get("tool_hint"), manifests),
                 acceptance_criteria=_coerce_str_list(
                     item.get("acceptance_criteria") or item.get("acceptance") or item.get("success_criteria"),
                     limit=8,
@@ -345,7 +351,10 @@ async def plan_node(state: SessionState) -> SessionState:
     planner_model = state.get("planner_model") or settings.agent_default_planner
     user_message = last_human_turn_text(state)
 
-    manifests = list(tool_manifest_cache().values())
+    manifests = manifests_allowed_by_task_frame(
+        list(tool_manifest_cache().values()),
+        state.get("task_frame") if isinstance(state.get("task_frame"), dict) else None,
+    )
     skill_route = await route_skills_for_task(
         user_id=state.get("user_id"),
         user_message=user_message,
@@ -453,7 +462,7 @@ async def plan_node(state: SessionState) -> SessionState:
 
     # Planner output is a proposal, never authoritative execution state.  A
     # model-written `status: done` must not make work appear completed.
-    todos = _coerce_todos(parsed.get("todos"), preserve_status=False)
+    todos = _coerce_todos(parsed.get("todos"), preserve_status=False, manifests=manifests)
     if not todos:
         log.info("graph.plan.empty", reasoning=parsed.get("reasoning"))
         return await _publish_fallback_plan(state, skill_update, reason="empty_todos")
@@ -617,6 +626,21 @@ def _todo_intent(text: str) -> str:
         return "research"
     if any(k in t for k in ("安装", "依赖", "ffmpeg", "检查环境", "环境检查")):
         return "setup"
+    if any(
+        k in t
+        for k in (
+            "脚本",
+            "文案",
+            "分镜",
+            "文本",
+            "介绍",
+            "总结",
+            "整理内容",
+            "撰写",
+            "编写",
+        )
+    ):
+        return "text_content"
     if _todo_requires_artifact_proof({"text": text}):
         return "artifact"
     return "generic"
@@ -817,6 +841,11 @@ def _proof_satisfies_todo(todo: dict[str, Any], proof: Any) -> bool:
     if intent == "research":
         return "search" in tools or any(_path_ext(p) in {".md", ".txt", ".json"} for p in new_paths)
 
+    if intent == "text_content":
+        if "search" in tools and not new_paths:
+            return False
+        return bool(new_paths or (set(tools) - {"shell", "search"} - set(_MEDIA_GEN_TOOLS)))
+
     if intent == "audio":
         return any(_is_audio_path(p) for p in all_paths)
 
@@ -887,6 +916,8 @@ def _proof_is_relevant_to_todo(todo: dict[str, Any], proof: Any) -> bool:
         )
     if intent == "research":
         return "search" in tools or any(_path_ext(path) in {".md", ".txt", ".json"} for path in paths)
+    if intent == "text_content":
+        return bool(paths or (set(tools) - {"shell", "search"} - set(_MEDIA_GEN_TOOLS)))
     if intent == "setup":
         return bool(_shell_commands(proof) or getattr(proof, "verified_paths", set()))
     if intent == "verify":
@@ -974,7 +1005,7 @@ async def advance_with_proof(
 
 
 _TEXT_DELIVERABLE_TODO_RE = re.compile(
-    r"(脚本|文案|内容|答案|回答|答复|总结|整理|分析|结论|时间轴|分镜)",
+    r"(脚本|文案|文本|文稿|介绍|简介|内容|答案|回答|答复|总结|整理|分析|结论|时间轴|分镜)",
     re.IGNORECASE,
 )
 _TEXT_PROMISE_RE = re.compile(r"(我将|接下来|稍后|准备).{0,20}(生成|撰写|制作|整理|分析)")
@@ -995,7 +1026,7 @@ async def advance_with_response_text(
         return plan
     todo_text = str(current.get("text") or "")
     if (
-        _todo_intent(todo_text) != "generic"
+        _todo_intent(todo_text) not in {"generic", "text_content"}
         or _todo_requires_artifact_proof(current)
         or not _TEXT_DELIVERABLE_TODO_RE.search(todo_text)
         or _TEXT_PROMISE_RE.search(text[:160])

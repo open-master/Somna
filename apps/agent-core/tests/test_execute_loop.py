@@ -96,6 +96,7 @@ def test_has_execution_progress_requires_tool_activity():
     assert exe._has_execution_progress(empty) is False
     assert exe._has_execution_progress(exe._ExecutionProof(successful_tool_calls=1)) is True
     assert exe._has_execution_progress(exe._ExecutionProof(failed_tool_calls=1)) is True
+    assert exe._has_execution_progress(exe._ExecutionProof(scheduler_rejections=1)) is True
     assert exe._has_execution_progress(exe._ExecutionProof(written_paths={"a.html"})) is True
 
 
@@ -126,6 +127,11 @@ def test_task_frame_scope_filters_tools_and_restricts_filesystem_actions():
     action = allowed[0].input_schema["properties"]["action"]
     assert action["enum"] == ["read", "list", "stat"]
 
+    browser_read_fallback = exe.manifests_allowed_by_task_frame(
+        manifests, {"allowed_action_scope": ["browser_read"]}
+    )
+    assert [manifest.name for manifest in browser_read_fallback] == ["search"]
+
 
 def test_active_todo_blocks_future_step_tool():
     plan = {
@@ -144,6 +150,22 @@ def test_active_image_todo_allows_image_generator_only():
     assert exe.active_todo_allows_tool(plan, "wan_t2v") is False
 
 
+def test_active_video_todo_allows_available_wan_video_tools():
+    plan = {
+        "todos": [
+            {
+                "id": "3",
+                "text": "生成 5 段动态视频",
+                "status": "in_progress",
+                "tool_hint": "wan_i2v",
+            }
+        ]
+    }
+    available = {"wan_i2v", "wan_t2v", "wan_r2v", "filesystem", "shell"}
+    assert exe.active_todo_allows_tool(plan, "wan_i2v", available_tool_names=available) is True
+    assert exe.active_todo_allows_tool(plan, "wan_t2v", available_tool_names=available) is True
+
+
 def test_active_todo_honors_explicit_tool_hint():
     plan = {
         "todos": [
@@ -156,6 +178,59 @@ def test_active_todo_honors_explicit_tool_hint():
         ]
     }
     assert exe.active_todo_allows_tool(plan, "wan_text2image") is True
+
+
+def test_active_todo_maps_legacy_browser_hint_to_real_search_tool():
+    plan = {
+        "todos": [
+            {
+                "id": "1",
+                "text": "获取乔布斯的维基百科生平介绍文本",
+                "status": "in_progress",
+                "tool_hint": "browser",
+            }
+        ]
+    }
+    assert exe.active_todo_allows_tool(plan, "search") is True
+    assert exe.active_todo_allows_tool(plan, "wan_i2v") is False
+
+
+def test_ambiguous_unhinted_todo_keeps_executor_flexible():
+    plan = {"todos": [{"id": "1", "text": "处理当前素材", "status": "in_progress"}]}
+    assert exe.active_todo_allows_tool(plan, "search") is True
+    assert exe.active_todo_allows_tool(plan, "visual_critique") is True
+
+    stale = {
+        "todos": [
+            {
+                "id": "1",
+                "text": "处理当前素材",
+                "status": "in_progress",
+                "tool_hint": "removed_legacy_tool",
+            }
+        ]
+    }
+    assert (
+        exe.active_todo_allows_tool(
+            stale,
+            "visual_critique",
+            available_tool_names={"visual_critique"},
+        )
+        is True
+    )
+
+    future_media = {
+        "todos": [
+            {"id": "1", "text": "处理当前素材", "status": "in_progress"},
+            {
+                "id": "2",
+                "text": "生成动态视频",
+                "status": "pending",
+                "tool_hint": "wan_i2v",
+            },
+        ]
+    }
+    assert exe.active_todo_allows_tool(future_media, "wan_i2v") is False
 
 
 def test_replace_active_todo_instruction_removes_stale_step():
@@ -192,6 +267,18 @@ def test_executor_extra_context_reinjects_plan_and_compact_memory():
     assert "[pending] 验证结果" in context
     assert "此前已经收集数据集" in context
     assert "ask_user" in context
+    assert "不得要求用户‘授权放行’内部调度器" in context
+
+
+def test_high_autonomy_confirmation_policy_keeps_internal_recovery_autonomous():
+    context = exe._compose_executor_extra_context(
+        None,
+        {"autonomy_level": "high", "risk_level": "low"},
+    )
+    assert context is not None
+    assert "高自主模式" in context
+    assert "内部调度冲突" in context
+    assert "直接执行到底" in context
 
 
 def test_proof_rehydration_avoids_false_delivery_missing_after_reflect():
@@ -1378,6 +1465,53 @@ def test_parse_ask_user_questions_forces_custom_and_keeps_options():
     assert questions[0]["prompt"] == "积分不够，怎么继续？"
     assert questions[0]["options"] == ["充值后续", "改免费方案"]
     assert questions[0]["allow_custom"] is True
+
+
+def test_ask_user_rejects_fake_internal_scheduler_authorization():
+    reason = exe._ask_user_internal_bypass_reason(
+        {
+            "prompt": "当前所有视频工具都被调度器拦截，请授权继续 TODO 3",
+            "options": ["授权放行全部 wan_* 工具", "切换方案"],
+        }
+    )
+    assert reason is not None
+    assert "用户回答不会改变 TODO 或工具许可" in reason
+
+
+def test_ask_user_keeps_real_business_decision_available():
+    reason = exe._ask_user_internal_bypass_reason(
+        {
+            "prompt": "发布到公网会覆盖现有版本，是否继续？",
+            "options": ["确认发布", "保留现有版本"],
+        }
+    )
+    assert reason is None
+
+
+@pytest.mark.asyncio
+async def test_internal_scheduler_ask_user_is_rejected_without_pausing():
+    args = '{"prompt":"调度器阻止 wan_i2v，请授权继续 TODO 3","options":["授权放行 wan_i2v","切换方案"]}'
+    messages: list[Any] = []
+    with (
+        patch.object(exe, "emit", AsyncMock()),
+        patch.object(exe, "get_client", return_value=AsyncMock()),
+    ):
+        proof, plan = await exe._run_tool_calls(
+            [_pending("cid_internal_ask", "ask_user", args)],
+            plan=None,
+            sandbox_id="sandbox",
+            session_id=uuid4(),
+            run_id="r1",
+            working_messages=messages,
+            manifests=[exe.ASK_USER_MANIFEST],
+        )
+
+    assert plan is None
+    assert proof.user_questions == []
+    assert any(
+        isinstance(message, ToolMessage) and "内部计划/调度冲突" in str(message.content)
+        for message in messages
+    )
 
 
 def test_with_ask_user_manifest_is_always_injected():

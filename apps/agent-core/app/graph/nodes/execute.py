@@ -66,6 +66,7 @@ from app.graph.run_artifacts import (
     sync_plan_artifact,
 )
 from app.graph.state import SessionState
+from app.graph.tool_policy import manifests_allowed_by_task_frame, tool_hint_tokens
 from app.graph.user_turn import executor_messages_for_current_turn, last_human_turn_text
 from app.llm.client import get_async_openai
 from app.logging_setup import get_logger
@@ -87,10 +88,12 @@ ASK_USER_TOOL_NAME = "ask_user"
 ASK_USER_MANIFEST = ToolManifest(
     name=ASK_USER_TOOL_NAME,
     description=(
-        "当必须由用户拍板才能继续时调用：多种实现方案、工具或积分失败后的取舍、"
-        "不可逆操作、关键参数缺失。调用后本轮立即暂停并弹出确认卡片。"
+        "当必须由用户拍板才能继续时调用：不可逆或高风险操作、需要扩大真实权限/成本、"
+        "关键业务参数缺失，或自动重试和替代方案均已用尽后仍存在会实质改变结果的取舍。"
+        "内部调度冲突、TODO 顺序、无效 tool_hint、可重试工具故障不得询问用户授权绕过，"
+        "必须自行纠正当前步骤或请求系统重规划。调用后本轮立即暂停并弹出确认卡片。"
         "不要在聊天正文里列出 A/B/C；把问题和选项放进本工具参数。"
-        "用户提交后下一轮会带着选择继续执行，不要把选项写进气泡后自己接着跑。"
+        "每个选项必须是系统收到回答后真正能够执行的动作。"
     ),
     category="hitl",
     mutates=False,
@@ -143,49 +146,6 @@ def effective_mcp_tool_models_map(state: SessionState) -> dict[str, str]:
     return m
 
 
-def manifests_allowed_by_task_frame(
-    manifests: list[ToolManifest], task_frame: dict[str, Any] | None
-) -> list[ToolManifest]:
-    """Apply Task Frame action scope as an executable allow-list."""
-    raw = (task_frame or {}).get("allowed_action_scope") if isinstance(task_frame, dict) else None
-    allowed = {str(item).strip().lower() for item in raw or [] if str(item).strip()}
-    if not allowed:
-        return manifests
-
-    out: list[ToolManifest] = []
-    for manifest in manifests:
-        name = manifest.name
-        category = (manifest.category or "").lower()
-        if name == "shell":
-            permitted = "shell" in allowed
-        elif name == "filesystem" or category == "file":
-            permitted = bool({"file_read", "file_write"} & allowed)
-        elif name == "search" or category == "net":
-            permitted = "search" in allowed
-        elif category == "media":
-            permitted = "media" in allowed
-        elif category == "browser":
-            permitted = "browser_read" in allowed
-        else:
-            permitted = False
-        if not permitted:
-            continue
-
-        if name == "filesystem" and "file_write" not in allowed:
-            restricted = manifest.model_copy(deep=True)
-            schema = dict(restricted.input_schema or {})
-            properties = dict(schema.get("properties") or {})
-            action = dict(properties.get("action") or {})
-            action["enum"] = ["read", "list", "stat"]
-            properties["action"] = action
-            schema["properties"] = properties
-            restricted.input_schema = schema
-            out.append(restricted)
-        else:
-            out.append(manifest)
-    return out
-
-
 @dataclass
 class _ExecutionProof:
     successful_tool_calls: int = 0
@@ -196,6 +156,7 @@ class _ExecutionProof:
     verified_paths: set[str] = field(default_factory=set)
     failed_tool_calls: int = 0
     recovered_failures: int = 0
+    scheduler_rejections: int = 0
     failure_notes: list[str] = field(default_factory=list)
     user_questions: list[dict[str, Any]] = field(default_factory=list)
     tool_names: list[str] = field(default_factory=list)
@@ -240,6 +201,7 @@ def _merge_proof(base: _ExecutionProof, delta: _ExecutionProof) -> _ExecutionPro
     base.verified_paths.update(delta.verified_paths)
     base.failed_tool_calls += delta.failed_tool_calls
     base.recovered_failures += delta.recovered_failures
+    base.scheduler_rejections += delta.scheduler_rejections
     if delta.failure_notes:
         base.failure_notes.extend(delta.failure_notes)
         if len(base.failure_notes) > 8:
@@ -255,6 +217,32 @@ def _merge_proof(base: _ExecutionProof, delta: _ExecutionProof) -> _ExecutionPro
         if len(base.operations) > 40:
             base.operations = base.operations[-40:]
     return base
+
+
+def _confirmation_policy_block(task_frame: dict[str, Any] | None) -> str:
+    autonomy = effective_autonomy_level(task_frame)
+    risk = str((task_frame or {}).get("risk_level") or "low").strip().lower()
+    shared = (
+        "内部调度冲突、TODO 顺序、无效 tool_hint、能力目录不一致和可重试工具故障，"
+        "必须自行纠正、尝试授权范围内的替代工具或结束本轮交给 Reflect 重规划；"
+        "不得要求用户‘授权放行’内部调度器。确认卡片中的每个选项都必须能在用户回答后真正执行。"
+    )
+    if autonomy == "high" and risk != "high":
+        threshold = (
+            "当前为高自主模式：在既有授权范围内直接执行到底。只有不可逆操作、需要扩大真实权限/成本，"
+            "或缺少无法合理推断的关键业务参数时才能调用 `ask_user`。"
+        )
+    elif autonomy == "low":
+        threshold = (
+            "当前为低自主模式：对会显著改变交付结果的业务选择可以较早调用 `ask_user`，"
+            "但应先排除内部错误，并且不得把可自动恢复的技术取舍交给用户。"
+        )
+    else:
+        threshold = (
+            "当前为中自主模式：先自动重试和尝试等价替代方案；只有替代方案会实质改变结果、"
+            "涉及不可逆操作/真实权限/显著额外成本，或关键参数确实缺失时才调用 `ask_user`。"
+        )
+    return f"### 需要用户拍板时\n{threshold}{shared}"
 
 
 def _compose_executor_extra_context(
@@ -294,12 +282,7 @@ def _compose_executor_extra_context(
             parts.append("### 当前执行计划（续跑时必须保持进度）\n" + "\n".join(todo_lines))
     if compact_memory and compact_memory.strip():
         parts.append("### 已压缩的会话执行摘要（续跑上下文）\n" + compact_memory.strip()[:12_000])
-    parts.append(
-        "### 需要用户拍板时\n"
-        "遇到多种方案、工具/积分失败后的取舍、或不可逆操作：必须调用 `ask_user`，"
-        "把问题和选项放进工具参数。不要在正文里列出 A/B/C 并继续执行。"
-        "调用后本轮会暂停；用户在确认卡片中选择后，下一轮带着选择继续。"
-    )
+    parts.append(_confirmation_policy_block(task_frame))
     return "\n\n".join(parts) if parts else None
 
 
@@ -315,6 +298,7 @@ def _active_todo_instruction(plan: dict[str, Any] | None) -> str | None:
             continue
         criteria = [str(x).strip() for x in todo.get("acceptance_criteria") or [] if str(x).strip()]
         outputs = [str(x).strip() for x in todo.get("expected_outputs") or [] if str(x).strip()]
+        hints = sorted(tool_hint_tokens(todo.get("tool_hint")))
         lines = [
             _ACTIVE_TODO_HEADER,
             f"- id: {todo.get('id')}",
@@ -324,7 +308,13 @@ def _active_todo_instruction(plan: dict[str, Any] | None) -> str | None:
             lines.append("- 验收: " + "；".join(criteria[:8]))
         if outputs:
             lines.append("- 预期输出: " + "；".join(outputs[:8]))
-        lines.append("只执行并验证这一项；不要提前调用后续 TODO 的工具。完成证据确认后调度器才会放行下一项。")
+        if hints:
+            lines.append("- 建议工具: " + "、".join(hints))
+        lines.append(
+            "只执行并验证这一项；不要提前调用后续 TODO 的工具。"
+            "若工具不匹配，请自行调整当前步骤或结束本轮请求重规划，不得要求用户授权绕过。"
+            "完成证据确认后调度器才会放行下一项。"
+        )
         return "\n".join(lines)
     return None
 
@@ -343,21 +333,50 @@ def _replace_active_todo_instruction(working_messages: list, plan: dict[str, Any
         working_messages.append(SystemMessage(content=instruction))
 
 
-def active_todo_allows_tool(plan: dict[str, Any] | None, tool_name: str) -> bool:
+def active_todo_allows_tool(
+    plan: dict[str, Any] | None,
+    tool_name: str,
+    *,
+    available_tool_names: set[str] | None = None,
+) -> bool:
+    """Keep future-only tools out without turning ambiguous TODO text into a deadlock.
+
+    Canonical planner hints are authoritative for ambiguous steps.  For known
+    intents we allow the small supporting tool family.  Truly generic,
+    unhinted work remains flexible; evidence validation still prevents it from
+    completing or skipping the wrong TODO.
+    """
     if tool_name == ASK_USER_TOOL_NAME:
         return True
     todos = (plan or {}).get("todos") if isinstance(plan, dict) else None
     if not isinstance(todos, list) or not todos:
         return True
-    active = next(
-        (todo for todo in todos if isinstance(todo, dict) and str(todo.get("status")) == "in_progress"),
+    active_entry = next(
+        (
+            (index, todo)
+            for index, todo in enumerate(todos)
+            if isinstance(todo, dict) and str(todo.get("status")) == "in_progress"
+        ),
         None,
     )
-    if active is None:
+    if active_entry is None:
         return False
-    hint_tokens = {
-        token for token in re.split(r"[\s,;|/]+", str(active.get("tool_hint") or "").strip()) if token
-    }
+    active_index, active = active_entry
+    hint_tokens = tool_hint_tokens(active.get("tool_hint"))
+    if available_tool_names is not None:
+        hint_tokens &= available_tool_names
+    future_hint_tokens = set().union(
+        *(
+            tool_hint_tokens(todo.get("tool_hint"))
+            for todo in todos[active_index + 1 :]
+            if isinstance(todo, dict)
+        )
+    )
+    if available_tool_names is not None:
+        future_hint_tokens &= available_tool_names
+    support_tools = {"filesystem", "shell"}
+    if tool_name in support_tools:
+        return True
     if tool_name in hint_tokens:
         return True
     intent = _todo_intent(str(active.get("text") or ""))
@@ -365,21 +384,33 @@ def active_todo_allows_tool(plan: dict[str, Any] | None, tool_name: str) -> bool
     allowed: dict[str, set[str]] = {
         "setup": {"shell", "filesystem"},
         "research": {"search", "filesystem", "shell"},
+        "text_content": {"search", "filesystem", "shell"},
         "audio": {"minimax_tts", "filesystem", "shell"},
         "image": {"wan_text2image", "filesystem", "shell"},
         "video_clips": media_video | {"filesystem", "shell"},
         "mux": {"shell", "filesystem"},
         "verify": {"shell", "filesystem", "visual_critique"},
         "artifact": {"filesystem", "shell"},
-        "generic": {"filesystem", "shell"},
     }
-    return tool_name in allowed.get(intent, {"filesystem", "shell"})
+    if intent == "generic":
+        return not hint_tokens and tool_name not in future_hint_tokens
+    return tool_name in allowed.get(intent, support_tools)
 
 
 async def _reject_out_of_order_tool(
-    *, session_id, run_id, working_messages: list, event_id: str, tool_name: str, args: dict[str, Any]
+    *,
+    session_id,
+    run_id,
+    working_messages: list,
+    event_id: str,
+    tool_name: str,
+    args: dict[str, Any],
+    message: str | None = None,
 ) -> None:
-    message = f"严格顺序调度器已阻止 {tool_name}：该工具不属于当前 TODO，请先完成当前步骤"
+    rejection = message or (
+        f"[scheduler_todo_mismatch] 严格顺序调度器已阻止 {tool_name}：该工具不属于当前 TODO。"
+        "这是内部计划冲突；请先完成/验证当前步骤或结束本轮请求重规划，不能让用户授权绕过。"
+    )
     await emit(
         ToolCallEvent(
             session_id=session_id,
@@ -395,13 +426,13 @@ async def _reject_out_of_order_tool(
             run_id=run_id,
             id=event_id,
             ok=False,
-            preview=message,
+            preview=rejection,
             duration_ms=0,
         )
     )
     working_messages.append(
         ToolMessage(
-            content=_render_tool_content(ToolResult(ok=False, error=message)),
+            content=_render_tool_content(ToolResult(ok=False, error=rejection)),
             tool_call_id=event_id,
             name=tool_name,
         )
@@ -555,6 +586,7 @@ def _has_execution_progress(proof: _ExecutionProof) -> bool:
     return (
         int(proof.successful_tool_calls or 0) > 0
         or int(proof.failed_tool_calls or 0) > 0
+        or int(proof.scheduler_rejections or 0) > 0
         or bool(proof.written_paths)
     )
 
@@ -703,6 +735,26 @@ def _parse_ask_user_questions(args: dict[str, Any]) -> list[dict[str, Any]]:
     return out[:4]
 
 
+_INTERNAL_SCHEDULER_CONFIRM_RE = re.compile(
+    r"(严格顺序调度|调度器|当前\s*TODO|TODO\s*\d+|不属于当前|"
+    r"(?:授权)?放行.{0,24}(?:工具|wan_|search|browser|TODO)|"
+    r"授权.{0,16}(?:绕过|解除.{0,8}拦截))",
+    re.IGNORECASE,
+)
+
+
+def _ask_user_internal_bypass_reason(args: dict[str, Any]) -> str | None:
+    """Reject confirmation cards that pretend a user can bypass internal state."""
+    blob = json.dumps(args, ensure_ascii=False, default=str)
+    if not _INTERNAL_SCHEDULER_CONFIRM_RE.search(blob):
+        return None
+    return (
+        "ask_user 已拒绝：这是内部计划/调度冲突，用户回答不会改变 TODO 或工具许可。"
+        "请完成并验证当前 TODO，改用当前步骤允许的工具，或结束本轮让 Reflect 自动重规划；"
+        "不要再次询问用户授权绕过调度器。"
+    )
+
+
 async def _pause_for_user_decision(
     state: SessionState,
     *,
@@ -783,6 +835,7 @@ def _summarize_execution(
         "verified_paths": sorted(proof.verified_paths),
         "failed_tool_calls": proof.failed_tool_calls,
         "recovered_failures": proof.recovered_failures,
+        "scheduler_rejections": proof.scheduler_rejections,
         "unrecovered_failures": _unrecovered_failure_count(proof),
         "failure_notes": list(proof.failure_notes[-8:]),
         "operations": list(proof.operations[-40:]),
@@ -1444,7 +1497,11 @@ async def _run_tool_calls(
     current_plan = plan
     for call_index, pc in enumerate(pending):
         args = _parse_args(pc.args_buf)
-        if not active_todo_allows_tool(current_plan, pc.name):
+        if not active_todo_allows_tool(
+            current_plan,
+            pc.name,
+            available_tool_names=set(manifest_by_name),
+        ):
             await _reject_out_of_order_tool(
                 session_id=session_id,
                 run_id=run_id,
@@ -1453,8 +1510,34 @@ async def _run_tool_calls(
                 tool_name=pc.name,
                 args=args,
             )
+            proof = _merge_proof(
+                proof,
+                _ExecutionProof(
+                    scheduler_rejections=1,
+                    failure_notes=[f"scheduler_todo_mismatch:{pc.name}"],
+                ),
+            )
             continue
         if pc.name == ASK_USER_TOOL_NAME:
+            internal_reason = _ask_user_internal_bypass_reason(args)
+            if internal_reason:
+                await _reject_out_of_order_tool(
+                    session_id=session_id,
+                    run_id=run_id,
+                    working_messages=working_messages,
+                    event_id=pc.id,
+                    tool_name=pc.name,
+                    args=args,
+                    message=internal_reason,
+                )
+                proof = _merge_proof(
+                    proof,
+                    _ExecutionProof(
+                        scheduler_rejections=1,
+                        failure_notes=["ask_user_internal_scheduler_bypass"],
+                    ),
+                )
+                continue
             questions = _parse_ask_user_questions(args)
             result = ToolResult(
                 ok=True,

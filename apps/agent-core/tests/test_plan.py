@@ -11,6 +11,7 @@ import pytest
 from somna_events import TodoStatus
 
 from app.graph.nodes import plan as plan_mod
+from app.tools.client import ToolManifest
 
 
 def _mk_completion(content: str):
@@ -63,10 +64,25 @@ def test_coerce_todos_preserves_contract_and_forces_sequential_dependency():
             {"id": "b", "text": "生成音频", "depends_on": []},
         ]
     )
-    assert out[0].tool_hint == "file"
+    assert out[0].tool_hint == "filesystem"
     assert out[0].acceptance_criteria == ["脚本文件存在"]
     assert out[0].expected_outputs == ["storyboard.md"]
     assert out[1].depends_on == ["a"]
+
+
+def test_coerce_todos_normalizes_aliases_against_executable_catalog():
+    manifests = [SimpleNamespace(name="search"), SimpleNamespace(name="filesystem")]
+    out = plan_mod._coerce_todos(
+        [
+            {
+                "id": "1",
+                "text": "获取维基百科资料并保存",
+                "tool_hint": "browser|file|not_a_real_tool",
+            }
+        ],
+        manifests=manifests,
+    )
+    assert out[0].tool_hint == "search|filesystem"
 
 
 def test_coerce_todos_does_not_trust_planner_completion_status():
@@ -106,6 +122,11 @@ def test_fallback_plan_from_task_frame_without_criteria():
     texts = [t["text"] for t in plan["todos"]]
     assert len(texts) >= 2
     assert any("量子纠缠" in t or "定调" in t for t in texts)
+
+
+def test_todo_intent_distinguishes_intro_text_from_video_generation():
+    assert plan_mod._todo_intent("获取乔布斯的维基百科生平介绍文本") == "text_content"
+    assert plan_mod._todo_intent("生成 5 段动态视频") == "video_clips"
 
 
 @pytest.mark.asyncio
@@ -187,6 +208,59 @@ async def test_plan_node_injects_retrieved_memories_into_prompt():
 
     assert out["plan"] is not None
     assert "Next.js" in rendered["retrieved_memories"]
+
+
+@pytest.mark.asyncio
+async def test_plan_node_uses_same_task_scoped_catalog_as_executor():
+    sid = uuid4()
+    raw = json.dumps(
+        {
+            "reasoning": "先检索",
+            "todos": [
+                {
+                    "id": "1",
+                    "text": "获取乔布斯的维基百科生平介绍文本",
+                    "tool_hint": "browser",
+                }
+            ],
+        }
+    )
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock(return_value=_mk_completion(raw))))
+    )
+    rendered: dict[str, str] = {}
+
+    def _render(_template: str, **kwargs):
+        rendered["tools_list"] = kwargs["tools_list"]
+        return "prompt"
+
+    manifests = {
+        "search": ToolManifest(
+            name="search", description="", input_schema={"type": "object"}, category="net"
+        ),
+        "wan_i2v": ToolManifest(
+            name="wan_i2v", description="", input_schema={"type": "object"}, category="media"
+        ),
+    }
+    with (
+        patch.object(plan_mod, "get_async_openai", return_value=client),
+        patch.object(plan_mod, "emit", AsyncMock()),
+        patch.object(plan_mod, "tool_manifest_cache", return_value=manifests),
+        patch.object(plan_mod, "load_template", return_value="prompt {{tools_list}}"),
+        patch.object(plan_mod, "render", side_effect=_render),
+    ):
+        out = await plan_mod.plan_node(
+            {
+                "session_id": sid,
+                "run_id": "r1",
+                "user_message": "获取维基百科资料",
+                "messages": [],
+                "task_frame": {"allowed_action_scope": ["search"]},
+            }
+        )
+
+    assert rendered["tools_list"] == "search"
+    assert out["plan"]["todos"][0]["tool_hint"] == "search"
 
 
 @pytest.mark.asyncio
@@ -598,6 +672,32 @@ async def test_response_text_completes_only_current_text_content_step():
     assert out["todos"][0]["status"] == TodoStatus.done
     assert out["todos"][1]["status"] == TodoStatus.in_progress
     assert "当前回复" in out["todos"][0]["completion_reason"]
+
+
+@pytest.mark.asyncio
+async def test_response_text_completes_wikipedia_intro_text_step():
+    sid = uuid4()
+    plan = {
+        "todos": [
+            {
+                "id": "1",
+                "text": "获取乔布斯的维基百科生平介绍文本",
+                "status": "in_progress",
+                "tool_hint": "search",
+            },
+            {"id": "2", "text": "制作交互式网页", "status": "pending"},
+        ]
+    }
+    response = "史蒂夫·乔布斯是苹果公司联合创始人，参与推动了个人电脑、数字音乐与智能手机的发展。"
+    with patch.object(plan_mod, "emit", AsyncMock()):
+        out = await plan_mod.advance_with_response_text(
+            plan,
+            session_id=sid,
+            run_id="r1",
+            response_text=response,
+        )
+    assert out["todos"][0]["status"] == TodoStatus.done
+    assert out["todos"][1]["status"] == TodoStatus.in_progress
 
 
 @pytest.mark.asyncio

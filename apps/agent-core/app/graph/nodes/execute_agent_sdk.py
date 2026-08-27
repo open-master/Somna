@@ -55,11 +55,11 @@ from app.graph.nodes.execute import (
     _with_fresh_system_prompt,
     active_todo_allows_tool,
     effective_mcp_tool_models_map,
-    manifests_allowed_by_task_frame,
 )
 from app.graph.nodes.plan import advance_with_proof, advance_with_response_text, mark_progress
 from app.graph.run_artifacts import append_executor_progress_snapshot, sync_plan_artifact
 from app.graph.state import SessionState
+from app.graph.tool_policy import manifests_allowed_by_task_frame
 from app.graph.user_turn import executor_messages_for_current_turn, last_human_turn_text
 from app.llm.client import anthropic_subprocess_env
 from app.logging_setup import get_logger
@@ -106,8 +106,16 @@ class _SomnaBridge:
         pc.args_buf = json.dumps(args, ensure_ascii=False)
         manifest = self.manifest_by_name.get(tool_name)
 
-        if not active_todo_allows_tool(self.plan, tool_name):
-            message = f"严格顺序调度器已阻止 {tool_name}：该工具不属于当前 TODO"
+        if not active_todo_allows_tool(
+            self.plan,
+            tool_name,
+            available_tool_names=set(self.manifest_by_name),
+        ):
+            message = (
+                f"[scheduler_todo_mismatch] 严格顺序调度器已阻止 {tool_name}："
+                "该工具不属于当前 TODO。请完成当前步骤或结束本轮请求重规划；"
+                "这是内部冲突，不能让用户授权绕过。"
+            )
             await _reject_out_of_order_tool(
                 session_id=self.session_id,
                 run_id=self.run_id,
@@ -115,6 +123,13 @@ class _SomnaBridge:
                 event_id=pc.id,
                 tool_name=tool_name,
                 args=args,
+            )
+            self.proof = _merge_proof(
+                self.proof,
+                _ExecutionProof(
+                    scheduler_rejections=1,
+                    failure_notes=[f"scheduler_todo_mismatch:{tool_name}"],
+                ),
             )
             return {
                 "content": [{"type": "text", "text": message}],

@@ -161,6 +161,15 @@ def _unrecovered_tool_failures(summary: dict[str, Any] | None) -> int:
     return max(0, failed - recovered)
 
 
+def _scheduler_rejections(summary: dict[str, Any] | None) -> int:
+    if not isinstance(summary, dict):
+        return 0
+    try:
+        return max(0, int(summary.get("scheduler_rejections") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _execute_exception_note(summary: dict[str, Any] | None) -> str:
     if not isinstance(summary, dict):
         return ""
@@ -427,6 +436,11 @@ async def reflect_node(state: SessionState) -> SessionState:
     route = str(decision.get("decision") or "finalize")
     reason = str(decision.get("reason") or "").strip()
     focus = str(decision.get("focus") or "").strip()
+
+    if _scheduler_rejections(summary) > 0 and _pending_todos(state.get("plan")):
+        route = "replan"
+        reason = "当前计划的 TODO 与实际可用工具发生内部调度冲突"
+        focus = "基于本任务真实工具清单重写剩余步骤和精确 tool_hint；不要询问用户授权绕过"
 
     blocked, block_reason, block_focus = _should_block_skill_finalize(state)
     if route == "finalize" and blocked:
