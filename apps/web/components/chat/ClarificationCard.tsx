@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, CircleHelp, Loader2, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -38,12 +38,40 @@ export function ClarificationCard({
   const [customAnswers, setCustomAnswers] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const scrollViewportRef = useRef<HTMLDivElement>(null);
+  const [scrollHints, setScrollHints] = useState({ top: false, bottom: false });
+
+  const updateScrollHints = useCallback(() => {
+    const viewport = scrollViewportRef.current;
+    if (!viewport) return;
+
+    const remaining = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop;
+    const next = {
+      top: viewport.scrollTop > 2,
+      bottom: remaining > 2,
+    };
+    setScrollHints((current) =>
+      current.top === next.top && current.bottom === next.bottom ? current : next,
+    );
+  }, []);
 
   useEffect(() => {
     setAnswers({});
     setCustomAnswers({});
     setError(null);
+    scrollViewportRef.current?.scrollTo({ top: 0 });
   }, [questionRunId]);
+
+  useEffect(() => {
+    const viewport = scrollViewportRef.current;
+    if (!viewport) return;
+
+    updateScrollHints();
+    const observer = new ResizeObserver(updateScrollHints);
+    observer.observe(viewport);
+    if (viewport.firstElementChild) observer.observe(viewport.firstElementChild);
+    return () => observer.disconnect();
+  }, [phase, questions, updateScrollHints]);
 
   const complete = useMemo(
     () =>
@@ -132,11 +160,11 @@ export function ClarificationCard({
 
   return (
     <section
-      className="mx-auto w-full max-w-3xl px-4 pb-3"
+      className="mx-auto flex max-h-[min(72dvh,42rem)] min-h-0 w-full max-w-3xl shrink px-4 pb-3"
       aria-labelledby="clarification-title"
     >
-      <div className="overflow-hidden rounded-2xl border border-amber-500/25 bg-[linear-gradient(145deg,hsl(var(--card)),hsl(var(--muted)/0.38))] shadow-[0_14px_40px_-26px_hsl(var(--foreground)/0.38)]">
-        <header className="flex items-start justify-between gap-4 border-b border-border/70 px-4 py-3.5 sm:px-5">
+      <div className="flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-2xl border border-amber-500/25 bg-[linear-gradient(145deg,hsl(var(--card)),hsl(var(--muted)/0.38))] shadow-[0_14px_40px_-26px_hsl(var(--foreground)/0.38)]">
+        <header className="flex shrink-0 items-start justify-between gap-4 border-b border-border/70 px-4 py-3.5 sm:px-5">
           <div className="flex min-w-0 gap-3">
             <div className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-xl bg-amber-500/12 text-amber-600 dark:text-amber-400">
               <CircleHelp className="size-4" aria-hidden />
@@ -163,59 +191,82 @@ export function ClarificationCard({
           </Button>
         </header>
 
-        <div className="space-y-5 px-4 py-4 sm:px-5">
-          {questions.map((question, index) => {
-            const selected = answers[question.id] ?? "";
-            const custom = customAnswers[question.id] ?? "";
-            const choices = Array.from(new Set([...question.options, DELEGATE_ANSWER]));
-            return (
-              <fieldset key={question.id} disabled={sharedSending} className="space-y-2.5">
-                <legend className="flex w-full gap-2 text-sm leading-6">
-                  <span className="font-mono text-xs text-muted-foreground">
-                    {String(index + 1).padStart(2, "0")}
-                  </span>
-                  <span className="font-medium">{question.prompt}</span>
-                </legend>
-                <div className="flex flex-wrap gap-2 pl-6">
-                  {choices.map((choice) => {
-                    const active = selected === choice && !custom.trim();
-                    return (
-                      <button
-                        key={choice}
-                        type="button"
-                        aria-pressed={active}
-                        onClick={() => choose(question.id, choice)}
-                        className={[
-                          "inline-flex min-h-9 items-center gap-1.5 rounded-xl border px-3 py-1.5 text-left text-xs leading-5 transition",
-                          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-                          active
-                            ? "border-foreground/25 bg-foreground text-background shadow-sm"
-                            : "border-border/80 bg-background/70 text-foreground hover:border-foreground/25 hover:bg-accent",
-                        ].join(" ")}
-                      >
-                        {active ? <Check className="size-3.5 shrink-0" aria-hidden /> : null}
-                        {choice}
-                      </button>
-                    );
-                  })}
-                </div>
-                {question.allow_custom ? (
-                  <div className="pl-6">
-                    <Textarea
-                      value={custom}
-                      onChange={(event) => writeCustom(question.id, event.target.value)}
-                      placeholder="或者补充你的具体要求…"
-                      rows={2}
-                      className="min-h-16 resize-none rounded-xl bg-background/70 text-sm"
-                    />
-                  </div>
-                ) : null}
-              </fieldset>
-            );
-          })}
+        <div className="relative min-h-0 flex-1">
+          <div
+            ref={scrollViewportRef}
+            role="region"
+            aria-label="待确认问题"
+            tabIndex={0}
+            onScroll={updateScrollHints}
+            className="scrollbar-thin h-full touch-pan-y scroll-py-4 overflow-y-auto overscroll-contain [scrollbar-gutter:stable] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+          >
+            <div className="space-y-5 px-4 py-4 sm:px-5">
+              {questions.map((question, index) => {
+                const selected = answers[question.id] ?? "";
+                const custom = customAnswers[question.id] ?? "";
+                const choices = Array.from(new Set([...question.options, DELEGATE_ANSWER]));
+                return (
+                  <fieldset key={question.id} disabled={sharedSending} className="space-y-2.5">
+                    <legend className="flex w-full gap-2 text-sm leading-6">
+                      <span className="font-mono text-xs text-muted-foreground">
+                        {String(index + 1).padStart(2, "0")}
+                      </span>
+                      <span className="font-medium">{question.prompt}</span>
+                    </legend>
+                    <div className="flex flex-wrap gap-2 pl-6">
+                      {choices.map((choice) => {
+                        const active = selected === choice && !custom.trim();
+                        return (
+                          <button
+                            key={choice}
+                            type="button"
+                            aria-pressed={active}
+                            onClick={() => choose(question.id, choice)}
+                            className={[
+                              "inline-flex min-h-9 items-center gap-1.5 rounded-xl border px-3 py-1.5 text-left text-xs leading-5 transition",
+                              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                              active
+                                ? "border-foreground/25 bg-foreground text-background shadow-sm"
+                                : "border-border/80 bg-background/70 text-foreground hover:border-foreground/25 hover:bg-accent",
+                            ].join(" ")}
+                          >
+                            {active ? <Check className="size-3.5 shrink-0" aria-hidden /> : null}
+                            {choice}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {question.allow_custom ? (
+                      <div className="pl-6">
+                        <Textarea
+                          value={custom}
+                          onChange={(event) => writeCustom(question.id, event.target.value)}
+                          placeholder="或者补充你的具体要求…"
+                          rows={2}
+                          className="min-h-16 resize-none scroll-mb-4 rounded-xl bg-background/70 text-sm"
+                        />
+                      </div>
+                    ) : null}
+                  </fieldset>
+                );
+              })}
+            </div>
+          </div>
+          {scrollHints.top ? (
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-x-0 top-0 h-5 bg-gradient-to-b from-background/80 to-transparent"
+            />
+          ) : null}
+          {scrollHints.bottom ? (
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-x-0 bottom-0 h-7 bg-gradient-to-t from-background/85 to-transparent"
+            />
+          ) : null}
         </div>
 
-        <footer className="flex items-center justify-between gap-3 border-t border-border/70 bg-background/45 px-4 py-3 sm:px-5">
+        <footer className="flex shrink-0 items-center justify-between gap-3 border-t border-border/70 bg-background/45 px-4 py-3 sm:px-5">
           <p className="min-h-5 text-xs text-destructive" role="alert">
             {error}
           </p>
