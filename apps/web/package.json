@@ -6,6 +6,7 @@
     "dev": "next dev -p 3000",
     "build": "next build",
     "start": "next start -p 3000",
+    "test": "node --test tests/*.test.mjs",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "postinstall": "node -e \"const {spawnSync}=require('child_process');const fs=require('fs');const p='../../packages/event-schema/typescript';if(fs.existsSync(p+'/package.json')){const r=spawnSync(process.platform==='win32'?'npm.cmd':'npm',['install','--no-audit','--no-fund','--legacy-peer-deps'],{cwd:p,stdio:'inherit'});process.exit(r.status||0);}\""
