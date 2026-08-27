@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { postMessage } from "@/lib/api/sessions";
 import { getExecutorEngine } from "@/lib/executor-engine";
 import { useChatStore } from "@/lib/store/chat";
+import { usePlanStore } from "@/lib/store/plan";
 import { useSessionStore } from "@/lib/store/session";
 import { useTaskFrameStore } from "@/lib/store/taskFrame";
 
@@ -24,6 +25,7 @@ export function ClarificationCard({
   const questions = useTaskFrameStore((state) => state.questions);
   const questionRunId = useTaskFrameStore((state) => state.runId);
   const clearTaskFrame = useTaskFrameStore((state) => state.clear);
+  const startPlanRun = usePlanStore((state) => state.onRunStarted);
   const pushUser = useChatStore((state) => state.pushUser);
   const rollbackLastUserMessage = useChatStore((state) => state.rollbackLastUserMessage);
   const setPhase = useSessionStore((state) => state.setPhase);
@@ -101,6 +103,7 @@ export function ClarificationCard({
     try {
       const response = await postMessage(sessionId, answerText, [], getExecutorEngine());
       clearTaskFrame();
+      startPlanRun(response.run_id);
       setPhase("planning");
       setRunId(response.run_id);
       const existing = useSessionStore

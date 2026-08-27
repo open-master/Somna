@@ -27,6 +27,7 @@ def test_build_graph_has_expected_nodes():
         "plan",
         "execute",
         "reflect",
+        "invalid_state",
         "finalize",
     } <= nodes
 

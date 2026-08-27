@@ -59,11 +59,15 @@ async def test_ingest_resets_compact_memory_for_new_user_turn():
                 "messages": [],
                 "compact_memory": "上一轮已经生成过词云。",
                 "execution_summary": {"written_paths": ["/workspace/old.png"]},
+                "plan": {"run_id": "run_old", "todos": [{"id": "1", "status": "done"}]},
+                "plan_path": ".somna/runs/run_old/plan.json",
             }
         )
 
     assert out["compact_memory"] is None
     assert out["execution_summary"] is None
+    assert out["plan"] is None
+    assert out["plan_path"] is None
     assert out["tool_turns"] == 0
     assert out["resume_execute"] is False
 

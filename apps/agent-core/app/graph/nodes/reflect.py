@@ -35,14 +35,16 @@ def _parse_reflection(raw: str) -> dict[str, Any] | None:
     if not raw:
         return None
     try:
-        return json.loads(raw)
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else None
     except json.JSONDecodeError:
         pass
     match = _JSON_BLOCK_RE.search(raw)
     if not match:
         return None
     try:
-        return json.loads(match.group(0))
+        parsed = json.loads(match.group(0))
+        return parsed if isinstance(parsed, dict) else None
     except json.JSONDecodeError:
         return None
 
@@ -173,13 +175,19 @@ def _should_block_skill_finalize(state: SessionState) -> tuple[bool, str, str]:
         return True, "已选中 Skill，但仍有未完成 TODO", str(pending[0].get("text") or "")
     tf = state.get("task_frame") if isinstance(state.get("task_frame"), dict) else {}
     summary = state.get("execution_summary") or {}
-    if deliverable_type_implies_artifact(str(tf.get("deliverable_type") or "")) and not _has_artifact_evidence(
+    if deliverable_type_implies_artifact(
+        str(tf.get("deliverable_type") or "")
+    ) and not _has_artifact_evidence(
         summary,
         task_frame=tf,
         plan=state.get("plan") if isinstance(state.get("plan"), dict) else None,
         user_message=str(state.get("user_message") or ""),
     ):
-        return True, "已选中 Skill 且任务要求交付文件，但缺少产物证据", "继续按 Skill workflow 生成并验证交付文件"
+        return (
+            True,
+            "已选中 Skill 且任务要求交付文件，但缺少产物证据",
+            "继续按 Skill workflow 生成并验证交付文件",
+        )
     return False, "", ""
 
 
@@ -187,7 +195,7 @@ def _pending_todos(plan: dict[str, Any] | None) -> list[dict[str, Any]]:
     return [
         t
         for t in ((plan or {}).get("todos") or [])
-        if isinstance(t, dict) and str(t.get("status")) in {"pending", "in_progress"}
+        if isinstance(t, dict) and str(t.get("status")) in {"pending", "in_progress", "failed"}
     ]
 
 
@@ -211,7 +219,11 @@ def _fallback_decision(state: SessionState) -> dict[str, Any]:
         return {"decision": "continue_execute", "reason": reason, "focus": "补齐缺失的真实执行和验证"}
     typed_gap = _typed_delivery_gap_from_state(state)
     if typed_gap:
-        return {"decision": "continue_execute", "reason": typed_gap, "focus": "按任务定调补齐匹配的最终交付文件"}
+        return {
+            "decision": "continue_execute",
+            "reason": typed_gap,
+            "focus": "按任务定调补齐匹配的最终交付文件",
+        }
     note = _execute_exception_note(summary)
     if note:
         return {
@@ -232,10 +244,18 @@ def _fallback_decision(state: SessionState) -> dict[str, Any]:
     if blocked:
         return {"decision": "continue_execute", "reason": block_reason, "focus": focus}
     if not (state.get("assistant_text") or "").strip():
-        return {"decision": "continue_execute", "reason": "当前没有形成有效回答", "focus": "继续执行并形成有效结论"}
+        return {
+            "decision": "continue_execute",
+            "reason": "当前没有形成有效回答",
+            "focus": "继续执行并形成有效结论",
+        }
     pending = _pending_todos(plan)
     if pending:
-        return {"decision": "continue_execute", "reason": "仍有未完成 TODO", "focus": str(pending[0].get("text") or "")}
+        return {
+            "decision": "continue_execute",
+            "reason": "仍有未完成 TODO",
+            "focus": str(pending[0].get("text") or ""),
+        }
 
     # 低自主 + 首轮反思：若定调写了验收标准，多给一轮执行做对照（避免过早 finalize）。
     sc = tf.get("success_criteria") if isinstance(tf.get("success_criteria"), list) else []
@@ -250,11 +270,18 @@ def _fallback_decision(state: SessionState) -> dict[str, Any]:
     return {"decision": "finalize", "reason": "当前结果已满足结束条件", "focus": ""}
 
 
-def _coerce_route_for_high_autonomy(state: SessionState, route: str, reason: str, focus: str) -> tuple[str, str, str]:
+def _coerce_route_for_high_autonomy(
+    state: SessionState, route: str, reason: str, focus: str
+) -> tuple[str, str, str]:
     """高自主：若无交付缺口且无待办、已有回答，则将多余的 continue_execute 收为 finalize。"""
     if route != "continue_execute":
         return route, reason, focus
-    if effective_autonomy_level(state.get("task_frame") if isinstance(state.get("task_frame"), dict) else None) != "high":
+    if (
+        effective_autonomy_level(
+            state.get("task_frame") if isinstance(state.get("task_frame"), dict) else None
+        )
+        != "high"
+    ):
         return route, reason, focus
     summary = state.get("execution_summary") or {}
     if str(summary.get("delivery_missing_reason") or "").strip():
@@ -281,7 +308,11 @@ def _autonomy_audit_line(state: SessionState) -> tuple[str, str, str]:
     declared = str(tf.get("autonomy_level") or "medium").strip().lower()
     risk = str(tf.get("risk_level") or "low").strip().lower()
     eff = effective_autonomy_level(tf)
-    return eff, declared if declared in ("low", "medium", "high") else "medium", risk if risk in ("low", "medium", "high") else "low"
+    return (
+        eff,
+        declared if declared in ("low", "medium", "high") else "medium",
+        risk if risk in ("low", "medium", "high") else "low",
+    )
 
 
 async def reflect_node(state: SessionState) -> SessionState:
@@ -293,14 +324,14 @@ async def reflect_node(state: SessionState) -> SessionState:
     if (
         int(state.get("tool_turns") or 0) >= max(1, int(settings.agent_max_turns))
         or int(state.get("total_agent_turns") or 0) >= max(1, int(settings.agent_max_total_turns))
-        or int(state.get("total_execution_tokens") or 0)
-        >= max(1, int(settings.agent_max_total_tokens))
+        or int(state.get("total_execution_tokens") or 0) >= max(1, int(settings.agent_max_total_tokens))
     ):
         plan = await mark_progress(
             state.get("plan"),
             session_id=session_id,
             run_id=run_id,
             close_unfinished=True,
+            failure_reason="已达到本轮全局执行预算上限",
         )
         return {
             "plan": plan,
@@ -468,6 +499,7 @@ async def reflect_node(state: SessionState) -> SessionState:
                 session_id=session_id,
                 run_id=run_id,
                 close_unfinished=True,
+                failure_reason=reason or "已达到重试或反思上限",
             )
             log.info(
                 "graph.reflect.finalize_with_unfinished",

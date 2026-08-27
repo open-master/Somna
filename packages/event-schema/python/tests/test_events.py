@@ -42,11 +42,20 @@ def test_discriminated_union_parses_correct_subtype():
 def test_plan_update_with_todos():
     todos = [
         TodoItem(id="1", text="a", status=TodoStatus.done),
-        TodoItem(id="2", text="b", status=TodoStatus.in_progress),
+        TodoItem(
+            id="2",
+            text="b",
+            status=TodoStatus.in_progress,
+            depends_on=["1"],
+            acceptance_criteria=["输出文件存在"],
+        ),
     ]
-    e = PlanUpdateEvent(session_id=_sid(), todos=todos)
+    e = PlanUpdateEvent(session_id=_sid(), plan_id="p1", plan_version=2, todos=todos)
     out = e.model_dump(mode="json")
     assert len(out["todos"]) == 2
+    assert out["plan_id"] == "p1"
+    assert out["plan_version"] == 2
+    assert out["todos"][1]["depends_on"] == ["1"]
 
 
 def test_status_phase_enum():

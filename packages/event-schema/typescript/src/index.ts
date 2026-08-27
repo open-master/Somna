@@ -45,6 +45,15 @@ export const todoItemSchema = z.object({
   text: z.string(),
   status: todoStatusSchema,
   parent_id: z.string().nullable().optional(),
+  depends_on: z.array(z.string()).default([]),
+  tool_hint: z.string().nullable().optional(),
+  acceptance_criteria: z.array(z.string()).default([]),
+  expected_outputs: z.array(z.string()).default([]),
+  evidence_paths: z.array(z.string()).default([]),
+  tool_call_count: z.number().int().nonnegative().default(0),
+  attempts: z.number().int().nonnegative().default(0),
+  completion_reason: z.string().nullable().optional(),
+  failure_reason: z.string().nullable().optional(),
 });
 export type TodoItem = z.infer<typeof todoItemSchema>;
 
@@ -133,6 +142,9 @@ export const artifactSchema = z
 export const planUpdateSchema = z
   .object({
     type: z.literal("plan.update"),
+    plan_id: z.string().nullable().optional(),
+    plan_version: z.number().int().positive().default(1),
+    previous_plan_id: z.string().nullable().optional(),
     todos: z.array(todoItemSchema),
     ...baseFields,
   })

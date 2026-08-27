@@ -64,9 +64,7 @@ def frame_for_blank_user_message() -> dict[str, Any]:
     """Deterministic framing when there is no text intent (no LLM)."""
     out = dict(DEFAULT_TASK_FRAME)
     out["needs_clarification"] = True
-    out["clarification_questions"] = _coerce_clarification_questions(
-        ["请用一句话描述你想完成的任务或问题。"]
-    )
+    out["clarification_questions"] = _coerce_clarification_questions(["请用一句话描述你想完成的任务或问题。"])
     out["should_invoke_planner"] = False
     out["task_mode"] = "direct_answer"
     out["deliverable_type"] = "unspecified"
@@ -169,14 +167,16 @@ def _parse_frame_json(raw: str) -> dict[str, Any] | None:
     if not raw:
         return None
     try:
-        return json.loads(raw)
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else None
     except json.JSONDecodeError:
         pass
     m = _JSON_BLOCK_RE.search(raw)
     if not m:
         return None
     try:
-        return json.loads(m.group(0))
+        parsed = json.loads(m.group(0))
+        return parsed if isinstance(parsed, dict) else None
     except json.JSONDecodeError:
         return None
 
@@ -188,15 +188,14 @@ def normalize_task_frame(parsed: dict[str, Any] | None) -> dict[str, Any]:
         return out
 
     out["needs_clarification"] = bool(parsed.get("needs_clarification"))
-    out["clarification_questions"] = _coerce_clarification_questions(
-        parsed.get("clarification_questions")
-    )
+    out["clarification_questions"] = _coerce_clarification_questions(parsed.get("clarification_questions"))
     out["task_mode"] = normalize_task_mode(parsed.get("task_mode") or out["task_mode"])
     out["effort_level"] = normalize_effort_level(parsed.get("effort_level") or out["effort_level"])
     _al = str(parsed.get("autonomy_level") or "").strip().lower()
     if _al in ("low", "medium", "high"):
         out["autonomy_level"] = _al
-    out["risk_level"] = str(parsed.get("risk_level") or out["risk_level"]).strip() or out["risk_level"]
+    risk = str(parsed.get("risk_level") or out["risk_level"]).strip().lower()
+    out["risk_level"] = risk if risk in ("low", "medium", "high") else "low"
     out["deliverable_type"] = normalize_deliverable_type(
         parsed.get("deliverable_type") or out["deliverable_type"]
     )
@@ -215,6 +214,73 @@ def normalize_task_frame(parsed: dict[str, Any] | None) -> dict[str, Any]:
             ["请补充关键约束后再继续（例如目标、范围、交付形式）。"]
         )
     return out
+
+
+_EXPLICIT_CONFIRM_RE = re.compile(
+    r"(?:确认(?:继续|执行|上述操作)?|同意(?:继续|执行)?|继续执行|授权(?:继续|执行)?|我接受(?:风险)?|可以执行)"
+    r"[。.!！]?",
+    re.IGNORECASE,
+)
+_EXPLICIT_CANCEL_RE = re.compile(
+    r"(?:取消执行|不要执行|停止执行|不授权|取消)[。.!！]?",
+    re.IGNORECASE,
+)
+
+
+def _confirmation_answer_text(user_message: str) -> str:
+    text = (user_message or "")[:500].strip()
+    answers = re.findall(r"回答[：:]\s*([^\n]+)", text)
+    return (answers[-1] if answers else text).strip()
+
+
+def _enforce_high_risk_confirmation(
+    frame: dict[str, Any],
+    *,
+    previous_frame: dict[str, Any] | None,
+    user_message: str,
+) -> None:
+    """High-risk execution needs a deterministic confirmation, not only an LLM suggestion."""
+    prior = previous_frame if isinstance(previous_frame, dict) else {}
+    prior_was_high_risk_question = str(prior.get("risk_level") or "") == "high" and bool(
+        prior.get("needs_clarification")
+    )
+    answer = _confirmation_answer_text(user_message)
+    if prior_was_high_risk_question and _EXPLICIT_CANCEL_RE.fullmatch(answer):
+        frame["needs_clarification"] = False
+        frame["should_invoke_planner"] = False
+        frame["task_mode"] = "direct_answer"
+        frame["deliverable_type"] = "chat_answer"
+        frame["risk_level"] = "low"
+        frame["reasoning_summary"] = "用户取消了高风险操作"
+        frame["clarification_questions"] = []
+        return
+    if prior_was_high_risk_question and _EXPLICIT_CONFIRM_RE.fullmatch(answer):
+        # A short confirmation is an answer to the previous card, not a new
+        # low-risk chat request. Preserve the prior operation frame and route
+        # it back through planning/execution exactly once.
+        for key in ("task_mode", "deliverable_type", "allowed_action_scope", "success_criteria"):
+            if prior.get(key) not in (None, "", []):
+                frame[key] = prior[key]
+        frame["needs_clarification"] = False
+        frame["should_invoke_planner"] = True
+        frame["risk_level"] = "high"
+        frame["reasoning_summary"] = "用户已明确确认高风险操作"
+        frame["clarification_questions"] = []
+        return
+    if str(frame.get("risk_level") or "low") != "high":
+        return
+    frame["needs_clarification"] = True
+    frame["should_invoke_planner"] = False
+    frame["clarification_questions"] = _coerce_clarification_questions(
+        [
+            {
+                "id": "high_risk_confirmation",
+                "prompt": "该任务被识别为高风险操作。是否确认在上述目标和授权范围内继续？",
+                "options": ["确认继续", "取消执行"],
+                "allow_custom": True,
+            }
+        ]
+    )
 
 
 def _maybe_coerce_simple_definitional_qa(user_message: str, frame: dict[str, Any]) -> None:
@@ -326,9 +392,7 @@ async def _authorize_frame_billing(state: SessionState, frame: dict[str, Any]) -
 
 def deliverable_type_implies_artifact(deliverable_type: str) -> bool:
     dt = (deliverable_type or "").strip().lower()
-    if dt in ("", "unspecified", "chat_answer", "direct_answer"):
-        return False
-    return True
+    return dt not in ("", "unspecified", "chat_answer", "direct_answer")
 
 
 _GENERATOR_CLIP_PREFIXES = ("wan_t2v_", "wan_i2v_", "wan_r2v_", "wan_video_edit_")
@@ -482,7 +546,11 @@ async def task_frame_node(state: SessionState) -> SessionState:
         await _emit_task_frame_ui(session_id, run_id, frame_b)
         path = await persist_task_frame_pointer(state, frame_b)
         billing_error = await _authorize_frame_billing(state, frame_b)
-        return {"task_frame": frame_b, "task_frame_path": path, **({"error": billing_error} if billing_error else {})}
+        return {
+            "task_frame": frame_b,
+            "task_frame_path": path,
+            **({"error": billing_error} if billing_error else {}),
+        }
 
     if state.get("resume_execute"):
         frame = dict(state.get("task_frame") or DEFAULT_TASK_FRAME)
@@ -519,7 +587,11 @@ async def task_frame_node(state: SessionState) -> SessionState:
         await _emit_task_frame_ui(session_id, run_id, tf)
         path = await persist_task_frame_pointer(state, tf)
         billing_error = await _authorize_frame_billing(state, tf)
-        return {"task_frame": tf, "task_frame_path": path, **({"error": billing_error} if billing_error else {})}
+        return {
+            "task_frame": tf,
+            "task_frame_path": path,
+            **({"error": billing_error} if billing_error else {}),
+        }
 
     settings = get_settings()
     model = (state.get("task_frame_model") or settings.agent_default_taskframe).strip()
@@ -529,10 +601,19 @@ async def task_frame_node(state: SessionState) -> SessionState:
         log.warning("graph.task_frame.template_missing")
         frame = normalize_task_frame(None)
         _maybe_coerce_simple_definitional_qa(user_message, frame)
+        _enforce_high_risk_confirmation(
+            frame,
+            previous_frame=state.get("task_frame") if isinstance(state.get("task_frame"), dict) else None,
+            user_message=user_message,
+        )
         await _emit_task_frame_ui(session_id, run_id, frame)
         path = await persist_task_frame_pointer(state, frame)
         billing_error = await _authorize_frame_billing(state, frame)
-        return {"task_frame": frame, "task_frame_path": path, **({"error": billing_error} if billing_error else {})}
+        return {
+            "task_frame": frame,
+            "task_frame_path": path,
+            **({"error": billing_error} if billing_error else {}),
+        }
 
     prior = _prior_messages_for_framing(list(state.get("messages") or []))
     conv_ctx = format_conversation_context_for_framing(prior)
@@ -574,6 +655,11 @@ async def task_frame_node(state: SessionState) -> SessionState:
         frame["reasoning_summary"] = f"framing_llm_error: {exc}"
 
     _maybe_coerce_simple_definitional_qa(user_message, frame)
+    _enforce_high_risk_confirmation(
+        frame,
+        previous_frame=state.get("task_frame") if isinstance(state.get("task_frame"), dict) else None,
+        user_message=user_message,
+    )
     if state.get("user_id") and (usage_input or usage_output):
         await emit_model_usage(
             session_id=session_id,
@@ -594,4 +680,8 @@ async def task_frame_node(state: SessionState) -> SessionState:
     await _emit_task_frame_ui(session_id, run_id, frame)
     path = await persist_task_frame_pointer(state, frame)
     billing_error = await _authorize_frame_billing(state, frame)
-    return {"task_frame": frame, "task_frame_path": path, **({"error": billing_error} if billing_error else {})}
+    return {
+        "task_frame": frame,
+        "task_frame_path": path,
+        **({"error": billing_error} if billing_error else {}),
+    }

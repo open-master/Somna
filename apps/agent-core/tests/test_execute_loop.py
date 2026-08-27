@@ -7,11 +7,11 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any
-from uuid import uuid4
 from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from app.graph.nodes import execute as exe
 from app.tools.client import ToolManifest, ToolResult
@@ -23,6 +23,17 @@ class _SettingsStub:
     agent_default_executor = "agent-executor"
     agent_default_coder = "agent-coder"
     agent_default_skill = "agent-skill"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_execute_unit_side_effects():
+    """Loop tests must not require a live DB or MCP artifact store."""
+    with (
+        patch.object(exe, "emit_model_usage", AsyncMock()) as usage,
+        patch.object(exe, "sync_plan_artifact", AsyncMock()),
+        patch.object(exe, "_append_executor_progress", AsyncMock()),
+    ):
+        yield usage
 
 
 # --- helpers ---
@@ -50,6 +61,18 @@ def _pending(id_: str, name: str, args_json: str):
     return pc
 
 
+def _shell_manifest_cache() -> dict[str, ToolManifest]:
+    return {
+        "shell": ToolManifest(
+            name="shell",
+            description="Run a shell command",
+            input_schema={"type": "object", "properties": {"cmd": {"type": "string"}}},
+            category="os",
+            mutates=True,
+        )
+    }
+
+
 # --- tests ---
 
 
@@ -74,6 +97,81 @@ def test_has_execution_progress_requires_tool_activity():
     assert exe._has_execution_progress(exe._ExecutionProof(successful_tool_calls=1)) is True
     assert exe._has_execution_progress(exe._ExecutionProof(failed_tool_calls=1)) is True
     assert exe._has_execution_progress(exe._ExecutionProof(written_paths={"a.html"})) is True
+
+
+def test_task_frame_scope_filters_tools_and_restricts_filesystem_actions():
+    manifests = [
+        ToolManifest(
+            name="shell", description="", input_schema={"type": "object", "properties": {}}, category="os"
+        ),
+        ToolManifest(
+            name="filesystem",
+            description="",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["read", "list", "stat", "write", "append"]}
+                },
+            },
+            category="file",
+        ),
+        ToolManifest(
+            name="search", description="", input_schema={"type": "object", "properties": {}}, category="net"
+        ),
+    ]
+    allowed = exe.manifests_allowed_by_task_frame(
+        manifests, {"allowed_action_scope": ["file_read", "search"]}
+    )
+    assert [manifest.name for manifest in allowed] == ["filesystem", "search"]
+    action = allowed[0].input_schema["properties"]["action"]
+    assert action["enum"] == ["read", "list", "stat"]
+
+
+def test_active_todo_blocks_future_step_tool():
+    plan = {
+        "todos": [
+            {"id": "1", "text": "编写并保存旁白脚本", "status": "in_progress"},
+            {"id": "2", "text": "生成旁白音频", "status": "pending"},
+        ]
+    }
+    assert exe.active_todo_allows_tool(plan, "filesystem") is True
+    assert exe.active_todo_allows_tool(plan, "minimax_tts") is False
+
+
+def test_active_image_todo_allows_image_generator_only():
+    plan = {"todos": [{"id": "1", "text": "生成 2 张配图", "status": "in_progress"}]}
+    assert exe.active_todo_allows_tool(plan, "wan_text2image") is True
+    assert exe.active_todo_allows_tool(plan, "wan_t2v") is False
+
+
+def test_active_todo_honors_explicit_tool_hint():
+    plan = {
+        "todos": [
+            {
+                "id": "1",
+                "text": "完成当前素材步骤",
+                "status": "in_progress",
+                "tool_hint": "wan_text2image",
+            }
+        ]
+    }
+    assert exe.active_todo_allows_tool(plan, "wan_text2image") is True
+
+
+def test_replace_active_todo_instruction_removes_stale_step():
+    messages: list[Any] = []
+    first = {"todos": [{"id": "1", "text": "第一步", "status": "in_progress"}]}
+    second = {"todos": [{"id": "2", "text": "第二步", "status": "in_progress"}]}
+    exe._replace_active_todo_instruction(messages, first)
+    exe._replace_active_todo_instruction(messages, second)
+    scheduler_messages = [
+        message
+        for message in messages
+        if isinstance(message, SystemMessage) and str(message.content).startswith(exe._ACTIVE_TODO_HEADER)
+    ]
+    assert len(scheduler_messages) == 1
+    assert "第二步" in str(scheduler_messages[0].content)
+    assert "第一步" not in str(scheduler_messages[0].content)
 
 
 def test_executor_extra_context_reinjects_plan_and_compact_memory():
@@ -136,7 +234,7 @@ def test_proof_rehydration_avoids_false_delivery_missing_after_reflect():
 
 
 @pytest.mark.asyncio
-async def test_text_only_turn_finishes_without_tool_calls():
+async def test_text_only_turn_finishes_without_tool_calls(_isolate_execute_unit_side_effects):
     sid = uuid4()
     stream = _StreamStub([("hello world", [], (10, 5))])
 
@@ -147,7 +245,9 @@ async def test_text_only_turn_finishes_without_tool_calls():
 
     with (
         patch.object(exe, "_stream_one_turn", stream),
-        patch.object(exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))),
+        patch.object(
+            exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))
+        ),
         patch.object(exe, "emit", _emit),
         patch.object(exe, "get_async_openai", return_value=object()),
         patch.object(exe, "tool_manifest_cache", return_value={}),
@@ -171,8 +271,7 @@ async def test_text_only_turn_finishes_without_tool_calls():
     assert state["total_agent_turns"] == 1
     assert state["total_execution_tokens"] == 15
     assert stream.calls == 1
-    # token.usage fired
-    assert any(type(e).__name__ == "TokenUsageEvent" for e in emitted)
+    _isolate_execute_unit_side_effects.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -231,9 +330,7 @@ async def test_execute_exception_with_proof_does_not_set_terminal_error():
             self.calls += 1
             raise RuntimeError("hub down")
 
-    stream = _BoomAfterTools(
-        [("", [_pending("cid_1", "shell", '{"cmd":"echo hi"}')], (8, 4))]
-    )
+    stream = _BoomAfterTools([("", [_pending("cid_1", "shell", '{"cmd":"echo hi"}')], (8, 4))])
     mcp = AsyncMock()
     mcp.invoke = AsyncMock(
         return_value=ToolResult(ok=True, preview="hi\n", output={"exit_code": 0, "cmd": "echo hi"})
@@ -241,11 +338,13 @@ async def test_execute_exception_with_proof_does_not_set_terminal_error():
 
     with (
         patch.object(exe, "_stream_one_turn", stream),
-        patch.object(exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))),
+        patch.object(
+            exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))
+        ),
         patch.object(exe, "emit", AsyncMock()),
         patch.object(exe, "emit_model_usage", AsyncMock()),
         patch.object(exe, "get_async_openai", return_value=object()),
-        patch.object(exe, "tool_manifest_cache", return_value={}),
+        patch.object(exe, "tool_manifest_cache", return_value=_shell_manifest_cache()),
         patch.object(exe, "build_system_prompt", return_value="sys"),
         patch.object(exe, "get_client", return_value=mcp),
         patch.object(exe, "get_settings", return_value=_SettingsStub()),
@@ -280,7 +379,9 @@ async def test_execute_injects_retrieved_memories_into_system_prompt():
 
     with (
         patch.object(exe, "_stream_one_turn", stream),
-        patch.object(exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))),
+        patch.object(
+            exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))
+        ),
         patch.object(exe, "emit", AsyncMock()),
         patch.object(exe, "get_async_openai", return_value=object()),
         patch.object(exe, "tool_manifest_cache", return_value={}),
@@ -332,10 +433,12 @@ async def test_tool_call_turn_invokes_mcp_and_loops_again():
 
     with (
         patch.object(exe, "_stream_one_turn", stream),
-        patch.object(exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))),
+        patch.object(
+            exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))
+        ),
         patch.object(exe, "emit", _emit),
         patch.object(exe, "get_async_openai", return_value=object()),
-        patch.object(exe, "tool_manifest_cache", return_value={}),
+        patch.object(exe, "tool_manifest_cache", return_value=_shell_manifest_cache()),
         patch.object(exe, "build_system_prompt", return_value="sys"),
         patch.object(exe, "get_client", return_value=mcp),
         patch.object(exe, "get_settings", return_value=_SettingsStub()),
@@ -391,10 +494,12 @@ async def test_max_turns_short_circuits():
 
     with (
         patch.object(exe, "_stream_one_turn", _stream),
-        patch.object(exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))),
+        patch.object(
+            exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))
+        ),
         patch.object(exe, "emit", _emit),
         patch.object(exe, "get_async_openai", return_value=object()),
-        patch.object(exe, "tool_manifest_cache", return_value={}),
+        patch.object(exe, "tool_manifest_cache", return_value=_shell_manifest_cache()),
         patch.object(exe, "build_system_prompt", return_value="sys"),
         patch.object(exe, "get_client", return_value=mcp),
         patch.object(exe, "get_settings", return_value=_S()),
@@ -459,7 +564,9 @@ async def test_execute_rejects_fake_done_for_artifact_goal_without_tool_proof():
 
     with (
         patch.object(exe, "_stream_one_turn", stream),
-        patch.object(exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))),
+        patch.object(
+            exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))
+        ),
         patch.object(exe, "emit", AsyncMock()),
         patch.object(exe, "get_async_openai", return_value=object()),
         patch.object(exe, "tool_manifest_cache", return_value={}),
@@ -501,7 +608,9 @@ async def test_execute_forces_shell_tool_after_missing_delivery_proof():
     )
 
     manifests = {
-        "shell": ToolManifest(name="shell", description="", input_schema={"type": "object", "properties": {}}, mutates=True),
+        "shell": ToolManifest(
+            name="shell", description="", input_schema={"type": "object", "properties": {}}, mutates=True
+        ),
         "filesystem": ToolManifest(
             name="filesystem", description="", input_schema={"type": "object", "properties": {}}, mutates=True
         ),
@@ -509,7 +618,9 @@ async def test_execute_forces_shell_tool_after_missing_delivery_proof():
 
     with (
         patch.object(exe, "_stream_one_turn", stream),
-        patch.object(exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))),
+        patch.object(
+            exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))
+        ),
         patch.object(exe, "emit", AsyncMock()),
         patch.object(exe, "get_async_openai", return_value=object()),
         patch.object(exe, "tool_manifest_cache", return_value=manifests),
@@ -586,12 +697,16 @@ async def test_execute_auto_recovers_missing_python_dependency():
     )
 
     manifests = {
-        "shell": ToolManifest(name="shell", description="", input_schema={"type": "object", "properties": {}}, mutates=True),
+        "shell": ToolManifest(
+            name="shell", description="", input_schema={"type": "object", "properties": {}}, mutates=True
+        ),
     }
 
     with (
         patch.object(exe, "_stream_one_turn", stream),
-        patch.object(exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))),
+        patch.object(
+            exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))
+        ),
         patch.object(exe, "emit", _emit),
         patch.object(exe, "get_async_openai", return_value=object()),
         patch.object(exe, "tool_manifest_cache", return_value=manifests),
@@ -658,10 +773,12 @@ async def test_execute_auto_recovers_missing_node_dependency():
 
     with (
         patch.object(exe, "_stream_one_turn", stream),
-        patch.object(exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))),
+        patch.object(
+            exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))
+        ),
         patch.object(exe, "emit", AsyncMock()),
         patch.object(exe, "get_async_openai", return_value=object()),
-        patch.object(exe, "tool_manifest_cache", return_value={}),
+        patch.object(exe, "tool_manifest_cache", return_value=_shell_manifest_cache()),
         patch.object(exe, "build_system_prompt", return_value="sys"),
         patch.object(exe, "get_client", return_value=mcp),
         patch.object(exe, "get_settings", return_value=_SettingsStub()),
@@ -711,7 +828,11 @@ async def test_execute_auto_recovers_missing_frontend_binary():
             ToolResult(
                 ok=True,
                 preview="installed dependencies",
-                output={"exit_code": 0, "stdout": "installed", "cmd": "if [ -f package.json ]; then npm install; else exit 1; fi"},
+                output={
+                    "exit_code": 0,
+                    "stdout": "installed",
+                    "cmd": "if [ -f package.json ]; then npm install; else exit 1; fi",
+                },
             ),
             ToolResult(
                 ok=True,
@@ -723,10 +844,12 @@ async def test_execute_auto_recovers_missing_frontend_binary():
 
     with (
         patch.object(exe, "_stream_one_turn", stream),
-        patch.object(exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))),
+        patch.object(
+            exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))
+        ),
         patch.object(exe, "emit", AsyncMock()),
         patch.object(exe, "get_async_openai", return_value=object()),
-        patch.object(exe, "tool_manifest_cache", return_value={}),
+        patch.object(exe, "tool_manifest_cache", return_value=_shell_manifest_cache()),
         patch.object(exe, "build_system_prompt", return_value="sys"),
         patch.object(exe, "get_client", return_value=mcp),
         patch.object(exe, "get_settings", return_value=_SettingsStub()),
@@ -1033,6 +1156,12 @@ async def test_emit_artifact_events_emits_artifact_and_screenshot():
 async def test_invoke_tool_visual_critique_injects_default_model():
     mcp = AsyncMock()
     mcp.invoke = AsyncMock(return_value=ToolResult(ok=True, preview="ok"))
+    manifest = ToolManifest(
+        name="visual_critique",
+        description="",
+        input_schema={"type": "object", "properties": {}},
+        category="media",
+    )
     with patch.object(exe, "emit", AsyncMock()):
         await exe._invoke_tool_with_events(
             mcp=mcp,
@@ -1043,7 +1172,7 @@ async def test_invoke_tool_visual_critique_injects_default_model():
             session_id=uuid4(),
             run_id="r1",
             working_messages=[],
-            manifest=None,
+            manifest=manifest,
             mcp_tool_models={"visual_critique": "qwen3-vl-flash"},
         )
     assert mcp.invoke.await_count == 1
@@ -1055,6 +1184,12 @@ async def test_invoke_tool_visual_critique_injects_default_model():
 async def test_invoke_tool_visual_critique_respects_explicit_model():
     mcp = AsyncMock()
     mcp.invoke = AsyncMock(return_value=ToolResult(ok=True, preview="ok"))
+    manifest = ToolManifest(
+        name="visual_critique",
+        description="",
+        input_schema={"type": "object", "properties": {}},
+        category="media",
+    )
     with patch.object(exe, "emit", AsyncMock()):
         await exe._invoke_tool_with_events(
             mcp=mcp,
@@ -1065,7 +1200,7 @@ async def test_invoke_tool_visual_critique_respects_explicit_model():
             session_id=uuid4(),
             run_id="r1",
             working_messages=[],
-            manifest=None,
+            manifest=manifest,
             mcp_tool_models={"visual_critique": "qwen3-vl-flash"},
         )
     assert mcp.invoke.await_args.kwargs["args"]["model"] == "custom-vl"
@@ -1073,8 +1208,12 @@ async def test_invoke_tool_visual_critique_respects_explicit_model():
 
 def test_thin_written_file_reason_rejects_empty_or_tiny_deliverables():
     assert exe._thin_written_file_reason(path="out.png", exists=False, is_file=False, size=0)
-    assert "过小或为空" in (exe._thin_written_file_reason(path="out.png", exists=True, is_file=True, size=0) or "")
-    assert "过小或为空" in (exe._thin_written_file_reason(path="index.html", exists=True, is_file=True, size=8) or "")
+    assert "过小或为空" in (
+        exe._thin_written_file_reason(path="out.png", exists=True, is_file=True, size=0) or ""
+    )
+    assert "过小或为空" in (
+        exe._thin_written_file_reason(path="index.html", exists=True, is_file=True, size=8) or ""
+    )
     assert exe._thin_written_file_reason(path="index.html", exists=True, is_file=True, size=128) is None
     assert exe._thin_written_file_reason(path="src", exists=True, is_file=False, size=0) is None
 
@@ -1110,7 +1249,9 @@ def test_is_retryable_shell_failure_timeout_and_exit_code():
 async def test_empty_written_delivery_reason_rejects_zero_byte_html():
     mcp = AsyncMock()
     mcp.invoke = AsyncMock(
-        return_value=ToolResult(ok=True, output={"is_file": True, "is_dir": False, "size": 0, "path": "index.html"})
+        return_value=ToolResult(
+            ok=True, output={"is_file": True, "is_dir": False, "size": 0, "path": "index.html"}
+        )
     )
     proof = exe._ExecutionProof(successful_tool_calls=1, written_paths={"index.html"})
     reason = await exe._empty_written_delivery_reason(
@@ -1145,11 +1286,13 @@ async def test_execute_blocks_stop_after_unrecovered_shell_failure():
 
     with (
         patch.object(exe, "_stream_one_turn", stream),
-        patch.object(exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))),
+        patch.object(
+            exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))
+        ),
         patch.object(exe, "emit", AsyncMock()),
         patch.object(exe, "emit_model_usage", AsyncMock()),
         patch.object(exe, "get_async_openai", return_value=object()),
-        patch.object(exe, "tool_manifest_cache", return_value={}),
+        patch.object(exe, "tool_manifest_cache", return_value=_shell_manifest_cache()),
         patch.object(exe, "build_system_prompt", return_value="sys"),
         patch.object(exe, "get_client", return_value=mcp),
         patch.object(exe, "get_settings", return_value=_SettingsStub()),
@@ -1185,18 +1328,22 @@ async def test_execute_once_retry_recovers_timeout_and_allows_stop():
     mcp = AsyncMock()
     mcp.invoke = AsyncMock(
         side_effect=[
-            ToolResult(ok=False, error="timeout", preview="timed out", output={"timed_out": True, "cmd": "echo hi"}),
+            ToolResult(
+                ok=False, error="timeout", preview="timed out", output={"timed_out": True, "cmd": "echo hi"}
+            ),
             ToolResult(ok=True, preview="hi\n", output={"exit_code": 0, "cmd": "echo hi"}),
         ]
     )
 
     with (
         patch.object(exe, "_stream_one_turn", stream),
-        patch.object(exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))),
+        patch.object(
+            exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))
+        ),
         patch.object(exe, "emit", AsyncMock()),
         patch.object(exe, "emit_model_usage", AsyncMock()),
         patch.object(exe, "get_async_openai", return_value=object()),
-        patch.object(exe, "tool_manifest_cache", return_value={}),
+        patch.object(exe, "tool_manifest_cache", return_value=_shell_manifest_cache()),
         patch.object(exe, "build_system_prompt", return_value="sys"),
         patch.object(exe, "get_client", return_value=mcp),
         patch.object(exe, "get_settings", return_value=_SettingsStub()),
@@ -1241,16 +1388,16 @@ def test_with_ask_user_manifest_is_always_injected():
 @pytest.mark.asyncio
 async def test_execute_ask_user_pauses_for_confirmation_card():
     sid = uuid4()
-    args = (
-        '{"prompt":"积分不够，怎么继续？","options":["充值后续","改免费方案"]}'
-    )
+    args = '{"prompt":"积分不够，怎么继续？","options":["充值后续","改免费方案"]}'
     stream = _StreamStub([("", [_pending("cid_ask", "ask_user", args)], (4, 2))])
     mcp = AsyncMock()
     mcp.invoke = AsyncMock(side_effect=AssertionError("ask_user must not hit MCP"))
 
     with (
         patch.object(exe, "_stream_one_turn", stream),
-        patch.object(exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))),
+        patch.object(
+            exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))
+        ),
         patch.object(exe, "emit", AsyncMock()),
         patch.object(exe, "emit_model_usage", AsyncMock()),
         patch.object(exe, "get_async_openai", return_value=object()),

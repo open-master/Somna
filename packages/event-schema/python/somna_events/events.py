@@ -56,10 +56,21 @@ class ScreenshotSource(str, Enum):
 # Nested value objects
 # =====================================================================
 class TodoItem(BaseModel):
+    model_config = ConfigDict(use_enum_values=True)
+
     id: str
     text: str
     status: TodoStatus
     parent_id: Optional[str] = None
+    depends_on: List[str] = Field(default_factory=list)
+    tool_hint: Optional[str] = None
+    acceptance_criteria: List[str] = Field(default_factory=list)
+    expected_outputs: List[str] = Field(default_factory=list)
+    evidence_paths: List[str] = Field(default_factory=list)
+    tool_call_count: int = 0
+    attempts: int = 0
+    completion_reason: Optional[str] = None
+    failure_reason: Optional[str] = None
 
 
 class SkillDebugItem(BaseModel):
@@ -67,7 +78,10 @@ class SkillDebugItem(BaseModel):
     name: str
     reason: str = ""
     load_files: List[str] = Field(default_factory=list)
-    forced: bool = Field(default=False, description="True when Task Frame explicitly named this enabled Skill")
+    forced: bool = Field(
+        default=False,
+        description="True when Task Frame explicitly named this enabled Skill",
+    )
 
 
 # =====================================================================
@@ -112,7 +126,9 @@ class ToolResultEvent(BaseEvent):
     id: str
     ok: bool
     preview: str = Field(default="", description="short human-readable preview")
-    full_ref: Optional[str] = Field(default=None, description="S3 key or URL for full content")
+    full_ref: Optional[str] = Field(
+        default=None, description="S3 key or URL for full content"
+    )
     duration_ms: Optional[int] = None
 
 
@@ -135,6 +151,9 @@ class ArtifactEvent(BaseEvent):
 
 class PlanUpdateEvent(BaseEvent):
     type: Literal["plan.update"] = "plan.update"
+    plan_id: Optional[str] = None
+    plan_version: int = 1
+    previous_plan_id: Optional[str] = None
     todos: List[TodoItem]
 
 
@@ -235,4 +254,6 @@ def dump_json_schema(indent: int = 2) -> str:
     from pydantic import TypeAdapter
 
     adapter: TypeAdapter[AgentEvent] = TypeAdapter(AgentEvent)
-    return json.dumps(adapter.json_schema(by_alias=True), indent=indent, ensure_ascii=False)
+    return json.dumps(
+        adapter.json_schema(by_alias=True), indent=indent, ensure_ascii=False
+    )

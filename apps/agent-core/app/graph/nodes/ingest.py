@@ -20,10 +20,12 @@ async def ingest_node(state: SessionState) -> SessionState:
     log.info("graph.ingest", session_id=str(session_id), run_id=run_id)
 
     sandbox_id = state.get("sandbox_id") or str(session_id)
+    sandbox_error: str | None = None
     try:
         await get_client().ensure_sandbox(sandbox_id)
     except Exception as exc:  # noqa: BLE001
         log.warning("graph.ingest.sandbox_failed", error=str(exc), sandbox_id=sandbox_id)
+        sandbox_error = f"沙箱环境初始化失败：{exc}"
 
     await emit(
         StatusEvent(
@@ -35,6 +37,8 @@ async def ingest_node(state: SessionState) -> SessionState:
     )
 
     text = state.get("user_message") or ""
+    if sandbox_error:
+        return {"sandbox_id": sandbox_id, "error": sandbox_error}
     attachments = list(state.get("attachments") or [])
     extra_lines: list[str] = []
     if attachments:
@@ -45,8 +49,7 @@ async def ingest_node(state: SessionState) -> SessionState:
         )
         if ok_rows:
             lines = "\n".join(
-                f"- {row['filename']} → `{row['sandbox_path']}` ({row.get('mime', '')})"
-                for row in ok_rows
+                f"- {row['filename']} → `{row['sandbox_path']}` ({row.get('mime', '')})" for row in ok_rows
             )
             extra_lines.append("\n\n[附件已写入沙箱]\n" + lines)
         for err in err_lines:
@@ -77,9 +80,9 @@ async def ingest_node(state: SessionState) -> SessionState:
         "total_execution_tokens": 0,
         "compact_memory": state.get("compact_memory") if resume_execute else None,
         "execution_summary": state.get("execution_summary") if resume_execute else None,
+        "plan": state.get("plan") if resume_execute else None,
+        "plan_path": state.get("plan_path") if resume_execute else None,
         "resume_execute": resume_execute,
         "resume_goal": resume_goal or None,
     }
-    if resume_execute:
-        payload["plan"] = state.get("plan")
     return payload

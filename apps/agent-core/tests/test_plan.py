@@ -34,6 +34,7 @@ def test_parse_plan_extracts_json_from_prose():
 def test_parse_plan_returns_none_on_garbage():
     assert plan_mod._parse_plan("not json at all") is None
     assert plan_mod._parse_plan("") is None
+    assert plan_mod._parse_plan('[{"text":"not an object root"}]') is None
 
 
 def test_coerce_todos_filters_empty_and_defaults_id():
@@ -46,6 +47,40 @@ def test_coerce_todos_filters_empty_and_defaults_id():
     )
     assert [t.text for t in out] == ["hello", "second"]
     assert out[1].id == "2"  # default = index + 1
+    assert out[1].depends_on == ["1"]
+
+
+def test_coerce_todos_preserves_contract_and_forces_sequential_dependency():
+    out = plan_mod._coerce_todos(
+        [
+            {
+                "id": "a",
+                "text": "生成脚本文件",
+                "tool_hint": "file",
+                "acceptance_criteria": ["脚本文件存在"],
+                "expected_outputs": ["storyboard.md"],
+            },
+            {"id": "b", "text": "生成音频", "depends_on": []},
+        ]
+    )
+    assert out[0].tool_hint == "file"
+    assert out[0].acceptance_criteria == ["脚本文件存在"]
+    assert out[0].expected_outputs == ["storyboard.md"]
+    assert out[1].depends_on == ["a"]
+
+
+def test_coerce_todos_does_not_trust_planner_completion_status():
+    out = plan_mod._coerce_todos(
+        [{"id": "1", "text": "尚未执行的步骤", "status": "done"}],
+        preserve_status=False,
+    )
+    assert out[0].status == TodoStatus.pending
+
+
+def test_previous_plan_evidence_is_scoped_to_current_run():
+    previous = {"run_id": "old-run", "todos": [{"id": "1", "text": "相同步骤", "status": "done"}]}
+    assert plan_mod._previous_plan_for_current_run({"run_id": "new-run", "plan": previous}) is None
+    assert plan_mod._previous_plan_for_current_run({"run_id": "old-run", "plan": previous}) is previous
 
 
 def test_fallback_plan_from_task_frame_uses_success_criteria():
@@ -57,7 +92,8 @@ def test_fallback_plan_from_task_frame_uses_success_criteria():
         },
     )
     texts = [t["text"] for t in plan["todos"]]
-    assert texts[:2] == ["首页可打开", "有图表"]
+    assert texts[0] == "执行任务：做网站"
+    assert plan["todos"][0]["acceptance_criteria"] == ["首页可打开", "有图表"]
     assert plan["fallback_from_task_frame"] is True
     assert any("交付" in t or "文件" in t for t in texts)
 
@@ -86,11 +122,7 @@ async def test_plan_node_happy_path_emits_event_and_state():
         }
     )
     client = SimpleNamespace(
-        chat=SimpleNamespace(
-            completions=SimpleNamespace(
-                create=AsyncMock(return_value=_mk_completion(raw))
-            )
-        )
+        chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock(return_value=_mk_completion(raw))))
     )
 
     emitted: list = []
@@ -124,11 +156,7 @@ async def test_plan_node_injects_retrieved_memories_into_prompt():
     sid = uuid4()
     raw = json.dumps({"reasoning": "参考历史偏好", "todos": [{"id": "1", "text": "继续用 Next.js"}]})
     client = SimpleNamespace(
-        chat=SimpleNamespace(
-            completions=SimpleNamespace(
-                create=AsyncMock(return_value=_mk_completion(raw))
-            )
-        )
+        chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock(return_value=_mk_completion(raw))))
     )
     rendered: dict[str, str] = {}
 
@@ -165,9 +193,7 @@ async def test_plan_node_injects_retrieved_memories_into_prompt():
 async def test_plan_node_llm_failure_falls_back_to_task_frame_todos():
     sid = uuid4()
     client = SimpleNamespace(
-        chat=SimpleNamespace(
-            completions=SimpleNamespace(create=AsyncMock(side_effect=RuntimeError("boom")))
-        )
+        chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock(side_effect=RuntimeError("boom"))))
     )
 
     with (
@@ -192,9 +218,9 @@ async def test_plan_node_llm_failure_falls_back_to_task_frame_todos():
 
     assert out["plan"] is not None
     assert out["plan"]["fallback_from_task_frame"] is True
-    texts = [t["text"] for t in out["plan"]["todos"]]
-    assert "写出可打开的首页" in texts
-    assert "图表能显示房价" in texts
+    criteria = out["plan"]["todos"][0]["acceptance_criteria"]
+    assert "写出可打开的首页" in criteria
+    assert "图表能显示房价" in criteria
 
 
 @pytest.mark.asyncio
@@ -285,7 +311,7 @@ async def test_advance_with_proof_shell_env_check_does_not_complete_todo():
     assert out is not None
     assert out["todos"][0]["status"] == TodoStatus.in_progress
     assert out["todos"][1]["status"] == TodoStatus.pending
-    assert out["todos"][0]["tool_call_count"] == 1
+    assert out["todos"][0].get("tool_call_count", 0) == 0
 
 
 @pytest.mark.asyncio
@@ -318,12 +344,8 @@ async def test_advance_with_proof_requires_artifact_evidence_for_build_todo():
 
     with patch.object(plan_mod, "emit", AsyncMock()):
         mid = await plan_mod.advance_with_proof(plan, session_id=sid, run_id="r1", proof=install_only)
-        verified = await plan_mod.advance_with_proof(
-            mid, session_id=sid, run_id="r1", proof=verified_only
-        )
-        out = await plan_mod.advance_with_proof(
-            verified, session_id=sid, run_id="r1", proof=file_proof
-        )
+        verified = await plan_mod.advance_with_proof(mid, session_id=sid, run_id="r1", proof=verified_only)
+        out = await plan_mod.advance_with_proof(verified, session_id=sid, run_id="r1", proof=file_proof)
 
     assert mid is not None
     assert mid["todos"][0]["status"] == TodoStatus.in_progress
@@ -335,6 +357,42 @@ async def test_advance_with_proof_requires_artifact_evidence_for_build_todo():
     assert out["todos"][0]["status"] == TodoStatus.done
     assert out["todos"][1]["status"] == TodoStatus.in_progress
     assert out["todos"][0]["evidence_paths"] == ["/workspace/app/page.tsx"]
+
+
+@pytest.mark.asyncio
+async def test_advance_with_proof_requires_declared_output_filename():
+    sid = uuid4()
+    plan = {
+        "todos": [
+            {
+                "id": "1",
+                "text": "生成脚本文件",
+                "status": "in_progress",
+                "expected_outputs": ["storyboard.md"],
+            }
+        ]
+    }
+    wrong = SimpleNamespace(
+        successful_tool_calls=1,
+        written_paths={"/workspace/notes.md"},
+        verified_paths=set(),
+        tool_names=["filesystem"],
+    )
+    right = SimpleNamespace(
+        successful_tool_calls=1,
+        written_paths={"/workspace/storyboard.md"},
+        verified_paths=set(),
+        tool_names=["filesystem"],
+    )
+
+    with patch.object(plan_mod, "emit", AsyncMock()):
+        mid = await plan_mod.advance_with_proof(plan, session_id=sid, run_id="r1", proof=wrong)
+        out = await plan_mod.advance_with_proof(mid, session_id=sid, run_id="r1", proof=right)
+
+    assert mid is not None
+    assert mid["todos"][0]["status"] == TodoStatus.in_progress
+    assert out is not None
+    assert out["todos"][0]["status"] == TodoStatus.done
 
 
 @pytest.mark.asyncio
@@ -362,6 +420,39 @@ async def test_advance_with_proof_one_clip_does_not_complete_multi_video_todo():
     assert out["todos"][1]["status"] == TodoStatus.pending
     assert out["todos"][2]["status"] == TodoStatus.pending
     assert out["todos"][0]["evidence_paths"] == ["artifacts/wan_t2v_clip1_abcd1234.mp4"]
+
+
+@pytest.mark.asyncio
+async def test_advance_with_proof_image_generation_needs_requested_count():
+    sid = uuid4()
+    plan = {
+        "todos": [
+            {"id": "1", "text": "生成 2 张配图", "status": "in_progress"},
+            {"id": "2", "text": "制作页面", "status": "pending"},
+        ]
+    }
+    first = SimpleNamespace(
+        successful_tool_calls=1,
+        written_paths={"artifacts/wan_t2i_first.png"},
+        verified_paths=set(),
+        tool_names=["wan_text2image"],
+    )
+    second = SimpleNamespace(
+        successful_tool_calls=1,
+        written_paths={"artifacts/wan_t2i_second.png"},
+        verified_paths=set(),
+        tool_names=["wan_text2image"],
+    )
+
+    with patch.object(plan_mod, "emit", AsyncMock()):
+        mid = await plan_mod.advance_with_proof(plan, session_id=sid, run_id="r1", proof=first)
+        out = await plan_mod.advance_with_proof(mid, session_id=sid, run_id="r1", proof=second)
+
+    assert mid is not None
+    assert mid["todos"][0]["status"] == TodoStatus.in_progress
+    assert out is not None
+    assert out["todos"][0]["status"] == TodoStatus.done
+    assert out["todos"][1]["status"] == TodoStatus.in_progress
 
 
 @pytest.mark.asyncio
@@ -404,7 +495,11 @@ async def test_advance_with_proof_wan_t2v_does_not_complete_mux_or_verify():
     sid = uuid4()
     plan = {
         "todos": [
-            {"id": "5", "text": "将视频片段合成为约 20 秒连续视频，并叠加音频、对齐", "status": "in_progress"},
+            {
+                "id": "5",
+                "text": "将视频片段合成为约 20 秒连续视频，并叠加音频、对齐",
+                "status": "in_progress",
+            },
             {"id": "6", "text": "验证最终视频时长、比例、音画同步，必要时重导出", "status": "pending"},
         ]
     }
@@ -428,7 +523,11 @@ async def test_advance_with_proof_ffmpeg_output_completes_mux_not_verify():
     sid = uuid4()
     plan = {
         "todos": [
-            {"id": "5", "text": "将视频片段合成为约 20 秒连续视频，并叠加音频、对齐", "status": "in_progress"},
+            {
+                "id": "5",
+                "text": "将视频片段合成为约 20 秒连续视频，并叠加音频、对齐",
+                "status": "in_progress",
+            },
             {"id": "6", "text": "验证最终视频时长、比例、音画同步，必要时重导出", "status": "pending"},
         ]
     }
@@ -449,11 +548,15 @@ async def test_advance_with_proof_ffmpeg_output_completes_mux_not_verify():
 
 
 @pytest.mark.asyncio
-async def test_advance_with_proof_tts_finishes_script_and_audio_not_clips():
+async def test_advance_with_proof_does_not_use_tts_to_retroactively_finish_script():
     sid = uuid4()
     plan = {
         "todos": [
-            {"id": "2", "text": "写一个约 20 秒的英文纪录片旁白脚本，并规划 4-5 个分镜与时间轴", "status": "in_progress"},
+            {
+                "id": "2",
+                "text": "写一个约 20 秒的英文纪录片旁白脚本，并规划 4-5 个分镜与时间轴",
+                "status": "in_progress",
+            },
             {"id": "3", "text": "根据脚本生成英文纪录片风格旁白音频", "status": "pending"},
             {"id": "4", "text": "按分镜生成 4-5 条横屏 16:9 原创视频片段", "status": "pending"},
         ]
@@ -469,6 +572,106 @@ async def test_advance_with_proof_tts_finishes_script_and_audio_not_clips():
         out = await plan_mod.advance_with_proof(plan, session_id=sid, run_id="r1", proof=tts)
 
     assert out is not None
+    assert out["todos"][0]["status"] == TodoStatus.in_progress
+    assert out["todos"][1]["status"] == TodoStatus.pending
+    assert out["todos"][2]["status"] == TodoStatus.pending
+    assert out["todos"][0].get("evidence_paths") in (None, [])
+
+
+@pytest.mark.asyncio
+async def test_response_text_completes_only_current_text_content_step():
+    sid = uuid4()
+    plan = {
+        "todos": [
+            {"id": "1", "text": "撰写旁白脚本与分镜时间轴", "status": "in_progress"},
+            {"id": "2", "text": "生成旁白音频", "status": "pending"},
+        ]
+    }
+    response = "第一镜：清晨的城市逐渐苏醒。旁白介绍故事背景；第二镜切换到主人公，时间轴推进到十秒。"
+    with patch.object(plan_mod, "emit", AsyncMock()):
+        out = await plan_mod.advance_with_response_text(
+            plan,
+            session_id=sid,
+            run_id="r1",
+            response_text=response,
+        )
     assert out["todos"][0]["status"] == TodoStatus.done
-    assert out["todos"][1]["status"] == TodoStatus.done
-    assert out["todos"][2]["status"] == TodoStatus.in_progress
+    assert out["todos"][1]["status"] == TodoStatus.in_progress
+    assert "当前回复" in out["todos"][0]["completion_reason"]
+
+
+@pytest.mark.asyncio
+async def test_response_text_does_not_accept_a_promise_as_completion():
+    sid = uuid4()
+    plan = {"todos": [{"id": "1", "text": "整理最终答案", "status": "in_progress"}]}
+    with patch.object(plan_mod, "emit", AsyncMock()):
+        out = await plan_mod.advance_with_response_text(
+            plan,
+            session_id=sid,
+            run_id="r1",
+            response_text="我将在接下来整理并生成一份完整答案，请稍候等待处理完成。",
+        )
+    assert out["todos"][0]["status"] == TodoStatus.in_progress
+
+
+@pytest.mark.asyncio
+async def test_failed_step_is_retried_and_does_not_start_dependent_step():
+    sid = uuid4()
+    plan = {
+        "todos": [
+            {"id": "1", "text": "生成脚本文件", "status": "failed", "depends_on": []},
+            {"id": "2", "text": "生成音频", "status": "pending", "depends_on": ["1"]},
+        ]
+    }
+    with patch.object(plan_mod, "emit", AsyncMock()):
+        out = await plan_mod.mark_progress(
+            plan,
+            session_id=sid,
+            run_id="r1",
+            start_next=True,
+            retry_failed=True,
+        )
+    assert out["todos"][0]["status"] == TodoStatus.in_progress
+    assert out["todos"][1]["status"] == TodoStatus.pending
+    assert out["todos"][0]["attempts"] == 1
+
+
+@pytest.mark.asyncio
+async def test_close_unfinished_records_failed_and_skipped_reasons():
+    sid = uuid4()
+    plan = {
+        "todos": [
+            {"id": "1", "text": "当前步骤", "status": "in_progress"},
+            {"id": "2", "text": "后续步骤", "status": "pending"},
+        ]
+    }
+    with patch.object(plan_mod, "emit", AsyncMock()):
+        out = await plan_mod.mark_progress(
+            plan,
+            session_id=sid,
+            run_id="r1",
+            close_unfinished=True,
+            failure_reason="预算已用尽",
+        )
+    assert out["todos"][0]["status"] == TodoStatus.failed
+    assert out["todos"][1]["status"] == TodoStatus.skipped
+    assert out["todos"][0]["failure_reason"] == "预算已用尽"
+    assert out["todos"][1]["failure_reason"] == "预算已用尽"
+
+
+def test_replan_carries_exact_completed_todo_evidence():
+    previous = {
+        "todos": [
+            {
+                "id": "old-1",
+                "text": "生成脚本文件",
+                "status": "done",
+                "evidence_paths": ["artifacts/storyboard.md"],
+                "completion_reason": "文件已写入",
+            }
+        ]
+    }
+    todos = plan_mod._coerce_todos([{"id": "new-1", "text": "生成脚本文件"}])
+    reconciled = plan_mod._reconcile_completed_todos(todos, previous)
+    assert reconciled[0].status == TodoStatus.done
+    assert reconciled[0].evidence_paths == ["artifacts/storyboard.md"]

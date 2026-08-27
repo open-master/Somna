@@ -46,7 +46,12 @@ from app.events.emitter import emit
 from app.graph.autonomy_policy import delivery_validation_policy, effective_autonomy_level
 from app.graph.compact import maybe_compact
 from app.graph.model_policy import pick_executor_turn_model
-from app.graph.nodes.plan import advance_with_proof, mark_progress
+from app.graph.nodes.plan import (
+    _todo_intent,
+    advance_with_proof,
+    advance_with_response_text,
+    mark_progress,
+)
 from app.graph.nodes.task_frame import (
     _coerce_clarification_questions,
     _emit_task_frame_ui,
@@ -138,6 +143,49 @@ def effective_mcp_tool_models_map(state: SessionState) -> dict[str, str]:
     return m
 
 
+def manifests_allowed_by_task_frame(
+    manifests: list[ToolManifest], task_frame: dict[str, Any] | None
+) -> list[ToolManifest]:
+    """Apply Task Frame action scope as an executable allow-list."""
+    raw = (task_frame or {}).get("allowed_action_scope") if isinstance(task_frame, dict) else None
+    allowed = {str(item).strip().lower() for item in raw or [] if str(item).strip()}
+    if not allowed:
+        return manifests
+
+    out: list[ToolManifest] = []
+    for manifest in manifests:
+        name = manifest.name
+        category = (manifest.category or "").lower()
+        if name == "shell":
+            permitted = "shell" in allowed
+        elif name == "filesystem" or category == "file":
+            permitted = bool({"file_read", "file_write"} & allowed)
+        elif name == "search" or category == "net":
+            permitted = "search" in allowed
+        elif category == "media":
+            permitted = "media" in allowed
+        elif category == "browser":
+            permitted = "browser_read" in allowed
+        else:
+            permitted = False
+        if not permitted:
+            continue
+
+        if name == "filesystem" and "file_write" not in allowed:
+            restricted = manifest.model_copy(deep=True)
+            schema = dict(restricted.input_schema or {})
+            properties = dict(schema.get("properties") or {})
+            action = dict(properties.get("action") or {})
+            action["enum"] = ["read", "list", "stat"]
+            properties["action"] = action
+            schema["properties"] = properties
+            restricted.input_schema = schema
+            out.append(restricted)
+        else:
+            out.append(manifest)
+    return out
+
+
 @dataclass
 class _ExecutionProof:
     successful_tool_calls: int = 0
@@ -151,6 +199,7 @@ class _ExecutionProof:
     failure_notes: list[str] = field(default_factory=list)
     user_questions: list[dict[str, Any]] = field(default_factory=list)
     tool_names: list[str] = field(default_factory=list)
+    operations: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -201,6 +250,10 @@ def _merge_proof(base: _ExecutionProof, delta: _ExecutionProof) -> _ExecutionPro
             base.user_questions = base.user_questions[:4]
     if delta.tool_names:
         base.tool_names.extend(delta.tool_names)
+    if delta.operations:
+        base.operations.extend(delta.operations)
+        if len(base.operations) > 40:
+            base.operations = base.operations[-40:]
     return base
 
 
@@ -231,14 +284,16 @@ def _compose_executor_extra_context(
                 continue
             todo_lines.append(
                 f"- [{str(todo.get('status') or 'pending')}] {text}"
+                + (
+                    f"（依赖：{', '.join(str(x) for x in todo.get('depends_on') or [])}）"
+                    if todo.get("depends_on")
+                    else ""
+                )
             )
         if todo_lines:
             parts.append("### 当前执行计划（续跑时必须保持进度）\n" + "\n".join(todo_lines))
     if compact_memory and compact_memory.strip():
-        parts.append(
-            "### 已压缩的会话执行摘要（续跑上下文）\n"
-            + compact_memory.strip()[:12_000]
-        )
+        parts.append("### 已压缩的会话执行摘要（续跑上下文）\n" + compact_memory.strip()[:12_000])
     parts.append(
         "### 需要用户拍板时\n"
         "遇到多种方案、工具/积分失败后的取舍、或不可逆操作：必须调用 `ask_user`，"
@@ -246,6 +301,111 @@ def _compose_executor_extra_context(
         "调用后本轮会暂停；用户在确认卡片中选择后，下一轮带着选择继续。"
     )
     return "\n\n".join(parts) if parts else None
+
+
+_ACTIVE_TODO_HEADER = "### 严格顺序调度：当前唯一允许执行的 TODO"
+
+
+def _active_todo_instruction(plan: dict[str, Any] | None) -> str | None:
+    todos = (plan or {}).get("todos") if isinstance(plan, dict) else None
+    if not isinstance(todos, list):
+        return None
+    for todo in todos:
+        if not isinstance(todo, dict) or str(todo.get("status")) != "in_progress":
+            continue
+        criteria = [str(x).strip() for x in todo.get("acceptance_criteria") or [] if str(x).strip()]
+        outputs = [str(x).strip() for x in todo.get("expected_outputs") or [] if str(x).strip()]
+        lines = [
+            _ACTIVE_TODO_HEADER,
+            f"- id: {todo.get('id')}",
+            f"- 内容: {todo.get('text')}",
+        ]
+        if criteria:
+            lines.append("- 验收: " + "；".join(criteria[:8]))
+        if outputs:
+            lines.append("- 预期输出: " + "；".join(outputs[:8]))
+        lines.append("只执行并验证这一项；不要提前调用后续 TODO 的工具。完成证据确认后调度器才会放行下一项。")
+        return "\n".join(lines)
+    return None
+
+
+def _replace_active_todo_instruction(working_messages: list, plan: dict[str, Any] | None) -> None:
+    working_messages[:] = [
+        message
+        for message in working_messages
+        if not (
+            isinstance(message, SystemMessage)
+            and str(getattr(message, "content", "")).startswith(_ACTIVE_TODO_HEADER)
+        )
+    ]
+    instruction = _active_todo_instruction(plan)
+    if instruction:
+        working_messages.append(SystemMessage(content=instruction))
+
+
+def active_todo_allows_tool(plan: dict[str, Any] | None, tool_name: str) -> bool:
+    if tool_name == ASK_USER_TOOL_NAME:
+        return True
+    todos = (plan or {}).get("todos") if isinstance(plan, dict) else None
+    if not isinstance(todos, list) or not todos:
+        return True
+    active = next(
+        (todo for todo in todos if isinstance(todo, dict) and str(todo.get("status")) == "in_progress"),
+        None,
+    )
+    if active is None:
+        return False
+    hint_tokens = {
+        token for token in re.split(r"[\s,;|/]+", str(active.get("tool_hint") or "").strip()) if token
+    }
+    if tool_name in hint_tokens:
+        return True
+    intent = _todo_intent(str(active.get("text") or ""))
+    media_video = {"wan_t2v", "wan_i2v", "wan_r2v", "wan_video_edit"}
+    allowed: dict[str, set[str]] = {
+        "setup": {"shell", "filesystem"},
+        "research": {"search", "filesystem", "shell"},
+        "audio": {"minimax_tts", "filesystem", "shell"},
+        "image": {"wan_text2image", "filesystem", "shell"},
+        "video_clips": media_video | {"filesystem", "shell"},
+        "mux": {"shell", "filesystem"},
+        "verify": {"shell", "filesystem", "visual_critique"},
+        "artifact": {"filesystem", "shell"},
+        "generic": {"filesystem", "shell"},
+    }
+    return tool_name in allowed.get(intent, {"filesystem", "shell"})
+
+
+async def _reject_out_of_order_tool(
+    *, session_id, run_id, working_messages: list, event_id: str, tool_name: str, args: dict[str, Any]
+) -> None:
+    message = f"严格顺序调度器已阻止 {tool_name}：该工具不属于当前 TODO，请先完成当前步骤"
+    await emit(
+        ToolCallEvent(
+            session_id=session_id,
+            run_id=run_id,
+            id=event_id,
+            name=tool_name,
+            args=args,
+        )
+    )
+    await emit(
+        ToolResultEvent(
+            session_id=session_id,
+            run_id=run_id,
+            id=event_id,
+            ok=False,
+            preview=message,
+            duration_ms=0,
+        )
+    )
+    working_messages.append(
+        ToolMessage(
+            content=_render_tool_content(ToolResult(ok=False, error=message)),
+            tool_call_id=event_id,
+            name=tool_name,
+        )
+    )
 
 
 def _with_fresh_system_prompt(working_messages: list, system_prompt: str) -> list:
@@ -311,9 +471,12 @@ def _goal_requires_real_artifact(
     plan: dict[str, Any] | None,
     task_frame: dict[str, Any] | None = None,
 ) -> bool:
-    if task_frame and isinstance(task_frame, dict):
-        if deliverable_type_implies_artifact(str(task_frame.get("deliverable_type") or "")):
-            return True
+    if (
+        task_frame
+        and isinstance(task_frame, dict)
+        and deliverable_type_implies_artifact(str(task_frame.get("deliverable_type") or ""))
+    ):
+        return True
     text = f"{user_message}\n" + "\n".join(
         str(t.get("text") or "") for t in (plan or {}).get("todos", []) if isinstance(t, dict)
     )
@@ -336,10 +499,7 @@ def _goal_requires_real_artifact(
 
     build_intent_keywords = ("写", "生成", "创建", "产出", "制作", "开发", "搭建", "实现", "做")
     build_artifact_subjects = ("前端", "html", "react", "next.js", "项目", "代码", "脚本", "应用", "demo")
-    if any(k in text for k in build_artifact_subjects) and any(k in text for k in build_intent_keywords):
-        return True
-
-    return False
+    return any(k in text for k in build_artifact_subjects) and any(k in text for k in build_intent_keywords)
 
 
 def _missing_delivery_reason(
@@ -383,7 +543,7 @@ def _unfinished_plan_reason(plan: dict[str, Any] | None) -> str | None:
     for todo in todos:
         if not isinstance(todo, dict):
             continue
-        if str(todo.get("status") or "") not in {"pending", "in_progress"}:
+        if str(todo.get("status") or "") == "done":
             continue
         text = str(todo.get("text") or "未完成步骤").strip() or "未完成步骤"
         return f"计划仍有未完成项（{text[:80]}），不能结束执行"
@@ -625,6 +785,7 @@ def _summarize_execution(
         "recovered_failures": proof.recovered_failures,
         "unrecovered_failures": _unrecovered_failure_count(proof),
         "failure_notes": list(proof.failure_notes[-8:]),
+        "operations": list(proof.operations[-40:]),
         "delivery_missing_reason": delivery_missing_reason,
         "execute_exception": execute_exception,
     }
@@ -657,6 +818,11 @@ def _proof_from_execution_summary(summary: dict[str, Any] | None) -> _ExecutionP
             p.failure_notes.append(note.strip()[:160])
     if len(p.failure_notes) > 8:
         p.failure_notes = p.failure_notes[-8:]
+    for operation in summary.get("operations") or []:
+        if isinstance(operation, dict):
+            p.operations.append(dict(operation))
+    if len(p.operations) > 40:
+        p.operations = p.operations[-40:]
     return p
 
 
@@ -688,6 +854,7 @@ def _normalize_node_package_name(module_name: str) -> str:
 # ------------------------------------------------------------------
 #  Accumulator for streamed tool calls
 # ------------------------------------------------------------------
+
 
 class _PendingToolCall:
     __slots__ = ("id", "name", "args_buf")
@@ -828,7 +995,11 @@ async def execute_node(state: SessionState) -> SessionState:
     mcp_tool_models_map = effective_mcp_tool_models_map(state)
 
     client = get_async_openai()
-    manifests = _with_ask_user_manifest(list(tool_manifest_cache().values()))
+    manifests = manifests_allowed_by_task_frame(
+        list(tool_manifest_cache().values()),
+        state.get("task_frame") if isinstance(state.get("task_frame"), dict) else None,
+    )
+    manifests = _with_ask_user_manifest(manifests)
     manifest_by_name = {m.name: m for m in manifests}
     tools_schema = manifests_to_openai_tools(manifests)
 
@@ -906,9 +1077,14 @@ async def execute_node(state: SessionState) -> SessionState:
 
     # Mark the first TODO as in_progress up front so the UI timeline moves.
     plan = await mark_progress(
-        plan, session_id=session_id, run_id=run_id, start_next=True
+        plan,
+        session_id=session_id,
+        run_id=run_id,
+        start_next=True,
+        retry_failed=True,
     )
     await sync_plan_artifact(state, plan)
+    _replace_active_todo_instruction(working_messages, plan)
 
     try:
         while (
@@ -963,10 +1139,19 @@ async def execute_node(state: SessionState) -> SessionState:
             # Append assistant turn to conversation.
             assistant_kwargs = {"content": turn_text}
             if pending_calls:
-                assistant_kwargs["additional_kwargs"] = {
-                    "tool_calls": [pc.to_dict() for pc in pending_calls]
-                }
+                assistant_kwargs["additional_kwargs"] = {"tool_calls": [pc.to_dict() for pc in pending_calls]}
             working_messages.append(AIMessage(**assistant_kwargs))
+
+            text_advanced_plan = await advance_with_response_text(
+                plan,
+                session_id=session_id,
+                run_id=run_id,
+                response_text=turn_text,
+            )
+            if text_advanced_plan is not plan:
+                plan = text_advanced_plan
+                await sync_plan_artifact(state, plan)
+                _replace_active_todo_instruction(working_messages, plan)
 
             if not pending_calls:
                 reason = await _stop_blocked_reason(
@@ -987,7 +1172,11 @@ async def execute_node(state: SessionState) -> SessionState:
                     )
                     if finish_validation_failures >= _dv_policy.max_native_stop_without_delivery:
                         plan = await mark_progress(
-                            plan, session_id=session_id, run_id=run_id, fail_current=True
+                            plan,
+                            session_id=session_id,
+                            run_id=run_id,
+                            fail_current=True,
+                            failure_reason=reason,
                         )
                         await sync_plan_artifact(state, plan)
                         await _append_executor_progress(
@@ -1006,9 +1195,7 @@ async def execute_node(state: SessionState) -> SessionState:
                             "total_agent_turns": total_agent_turns,
                             "total_execution_tokens": total_execution_tokens,
                             "plan": plan,
-                            "execution_summary": _summarize_execution(
-                                proof, delivery_missing_reason=reason
-                            ),
+                            "execution_summary": _summarize_execution(proof, delivery_missing_reason=reason),
                             "finished": True,
                         }
                     forced_tool_name = _delivery_recovery_tool_name(manifests)
@@ -1027,8 +1214,9 @@ async def execute_node(state: SessionState) -> SessionState:
                 break
 
             tool_turns += 1
-            turn_proof = await _run_tool_calls(
+            turn_proof, plan = await _run_tool_calls(
                 pending_calls,
+                plan=plan,
                 sandbox_id=sandbox_id,
                 session_id=session_id,
                 run_id=run_id,
@@ -1041,13 +1229,8 @@ async def execute_node(state: SessionState) -> SessionState:
             proof = _merge_proof(proof, turn_proof)
             finish_validation_failures = 0
             forced_tool_name = None
-            plan = await advance_with_proof(
-                plan,
-                session_id=session_id,
-                run_id=run_id,
-                proof=turn_proof,
-            )
             await sync_plan_artifact(state, plan)
+            _replace_active_todo_instruction(working_messages, plan)
             await _append_executor_progress(
                 state,
                 sandbox_id=sandbox_id,
@@ -1071,11 +1254,13 @@ async def execute_node(state: SessionState) -> SessionState:
                 )
         else:
             log.warning("graph.execute.max_turns", session_id=str(session_id), turns=tool_turns)
-            final_text = (
-                "（已达到本轮全局执行预算上限，未能完成任务。请尝试拆小或直接提问。）"
-            )
+            final_text = "（已达到本轮全局执行预算上限，未能完成任务。请尝试拆小或直接提问。）"
             plan = await mark_progress(
-                plan, session_id=session_id, run_id=run_id, fail_current=True
+                plan,
+                session_id=session_id,
+                run_id=run_id,
+                fail_current=True,
+                failure_reason="已达到本轮执行预算上限",
             )
             await sync_plan_artifact(state, plan)
             await _append_executor_progress(
@@ -1091,7 +1276,11 @@ async def execute_node(state: SessionState) -> SessionState:
         recoverable = _has_execution_progress(proof)
         if not recoverable:
             plan = await mark_progress(
-                plan, session_id=session_id, run_id=run_id, fail_current=True
+                plan,
+                session_id=session_id,
+                run_id=run_id,
+                fail_current=True,
+                failure_reason=f"执行异常：{str(exc)[:180]}",
             )
             await sync_plan_artifact(state, plan)
         await _append_executor_progress(
@@ -1105,19 +1294,13 @@ async def execute_node(state: SessionState) -> SessionState:
         payload: dict[str, Any] = {
             "finished": True,
             "assistant_text": final_text,
-            "messages": [
-                message
-                for message in working_messages
-                if not isinstance(message, SystemMessage)
-            ],
+            "messages": [message for message in working_messages if not isinstance(message, SystemMessage)],
             "compact_memory": compact_memory,
             "tool_turns": tool_turns,
             "total_agent_turns": total_agent_turns,
             "total_execution_tokens": total_execution_tokens,
             "plan": plan,
-            "execution_summary": _summarize_execution(
-                proof, execute_exception=str(exc)[:240]
-            ),
+            "execution_summary": _summarize_execution(proof, execute_exception=str(exc)[:240]),
         }
         if recoverable:
             log.warning(
@@ -1244,6 +1427,7 @@ async def _stream_one_turn(
 async def _run_tool_calls(
     pending: list[_PendingToolCall],
     *,
+    plan: dict[str, Any] | None,
     sandbox_id: str,
     session_id,
     run_id,
@@ -1252,13 +1436,24 @@ async def _run_tool_calls(
     mcp_tool_models: dict[str, str] | None = None,
     billing_enabled: bool = False,
     operation_scope: str = "0:0",
-) -> _ExecutionProof:
-    """Invoke each tool via MCP Hub, emit events, append tool messages."""
+) -> tuple[_ExecutionProof, dict[str, Any] | None]:
+    """Invoke tools in order and re-evaluate the active TODO after every call."""
     mcp = get_client()
     manifest_by_name = {m.name: m for m in manifests}
     proof = _ExecutionProof()
+    current_plan = plan
     for call_index, pc in enumerate(pending):
         args = _parse_args(pc.args_buf)
+        if not active_todo_allows_tool(current_plan, pc.name):
+            await _reject_out_of_order_tool(
+                session_id=session_id,
+                run_id=run_id,
+                working_messages=working_messages,
+                event_id=pc.id,
+                tool_name=pc.name,
+                args=args,
+            )
+            continue
         if pc.name == ASK_USER_TOOL_NAME:
             questions = _parse_ask_user_questions(args)
             result = ToolResult(
@@ -1308,7 +1503,7 @@ async def _run_tool_calls(
             billing_enabled=billing_enabled,
             operation_index=f"{operation_scope}:{call_index}",
         )
-        proof = _merge_proof(proof, delta)
+        call_proof = delta
         _result, extra = await _retry_failed_tool_if_needed(
             mcp=mcp,
             tool_name=pc.name,
@@ -1324,8 +1519,15 @@ async def _run_tool_calls(
             billing_enabled=billing_enabled,
             operation_prefix=f"{operation_scope}:{call_index}",
         )
-        proof = _merge_proof(proof, extra)
-    return proof
+        call_proof = _merge_proof(call_proof, extra)
+        proof = _merge_proof(proof, call_proof)
+        current_plan = await advance_with_proof(
+            current_plan,
+            session_id=session_id,
+            run_id=run_id,
+            proof=call_proof,
+        )
+    return proof, current_plan
 
 
 def _render_tool_content(result) -> str:
@@ -1360,9 +1562,7 @@ def _is_publishable_artifact_relpath(path: str) -> bool:
     if "[:" in s:
         return False
     base = Path(s).name
-    if not base or len(base) > 240:
-        return False
-    return True
+    return bool(base) and len(base) <= 240
 
 
 def _artifact_url(session_id, path: str) -> str:
@@ -1429,6 +1629,40 @@ async def _invoke_tool_with_events(
     billing_enabled: bool = False,
     operation_index: str | None = None,
 ) -> tuple[Any, _ExecutionProof]:
+    rejection: str | None = None
+    if manifest is None:
+        rejection = f"工具 {tool_name} 不在本任务 Task Frame 允许的动作范围内"
+    elif tool_name == "filesystem":
+        action_schema = ((manifest.input_schema or {}).get("properties") or {}).get("action") or {}
+        allowed_actions = action_schema.get("enum")
+        if isinstance(allowed_actions, list) and args.get("action") not in allowed_actions:
+            rejection = f"filesystem.{args.get('action')} 不在本任务允许的文件动作范围内"
+    if rejection:
+        result = ToolResult(ok=False, error=rejection)
+        await emit(
+            ToolCallEvent(
+                session_id=session_id,
+                run_id=run_id,
+                id=event_id,
+                name=tool_name,
+                args=args,
+            )
+        )
+        await emit(
+            ToolResultEvent(
+                session_id=session_id,
+                run_id=run_id,
+                id=event_id,
+                ok=False,
+                preview=rejection,
+                duration_ms=0,
+            )
+        )
+        working_messages.append(
+            ToolMessage(content=_render_tool_content(result), tool_call_id=event_id, name=tool_name)
+        )
+        return result, _ExecutionProof()
+
     eff_args = args
     if (
         tool_name in _MCP_TOOLS_OPTIONAL_MODEL
@@ -1455,9 +1689,7 @@ async def _invoke_tool_with_events(
             if required <= 0:
                 error_message = "当前任务计费状态已关闭，已阻止重复工具调用"
             else:
-                error_message = (
-                    f"积分不足，调用 {tool_name} 还需冻结 {required} 积分，当前可用 {current}"
-                )
+                error_message = f"积分不足，调用 {tool_name} 还需冻结 {required} 积分，当前可用 {current}"
             result = ToolResult(
                 ok=False,
                 error=error_message,
@@ -1577,7 +1809,10 @@ def _detect_shell_recovery(*, args: dict[str, Any], result) -> _ShellRecoveryPla
     lowered = text.lower()
     cmd_lower = cmd.lower()
 
-    if any(token in cmd_lower for token in ("pip install", "uv pip install", "npm install", "pnpm install", "yarn add")):
+    if any(
+        token in cmd_lower
+        for token in ("pip install", "uv pip install", "npm install", "pnpm install", "yarn add")
+    ):
         return None
 
     py_match = _PYTHON_MODULE_RE.search(text)
@@ -1808,7 +2043,7 @@ def _guess_shell_artifact_paths(*, cmd: str, stdout: str, preview: str) -> set[s
                 found.add(p)
 
     for m in re.finditer(
-        r'''["']([a-zA-Z0-9_./\-]{1,200}\.(?:png|jpe?g|gif|webp|svg|pdf|markdown|md|html|csv|json))["']''',
+        r"""["']([a-zA-Z0-9_./\-]{1,200}\.(?:png|jpe?g|gif|webp|svg|pdf|markdown|md|html|csv|json))["']""",
         blob,
         re.IGNORECASE,
     ):
@@ -1899,28 +2134,30 @@ async def _confirm_shell_artifact_paths_via_stat(
 
 
 # 经 stat 确认的交付物（脚本写出的 PNG 等若未进入 shell 的 written_paths，靠 stat 补 artifact）
-_DELIVERABLE_EXTS_FOR_STAT = frozenset({
-    ".png",
-    ".jpg",
-    ".jpeg",
-    ".gif",
-    ".webp",
-    ".svg",
-    ".pdf",
-    ".md",
-    ".markdown",
-    ".html",
-    ".htm",
-    ".csv",
-    ".json",
-    ".txt",
-    ".pptx",
-    ".ppt",
-    ".mp4",
-    ".mp3",
-    ".webm",
-    ".wav",
-})
+_DELIVERABLE_EXTS_FOR_STAT = frozenset(
+    {
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".webp",
+        ".svg",
+        ".pdf",
+        ".md",
+        ".markdown",
+        ".html",
+        ".htm",
+        ".csv",
+        ".json",
+        ".txt",
+        ".pptx",
+        ".ppt",
+        ".mp4",
+        ".mp3",
+        ".webm",
+        ".wav",
+    }
+)
 
 
 def _is_deliverable_path_candidate(rel: str) -> bool:
@@ -2036,6 +2273,13 @@ def _proof_from_tool_result(
 
     proof.successful_tool_calls = 1
     proof.tool_names.append(tool_name)
+    audit_args = {key: args.get(key) for key in ("cmd", "cwd", "action", "path") if args.get(key) is not None}
+    proof.operations.append(
+        {
+            "tool": tool_name,
+            "args": audit_args,
+        }
+    )
     if tool_name != "search":
         proof.non_search_tool_calls = 1
     if getattr(manifest, "mutates", False):
@@ -2074,9 +2318,7 @@ def _proof_from_tool_result(
         proof.verified_paths.update(_shell_command_paths(cmd, cwd=cwd, mode="verify"))
         stdout = str(output.get("stdout") or "")
         preview_txt = str(result.preview or "")
-        proof.written_paths.update(
-            _guess_shell_artifact_paths(cmd=cmd, stdout=stdout, preview=preview_txt)
-        )
+        proof.written_paths.update(_guess_shell_artifact_paths(cmd=cmd, stdout=stdout, preview=preview_txt))
     elif tool_name in {
         "wan_text2image",
         "wan_t2v",

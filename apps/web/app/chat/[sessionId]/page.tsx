@@ -101,14 +101,20 @@ export default function ChatSessionPage() {
       status: (e) => {
         if (e.phase === "planning") {
           useChatStore.getState().beginAssistantTurn();
+          plan.onRunStarted(e.run_id ?? null);
         }
-        session.setPhase(e.phase);
+        const currentPlan = usePlanStore.getState();
+        const planBelongsToRun = !e.run_id || !currentPlan.runId || currentPlan.runId === e.run_id;
+        const planHasUnfinished = currentPlan.todos.some((todo) => todo.status !== "done");
+        const effectivePhase =
+          e.phase === "done" && planBelongsToRun && planHasUnfinished ? "partial" : e.phase;
+        session.setPhase(effectivePhase);
         if (e.run_id) session.setRunId(e.run_id);
         const existing = session.sessions.find((item) => item.id === sessionId);
         const existingTerminal = existing?.lastRunTerminal ?? null;
         let lastRunTerminal: typeof existingTerminal = existingTerminal;
         let nextAwaiting = false;
-        const p = e.phase;
+        const p = effectivePhase;
         if (p === "planning" || p === "executing" || p === "compacting") {
           lastRunTerminal = null;
         } else if (p === "done") {
@@ -128,14 +134,18 @@ export default function ChatSessionPage() {
           title: existing?.title ?? "新会话",
           createdAt: existing?.createdAt,
           workflowId: existing?.workflowId ?? null,
-          status: statusFromPhase(e.phase),
+          status: statusFromPhase(effectivePhase),
           runId: e.run_id ?? existing?.runId ?? null,
           lastPhase: p,
           lastRunTerminal,
           awaitingUser: nextAwaiting,
           updatedAt: new Date().toISOString(),
         });
-        live.track(e);
+        live.track(
+          effectivePhase === e.phase
+            ? e
+            : { ...e, phase: effectivePhase, message: "计划仍有未完成项，已阻止错误的完成状态" },
+        );
       },
       "interrupt.ack": (e) => {
         session.setPhase(e.reason === "user_stop" ? "stopped" : "interrupted");

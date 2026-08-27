@@ -5,6 +5,7 @@ from __future__ import annotations
 from somna_events import ErrorEvent, SessionPhase, StatusEvent
 
 from app.events.emitter import emit
+from app.graph.nodes.plan import _emit_plan_update
 from app.graph.state import SessionState
 from app.logging_setup import get_logger
 from app.memory import add_memory
@@ -23,10 +24,17 @@ async def finalize_node(state: SessionState) -> SessionState:
     plan = state.get("plan") if isinstance(state.get("plan"), dict) else {}
     todos = plan.get("todos") if isinstance(plan.get("todos"), list) else []
     has_unfinished = any(
-        isinstance(todo, dict)
-        and str(todo.get("status") or "") in {"pending", "in_progress", "failed", "skipped"}
-        for todo in todos
+        not isinstance(todo, dict) or str(todo.get("status") or "") != "done" for todo in todos
     )
+    if todos:
+        # Re-emit the authoritative snapshot before the terminal status so a
+        # transient progress-event failure cannot leave the UI on stale TODOs.
+        await _emit_plan_update(
+            session_id=session_id,
+            run_id=run_id,
+            plan=plan,
+            todos=todos,
+        )
 
     if err:
         billing_outcome = "failure"

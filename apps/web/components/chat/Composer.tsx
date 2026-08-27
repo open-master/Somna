@@ -39,7 +39,7 @@ export function Composer({
   const sharedSending = useSessionStore((s) => s.messageSendSessionId !== null);
   const tryBeginMessageSend = useSessionStore((s) => s.tryBeginMessageSend);
   const endMessageSend = useSessionStore((s) => s.endMessageSend);
-  const clearPlan = usePlanStore((s) => s.clear);
+  const startPlanRun = usePlanStore((s) => s.onRunStarted);
   const clearTaskFrame = useTaskFrameStore((s) => s.clear);
 
   const [sendError, setSendError] = useState<string | null>(null);
@@ -116,7 +116,9 @@ export function Composer({
         resp = await postMessage(sessionId, value, pendingAtt, execEngine);
       }
 
-      clearPlan();
+      // SSE may deliver planning/plan.update before postMessage resolves.
+      // Switching by run id clears only stale data and preserves same-run events.
+      startPlanRun(resp.run_id);
       clearTaskFrame();
       setPhase("planning");
       setRunId(resp.run_id);
@@ -176,7 +178,7 @@ export function Composer({
     endMessageSend,
     pushUser,
     rollbackLastUserMessage,
-    clearPlan,
+    startPlanRun,
     clearTaskFrame,
     setPhase,
     setRunId,

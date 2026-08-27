@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils/cn";
 
 export function PlannerTimeline() {
   const todos = usePlanStore((s) => s.todos);
+  const planVersion = usePlanStore((s) => s.planVersion);
   if (todos.length === 0) return null;
 
   const done = todos.filter((t) => t.status === "done").length;
@@ -30,20 +31,52 @@ export function PlannerTimeline() {
           {skipped > 0 ? <> · <span className="font-mono text-muted-foreground">{skipped}</span> 跳过</> : null}
           ）
         </span>
+        {planVersion > 1 ? (
+          <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+            v{planVersion}
+          </span>
+        ) : null}
         <ChevronDown className="ml-auto size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
       </summary>
       <ol className="mt-2 space-y-1 text-sm">
         {todos.map((t) => (
-          <li key={t.id} className="flex items-center gap-2">
-            {iconForStatus(t.status)}
-            <span
-              className={cn(
-                t.status === "done" && "text-muted-foreground line-through",
-                t.status === "failed" && "text-destructive",
-              )}
-            >
-              {t.text}
-            </span>
+          <li key={t.id} className="flex items-start gap-2 py-0.5">
+            <span className="mt-0.5">{iconForStatus(t.status)}</span>
+            <div className="min-w-0 flex-1">
+              <div
+                className={cn(
+                  t.status === "done" && "text-muted-foreground line-through",
+                  t.status === "failed" && "text-destructive",
+                )}
+              >
+                {t.text}
+              </div>
+              {t.status === "done" && t.completion_reason ? (
+                <div className="mt-0.5 text-xs text-emerald-700/80 no-underline">
+                  完成依据：{t.completion_reason}
+                </div>
+              ) : null}
+              {t.status === "failed" && t.failure_reason ? (
+                <div className="mt-0.5 text-xs text-destructive/80">
+                  失败原因：{t.failure_reason}
+                </div>
+              ) : null}
+              {t.status === "skipped" && t.failure_reason ? (
+                <div className="mt-0.5 text-xs text-muted-foreground">
+                  未执行原因：{t.failure_reason}
+                </div>
+              ) : null}
+              {t.status === "in_progress" && t.acceptance_criteria.length > 0 ? (
+                <div className="mt-0.5 text-xs text-muted-foreground">
+                  验收：{t.acceptance_criteria.join("；")}
+                </div>
+              ) : null}
+              {t.evidence_paths.length > 0 ? (
+                <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground" title={t.evidence_paths.join("\n")}>
+                  证据：{t.evidence_paths.slice(0, 3).join(" · ")}
+                </div>
+              ) : null}
+            </div>
           </li>
         ))}
       </ol>

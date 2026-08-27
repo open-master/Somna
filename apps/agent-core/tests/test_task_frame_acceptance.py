@@ -9,7 +9,13 @@ from uuid import uuid4
 import pytest
 
 from app.graph.nodes import task_frame as tf_mod
-from app.graph.session_graph import _route_after_execute, _route_after_task_frame
+from app.graph.session_graph import (
+    _route_after_execute,
+    _route_after_ingest,
+    _route_after_plan,
+    _route_after_reflect,
+    _route_after_task_frame,
+)
 from app.graph.state import SessionState
 
 
@@ -65,6 +71,14 @@ def test_route_after_execute_waiting_user_skips_reflect():
     assert _route_after_execute({"task_frame": {"needs_clarification": False}}) == "reflect"
 
 
+def test_route_guards_fail_closed():
+    assert _route_after_ingest({"error": "sandbox unavailable"}) == "finalize"
+    assert _route_after_ingest({}) == "task_frame"
+    assert _route_after_plan({"task_frame": {"needs_clarification": True}}) == "clarify"
+    assert _route_after_plan({"task_frame": {"needs_clarification": False}}) == "execute"
+    assert _route_after_reflect({"next_node": "unexpected"}) == "invalid_state"
+
+
 def test_normalize_forces_no_planner_when_clarify():
     parsed = {
         "needs_clarification": True,
@@ -109,6 +123,54 @@ def test_normalize_autonomy_level_invalid_keeps_default():
     assert out_ok["autonomy_level"] == "low"
 
 
+def test_high_risk_requires_deterministic_confirmation_and_supports_cancel():
+    frame = tf_mod.normalize_task_frame({"risk_level": "high", "should_invoke_planner": True})
+    tf_mod._enforce_high_risk_confirmation(frame, previous_frame=None, user_message="执行付款")
+    assert frame["needs_clarification"] is True
+    assert frame["should_invoke_planner"] is False
+
+    # The second model call may downgrade risk; the previous confirmation card
+    # still makes an explicit cancellation authoritative.
+    cancelled = tf_mod.normalize_task_frame({"risk_level": "low", "should_invoke_planner": True})
+    tf_mod._enforce_high_risk_confirmation(
+        cancelled,
+        previous_frame={"risk_level": "high", "needs_clarification": True},
+        user_message="取消执行",
+    )
+    assert cancelled["task_mode"] == "direct_answer"
+    assert cancelled["risk_level"] == "low"
+
+    confirmed = tf_mod.normalize_task_frame(
+        {"risk_level": "low", "task_mode": "direct_answer", "should_invoke_planner": False}
+    )
+    tf_mod._enforce_high_risk_confirmation(
+        confirmed,
+        previous_frame={
+            "risk_level": "high",
+            "needs_clarification": True,
+            "task_mode": "operate",
+            "deliverable_type": "browser_action",
+            "allowed_action_scope": ["browser_read"],
+        },
+        user_message="确认继续",
+    )
+    assert confirmed["needs_clarification"] is False
+    assert confirmed["should_invoke_planner"] is True
+    assert confirmed["task_mode"] == "operate"
+    assert confirmed["risk_level"] == "high"
+
+    unrelated = tf_mod.normalize_task_frame(
+        {"risk_level": "low", "task_mode": "direct_answer", "should_invoke_planner": False}
+    )
+    tf_mod._enforce_high_risk_confirmation(
+        unrelated,
+        previous_frame={"risk_level": "high", "needs_clarification": True},
+        user_message="请确认这个标题是否合适",
+    )
+    assert unrelated["should_invoke_planner"] is False
+    assert unrelated["risk_level"] == "low"
+
+
 def test_normalize_billing_fields_rejects_untrusted_enums():
     out = tf_mod.normalize_task_frame(
         {
@@ -138,11 +200,14 @@ def test_typed_delivery_gap_rejects_clips_when_compose_required():
         composed_media_required=True,
     )
     assert gap is not None
-    assert tf_mod.typed_delivery_gap(
-        paths=["artifacts/final_documentary.mp4"],
-        deliverable_type="video",
-        composed_media_required=True,
-    ) is None
+    assert (
+        tf_mod.typed_delivery_gap(
+            paths=["artifacts/final_documentary.mp4"],
+            deliverable_type="video",
+            composed_media_required=True,
+        )
+        is None
+    )
 
 
 def test_typed_delivery_gap_website_requires_html():
@@ -255,9 +320,7 @@ def test_format_task_frame_ui_summary_for_execute_pause():
 async def test_task_frame_resume_execute_skips_llm():
     sid = uuid4()
     create = AsyncMock()
-    client = SimpleNamespace(
-        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
-    )
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
     with (
         patch.object(tf_mod, "get_async_openai", return_value=client),
         patch.object(tf_mod, "emit", AsyncMock()),

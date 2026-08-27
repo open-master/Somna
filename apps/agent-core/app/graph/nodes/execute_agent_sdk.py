@@ -40,19 +40,24 @@ from app.graph.nodes.execute import (
     _delivery_recovery_tool_name,
     _emit_skill_debug_event,
     _ExecutionProof,
+    _has_execution_progress,
     _invoke_tool_with_events,
     _merge_proof,
     _PendingToolCall,
     _proof_from_execution_summary,
+    _reject_out_of_order_tool,
     _render_tool_content,
+    _replace_active_todo_instruction,
     _retry_failed_tool_if_needed,
     _route_or_reuse_skills,
     _stop_blocked_reason,
     _summarize_execution,
     _with_fresh_system_prompt,
+    active_todo_allows_tool,
     effective_mcp_tool_models_map,
+    manifests_allowed_by_task_frame,
 )
-from app.graph.nodes.plan import advance_with_proof, mark_progress
+from app.graph.nodes.plan import advance_with_proof, advance_with_response_text, mark_progress
 from app.graph.run_artifacts import append_executor_progress_snapshot, sync_plan_artifact
 from app.graph.state import SessionState
 from app.graph.user_turn import executor_messages_for_current_turn, last_human_turn_text
@@ -101,6 +106,21 @@ class _SomnaBridge:
         pc.args_buf = json.dumps(args, ensure_ascii=False)
         manifest = self.manifest_by_name.get(tool_name)
 
+        if not active_todo_allows_tool(self.plan, tool_name):
+            message = f"严格顺序调度器已阻止 {tool_name}：该工具不属于当前 TODO"
+            await _reject_out_of_order_tool(
+                session_id=self.session_id,
+                run_id=self.run_id,
+                working_messages=self.working_messages,
+                event_id=pc.id,
+                tool_name=tool_name,
+                args=args,
+            )
+            return {
+                "content": [{"type": "text", "text": message}],
+                "is_error": True,
+            }
+
         result, delta = await _invoke_tool_with_events(
             mcp=get_client(),
             tool_name=tool_name,
@@ -140,6 +160,7 @@ class _SomnaBridge:
             run_id=self.run_id,
             proof=proof_acc,
         )
+        _replace_active_todo_instruction(self.working_messages, self.plan)
         await sync_plan_artifact(self.artifact_state, self.plan)
         await append_executor_progress_snapshot(
             self.artifact_state,
@@ -314,7 +335,10 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
     _eff_auto = effective_autonomy_level(_tf)
     _sdk_max_delivery_rounds = delivery_validation_policy(_eff_auto).max_sdk_delivery_rounds
 
-    manifests = list(tool_manifest_cache().values())
+    manifests = manifests_allowed_by_task_frame(
+        list(tool_manifest_cache().values()),
+        state.get("task_frame") if isinstance(state.get("task_frame"), dict) else None,
+    )
     manifest_by_name = {m.name: m for m in manifests}
     memories = await search_memories(
         user_message,
@@ -377,8 +401,15 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
 
     compact_memory = state.get("compact_memory")
     plan = bridge.plan
-    plan = await mark_progress(plan, session_id=session_id, run_id=run_id, start_next=True)
+    plan = await mark_progress(
+        plan,
+        session_id=session_id,
+        run_id=run_id,
+        start_next=True,
+        retry_failed=True,
+    )
     bridge.plan = plan
+    _replace_active_todo_instruction(working_messages, plan)
     await sync_plan_artifact(artifact_state, plan)
 
     log.info(
@@ -411,7 +442,11 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
             if remaining_agent_turns <= 0 or total_execution_tokens >= max_total_tokens:
                 delivery_reason = "已达到全局 Agent turn 或 executor token 预算上限"
                 plan = await mark_progress(
-                    bridge.plan, session_id=session_id, run_id=run_id, fail_current=True
+                    bridge.plan,
+                    session_id=session_id,
+                    run_id=run_id,
+                    fail_current=True,
+                    failure_reason=delivery_reason,
                 )
                 bridge.plan = plan
                 break
@@ -464,9 +499,7 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
                     piece = _stream_event_text(message)
                     if piece:
                         assistant_text_buf.append(piece)
-                        await emit(
-                            MessageDeltaEvent(session_id=session_id, run_id=run_id, text=piece)
-                        )
+                        await emit(MessageDeltaEvent(session_id=session_id, run_id=run_id, text=piece))
                 elif isinstance(message, AssistantMessage):
                     working_messages.append(_assistant_to_langchain(message))
                     if message.error:
@@ -480,9 +513,7 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
                             if isinstance(block, TextBlock) and block.text:
                                 assistant_text_buf.append(block.text)
                                 await emit(
-                                    MessageDeltaEvent(
-                                        session_id=session_id, run_id=run_id, text=block.text
-                                    )
+                                    MessageDeltaEvent(session_id=session_id, run_id=run_id, text=block.text)
                                 )
                 elif isinstance(message, ResultMessage):
                     last_result = message
@@ -518,6 +549,16 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
             if last_result:
                 total_agent_turns += max(0, int(last_result.num_turns or 0))
 
+            plan = await advance_with_response_text(
+                plan,
+                session_id=session_id,
+                run_id=run_id,
+                response_text=final_text,
+            )
+            bridge.plan = plan
+            await sync_plan_artifact(artifact_state, plan)
+            _replace_active_todo_instruction(working_messages, plan)
+
             delivery_reason = await _stop_blocked_reason(
                 user_message=user_message,
                 plan=plan,
@@ -541,7 +582,13 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
                 sdk_is_error=getattr(lr, "is_error", None),
             )
             if finish_validation_failures >= _sdk_max_delivery_rounds:
-                plan = await mark_progress(plan, session_id=session_id, run_id=run_id, fail_current=True)
+                plan = await mark_progress(
+                    plan,
+                    session_id=session_id,
+                    run_id=run_id,
+                    fail_current=True,
+                    failure_reason=delivery_reason,
+                )
                 await sync_plan_artifact(artifact_state, plan)
                 await append_executor_progress_snapshot(
                     artifact_state,
@@ -562,9 +609,7 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
                     "total_agent_turns": total_agent_turns,
                     "total_execution_tokens": total_execution_tokens,
                     "plan": plan,
-                    "execution_summary": _summarize_execution(
-                        proof, delivery_missing_reason=delivery_reason
-                    ),
+                    "execution_summary": _summarize_execution(proof, delivery_missing_reason=delivery_reason),
                     "finished": True,
                 }
 
@@ -578,9 +623,16 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
 
     except Exception as exc:  # noqa: BLE001
         log.exception("graph.execute_agent_sdk.failed", error=str(exc))
-        plan = await mark_progress(
-            bridge.plan, session_id=session_id, run_id=run_id, fail_current=True
-        )
+        recoverable = _has_execution_progress(bridge.proof)
+        plan = bridge.plan
+        if not recoverable:
+            plan = await mark_progress(
+                plan,
+                session_id=session_id,
+                run_id=run_id,
+                fail_current=True,
+                failure_reason=f"执行异常：{str(exc)[:180]}",
+            )
         await sync_plan_artifact(artifact_state, plan)
         await append_executor_progress_snapshot(
             artifact_state,
@@ -592,22 +644,22 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
             n_verified=len(bridge.proof.verified_paths),
             note=f"exception:{str(exc)[:120]}",
         )
-        return {
-            "error": str(exc),
+        payload: dict[str, Any] = {
             "finished": True,
             "assistant_text": final_text,
             "messages": [
-                message
-                for message in bridge.working_messages
-                if not isinstance(message, SystemMessage)
+                message for message in bridge.working_messages if not isinstance(message, SystemMessage)
             ],
             "compact_memory": compact_memory,
             "tool_turns": bridge.tool_round,
             "total_agent_turns": total_agent_turns,
             "total_execution_tokens": total_execution_tokens,
             "plan": plan,
-            "execution_summary": _summarize_execution(bridge.proof),
+            "execution_summary": _summarize_execution(bridge.proof, execute_exception=str(exc)[:240]),
         }
+        if not recoverable:
+            payload["error"] = str(exc)
+        return payload
 
     log.info(
         "graph.execute_agent_sdk.done",

@@ -39,6 +39,10 @@ def _route_after_execute(state: SessionState) -> str:
     return "reflect"
 
 
+def _route_after_ingest(state: SessionState) -> str:
+    return "finalize" if state.get("error") else "task_frame"
+
+
 def _route_after_task_frame(state: SessionState) -> str:
     if state.get("error"):
         return "finalize"
@@ -52,11 +56,23 @@ def _route_after_task_frame(state: SessionState) -> str:
     return "plan"
 
 
+def _route_after_plan(state: SessionState) -> str:
+    if state.get("error"):
+        return "finalize"
+    frame = state.get("task_frame") or {}
+    return "clarify" if frame.get("needs_clarification") else "execute"
+
+
 def _route_after_reflect(state: SessionState) -> str:
     nxt = state.get("next_node")
     if nxt in {"execute", "plan", "finalize"}:
         return nxt
-    return "finalize"
+    return "invalid_state"
+
+
+async def _invalid_state_node(state: SessionState) -> SessionState:
+    value = state.get("next_node")
+    return {"error": f"反思节点返回了非法状态转移：{value!r}"}
 
 
 def build_graph() -> StateGraph:
@@ -68,9 +84,14 @@ def build_graph() -> StateGraph:
     g.add_node("plan", plan_node)
     g.add_node("execute", execute_node)
     g.add_node("reflect", reflect_node)
+    g.add_node("invalid_state", _invalid_state_node)
     g.add_node("finalize", finalize_node)
     g.add_edge(START, "ingest")
-    g.add_edge("ingest", "task_frame")
+    g.add_conditional_edges(
+        "ingest",
+        _route_after_ingest,
+        {"task_frame": "task_frame", "finalize": "finalize"},
+    )
     g.add_conditional_edges(
         "task_frame",
         _route_after_task_frame,
@@ -84,7 +105,11 @@ def build_graph() -> StateGraph:
     )
     g.add_edge("clarify", "finalize")
     g.add_edge("direct_answer", "finalize")
-    g.add_edge("plan", "execute")
+    g.add_conditional_edges(
+        "plan",
+        _route_after_plan,
+        {"clarify": "clarify", "execute": "execute", "finalize": "finalize"},
+    )
     g.add_conditional_edges(
         "execute",
         _route_after_execute,
@@ -93,8 +118,14 @@ def build_graph() -> StateGraph:
     g.add_conditional_edges(
         "reflect",
         _route_after_reflect,
-        {"execute": "execute", "plan": "plan", "finalize": "finalize"},
+        {
+            "execute": "execute",
+            "plan": "plan",
+            "finalize": "finalize",
+            "invalid_state": "invalid_state",
+        },
     )
+    g.add_edge("invalid_state", "finalize")
     g.add_edge("finalize", END)
     return g
 
@@ -104,10 +135,7 @@ def _postgres_conn_string() -> str:
     """LangGraph Postgres checkpoint wants a libpq-style URL (not asyncpg-specific)."""
     url = get_settings().postgres_url
     # Accept either 'postgresql://', 'postgresql+asyncpg://', 'postgres://' and normalise
-    return (
-        url.replace("postgresql+asyncpg://", "postgresql://")
-        .replace("postgres://", "postgresql://")
-    )
+    return url.replace("postgresql+asyncpg://", "postgresql://").replace("postgres://", "postgresql://")
 
 
 async def get_compiled_graph():
