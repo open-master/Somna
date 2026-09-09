@@ -76,6 +76,58 @@ def _shell_manifest_cache() -> dict[str, ToolManifest]:
 # --- tests ---
 
 
+def test_completed_plan_allows_repair_but_missing_active_step_does_not():
+    plan = {"todos": [{"id": "1", "text": "交付文件", "status": "done"}]}
+    assert exe.active_todo_allows_tool(plan, "shell", available_tool_names={"shell"})
+    assert not exe.active_todo_allows_tool(plan, "absent", available_tool_names={"shell"})
+    plan["todos"][0]["status"] = "failed"
+    assert not exe.active_todo_allows_tool(plan, "shell", available_tool_names={"shell"})
+
+
+def test_hint_does_not_block_supporting_or_alternative_tools():
+    plan = {
+        "todos": [{"id": "1", "text": "生成视频所需配图", "status": "in_progress", "tool_hint": "wan_i2v"}]
+    }
+    assert exe.active_todo_allows_tool(plan, "wan_text2image")
+    plan["todos"][0].update(text="抓取网页资料", tool_hint="search")
+    assert exe.active_todo_allows_tool(plan, "browser")
+
+
+def test_task_recovery_requires_own_step_completion_and_survives_checkpoint():
+    before = {"todos": [{"id": "1", "text": "生成报告", "status": "in_progress"}]}
+    after = {"todos": [{"id": "1", "text": "生成报告", "status": "done"}]}
+    failure = exe._ExecutionProof(failed_tool_calls=1)
+    exe._track_task_recovery(failure, before, before)
+    proof = exe._proof_from_execution_summary(exe._summarize_execution(failure))
+    unrelated = exe._ExecutionProof(successful_tool_calls=1)
+    exe._track_task_recovery(unrelated, before, before)
+    exe._merge_proof(proof, unrelated)
+    assert exe._unrecovered_failure_count(proof) == 1
+    recovery = exe._ExecutionProof(successful_tool_calls=1, written_paths={"report.pdf"})
+    exe._track_task_recovery(recovery, before, after)
+    exe._merge_proof(proof, recovery)
+    assert exe._unrecovered_failure_count(proof) == 0
+    assert proof.pending_task_failures == {}
+    assert proof.failed_tool_calls == 1
+
+
+def test_completed_different_task_does_not_clear_failure():
+    proof = exe._ExecutionProof(failed_tool_calls=1, pending_task_failures={"生成报告": 1})
+    recovery = exe._ExecutionProof(successful_tool_calls=1, resolved_tasks={"生成图片"})
+    exe._merge_proof(proof, recovery)
+    assert exe._unrecovered_failure_count(proof) == 1
+
+
+def test_auto_recovery_is_not_counted_twice():
+    before = {"todos": [{"id": "1", "text": "生成报告", "status": "in_progress"}]}
+    after = {"todos": [{"id": "1", "text": "生成报告", "status": "done"}]}
+    delta = exe._ExecutionProof(failed_tool_calls=1, recovered_failures=1, successful_tool_calls=1)
+    exe._track_task_recovery(delta, before, after)
+    proof = exe._merge_proof(exe._ExecutionProof(), delta)
+    assert proof.recovered_failures == 1
+    assert exe._unrecovered_failure_count(proof) == 0
+
+
 def test_tool_operation_key_is_stable_and_argument_sensitive():
     base = {
         "run_id": "run-1",
@@ -144,10 +196,10 @@ def test_active_todo_blocks_future_step_tool():
     assert exe.active_todo_allows_tool(plan, "minimax_tts") is False
 
 
-def test_active_image_todo_allows_image_generator_only():
+def test_active_image_todo_allows_alternative_tools_without_future_step():
     plan = {"todos": [{"id": "1", "text": "生成 2 张配图", "status": "in_progress"}]}
     assert exe.active_todo_allows_tool(plan, "wan_text2image") is True
-    assert exe.active_todo_allows_tool(plan, "wan_t2v") is False
+    assert exe.active_todo_allows_tool(plan, "wan_t2v") is True
 
 
 def test_active_video_todo_allows_available_wan_video_tools():
@@ -192,7 +244,7 @@ def test_active_todo_maps_legacy_browser_hint_to_real_search_tool():
         ]
     }
     assert exe.active_todo_allows_tool(plan, "search") is True
-    assert exe.active_todo_allows_tool(plan, "wan_i2v") is False
+    assert exe.active_todo_allows_tool(plan, "wan_i2v") is True
 
 
 def test_ambiguous_unhinted_todo_keeps_executor_flexible():
@@ -403,6 +455,34 @@ async def test_execute_exception_preserves_checkpoint_messages_and_turn_state():
     assert state["tool_turns"] == 3
     assert state["compact_memory"] == "已有摘要"
     assert tool_message in state["messages"]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_rejection_returns_to_reflect_without_another_model_turn():
+    sid = uuid4()
+    stream = _StreamStub([("调整计划", [_pending("c1", "shell", '{"cmd":"echo hi"}')], (8, 4))])
+    plan = {"todos": [{"id": "1", "text": "当前步骤", "status": "in_progress"}]}
+    with (
+        patch.object(exe, "_stream_one_turn", stream),
+        patch.object(
+            exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))
+        ),
+        patch.object(exe, "emit", AsyncMock()),
+        patch.object(exe, "get_async_openai", return_value=object()),
+        patch.object(exe, "tool_manifest_cache", return_value=_shell_manifest_cache()),
+        patch.object(exe, "build_system_prompt", return_value="sys"),
+        patch.object(exe, "get_settings", return_value=_SettingsStub()),
+        patch.object(
+            exe,
+            "_run_tool_calls",
+            AsyncMock(return_value=(exe._ExecutionProof(scheduler_rejections=1), plan)),
+        ),
+    ):
+        state = await exe.execute_node({"session_id": sid, "run_id": "r1", "messages": [], "plan": plan})
+    assert stream.calls == 1
+    assert state["execution_summary"]["scheduler_rejections"] == 1
+    assert state["tool_turns"] == 1
+    assert "error" not in state
 
 
 @pytest.mark.asyncio

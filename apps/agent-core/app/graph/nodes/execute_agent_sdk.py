@@ -93,6 +93,8 @@ class _SomnaBridge:
 
     async def run_tool(self, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
         """MCP 工具 handler：桥接 MCP Hub + 事件 + proof/plan（与模式一同一套）。"""
+        if self.proof.scheduler_rejections:
+            return {"content": [{"type": "text", "text": "正在重新规划，请等待调度恢复。"}], "is_error": True}
         if self.tool_round >= self.max_tool_turns:
             return {
                 "content": [{"type": "text", "text": "全局工具调用预算已用尽，不能继续调用工具。"}],
@@ -168,13 +170,17 @@ class _SomnaBridge:
         )
         proof_acc = _merge_proof(proof_acc, extra)
 
-        self.proof = _merge_proof(self.proof, proof_acc)
+        previous_plan = self.plan
         self.plan = await advance_with_proof(
             self.plan,
             session_id=self.session_id,
             run_id=self.run_id,
             proof=proof_acc,
         )
+        from app.graph.nodes.execute import _track_task_recovery
+
+        _track_task_recovery(proof_acc, previous_plan, self.plan)
+        self.proof = _merge_proof(self.proof, proof_acc)
         _replace_active_todo_instruction(self.working_messages, self.plan)
         await sync_plan_artifact(self.artifact_state, self.plan)
         await append_executor_progress_snapshot(
@@ -509,60 +515,70 @@ async def execute_agent_sdk_node(state: SessionState) -> SessionState:
             assistant_text_buf: list[str] = []
             last_result: ResultMessage | None = None
 
-            async for message in query(prompt=user_prompt, options=options):
-                if isinstance(message, StreamEvent):
-                    piece = _stream_event_text(message)
-                    if piece:
-                        assistant_text_buf.append(piece)
-                        await emit(MessageDeltaEvent(session_id=session_id, run_id=run_id, text=piece))
-                elif isinstance(message, AssistantMessage):
-                    working_messages.append(_assistant_to_langchain(message))
-                    if message.error:
-                        log.warning(
-                            "graph.execute_agent_sdk.assistant_error",
-                            session_id=str(session_id),
-                            error=message.error,
-                        )
-                    if not assistant_text_buf:
-                        for block in message.content:
-                            if isinstance(block, TextBlock) and block.text:
-                                assistant_text_buf.append(block.text)
-                                await emit(
-                                    MessageDeltaEvent(session_id=session_id, run_id=run_id, text=block.text)
-                                )
-                elif isinstance(message, ResultMessage):
-                    last_result = message
-                    u = message.usage or {}
-                    if isinstance(u, dict):
-                        pi = int(u.get("input_tokens") or u.get("prompt_tokens") or 0)
-                        co = int(u.get("output_tokens") or u.get("completion_tokens") or 0)
-                        if pi or co:
-                            prompt_tokens_total += pi
-                            completion_tokens_total += co
-                            total_execution_tokens += max(0, pi) + max(0, co)
-                            sdk_cost = float(getattr(message, "total_cost_usd", 0.0) or 0.0)
-                            await emit_model_usage(
-                                session_id=session_id,
-                                run_id=run_id,
-                                usage_key=(
-                                    f"{run_id}:execute_sdk:{int(state.get('reflection_count') or 0)}:"
-                                    f"{finish_validation_failures}:{int(message.num_turns or 0)}"
-                                ),
-                                phase="execute_agent_sdk",
-                                model=turn_model,
-                                input_tokens=pi,
-                                output_tokens=co,
-                                cost_usd=sdk_cost,
+            from contextlib import aclosing
+
+            async with aclosing(query(prompt=user_prompt, options=options)) as responses:
+                async for message in responses:
+                    if isinstance(message, StreamEvent):
+                        piece = _stream_event_text(message)
+                        if piece:
+                            assistant_text_buf.append(piece)
+                            await emit(MessageDeltaEvent(session_id=session_id, run_id=run_id, text=piece))
+                    elif isinstance(message, AssistantMessage):
+                        working_messages.append(_assistant_to_langchain(message))
+                        if message.error:
+                            log.warning(
+                                "graph.execute_agent_sdk.assistant_error",
+                                session_id=str(session_id),
+                                error=message.error,
                             )
+                        if not assistant_text_buf:
+                            for block in message.content:
+                                if isinstance(block, TextBlock) and block.text:
+                                    assistant_text_buf.append(block.text)
+                                    await emit(
+                                        MessageDeltaEvent(
+                                            session_id=session_id, run_id=run_id, text=block.text
+                                        )
+                                    )
+                    elif isinstance(message, ResultMessage):
+                        last_result = message
+                        u = message.usage or {}
+                        if isinstance(u, dict):
+                            pi = int(u.get("input_tokens") or u.get("prompt_tokens") or 0)
+                            co = int(u.get("output_tokens") or u.get("completion_tokens") or 0)
+                            if pi or co:
+                                prompt_tokens_total += pi
+                                completion_tokens_total += co
+                                total_execution_tokens += max(0, pi) + max(0, co)
+                                sdk_cost = float(getattr(message, "total_cost_usd", 0.0) or 0.0)
+                                await emit_model_usage(
+                                    session_id=session_id,
+                                    run_id=run_id,
+                                    usage_key=(
+                                        f"{run_id}:execute_sdk:{int(state.get('reflection_count') or 0)}:"
+                                        f"{finish_validation_failures}:{int(message.num_turns or 0)}"
+                                    ),
+                                    phase="execute_agent_sdk",
+                                    model=turn_model,
+                                    input_tokens=pi,
+                                    output_tokens=co,
+                                    cost_usd=sdk_cost,
+                                )
+                    if bridge.proof.scheduler_rejections:
+                        break
 
             final_text = "".join(assistant_text_buf).strip()
             if not final_text and last_result and last_result.result:
                 final_text = str(last_result.result).strip()
-
             proof = bridge.proof
             plan = bridge.plan
             if last_result:
                 total_agent_turns += max(0, int(last_result.num_turns or 0))
+            elif proof.scheduler_rejections:
+                total_agent_turns += 1
+            if proof.scheduler_rejections:
+                break
 
             plan = await advance_with_response_text(
                 plan,

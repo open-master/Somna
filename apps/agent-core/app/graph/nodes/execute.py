@@ -161,6 +161,8 @@ class _ExecutionProof:
     user_questions: list[dict[str, Any]] = field(default_factory=list)
     tool_names: list[str] = field(default_factory=list)
     operations: list[dict[str, Any]] = field(default_factory=list)
+    pending_task_failures: dict[str, int] = field(default_factory=dict)
+    resolved_tasks: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -202,6 +204,12 @@ def _merge_proof(base: _ExecutionProof, delta: _ExecutionProof) -> _ExecutionPro
     base.failed_tool_calls += delta.failed_tool_calls
     base.recovered_failures += delta.recovered_failures
     base.scheduler_rejections += delta.scheduler_rejections
+    for key, count in delta.pending_task_failures.items():
+        base.pending_task_failures[key] = base.pending_task_failures.get(key, 0) + count
+        base.resolved_tasks.discard(key)
+    for key in delta.resolved_tasks:
+        base.recovered_failures += base.pending_task_failures.pop(key, 0)
+    base.resolved_tasks.update(delta.resolved_tasks)
     if delta.failure_notes:
         base.failure_notes.extend(delta.failure_notes)
         if len(base.failure_notes) > 8:
@@ -311,7 +319,8 @@ def _active_todo_instruction(plan: dict[str, Any] | None) -> str | None:
         if hints:
             lines.append("- 建议工具: " + "、".join(hints))
         lines.append(
-            "只执行并验证这一项；不要提前调用后续 TODO 的工具。"
+            "只推进并验证这一项；工具提示仅供参考，可以使用任务授权范围内的辅助或替代工具。"
+            "不要提前执行后续 TODO 的目标。"
             "若工具不匹配，请自行调整当前步骤或结束本轮请求重规划，不得要求用户授权绕过。"
             "完成证据确认后调度器才会放行下一项。"
         )
@@ -341,13 +350,14 @@ def active_todo_allows_tool(
 ) -> bool:
     """Keep future-only tools out without turning ambiguous TODO text into a deadlock.
 
-    Canonical planner hints are authoritative for ambiguous steps.  For known
-    intents we allow the small supporting tool family.  Truly generic,
-    unhinted work remains flexible; evidence validation still prevents it from
-    completing or skipping the wrong TODO.
+    Hints guide tool selection rather than granting exclusive permissions.
+    Current-step helpers are allowed; clearly future-only tools stay blocked.
+    Evidence validation still controls which TODO may complete next.
     """
     if tool_name == ASK_USER_TOOL_NAME:
         return True
+    if available_tool_names is not None and tool_name not in available_tool_names:
+        return False
     todos = (plan or {}).get("todos") if isinstance(plan, dict) else None
     if not isinstance(todos, list) or not todos:
         return True
@@ -360,7 +370,9 @@ def active_todo_allows_tool(
         None,
     )
     if active_entry is None:
-        return False
+        # Completed plans still need delivery checks and repairs. Unfinished
+        # plans without an active item must be repaired by the planner first.
+        return all(isinstance(t, dict) and str(t.get("status")) == "done" for t in todos)
     active_index, active = active_entry
     hint_tokens = tool_hint_tokens(active.get("tool_hint"))
     if available_tool_names is not None:
@@ -392,9 +404,21 @@ def active_todo_allows_tool(
         "verify": {"shell", "filesystem", "visual_critique"},
         "artifact": {"filesystem", "shell"},
     }
-    if intent == "generic":
-        return not hint_tokens and tool_name not in future_hint_tokens
-    return tool_name in allowed.get(intent, support_tools)
+    # Tool identity is not a permission boundary for a step. Only block a
+    # clearly future-only tool; supporting tools can serve several steps.
+    current_tools = allowed.get(intent, set())
+    if intent == "video_clips":
+        current_tools = current_tools | {"wan_text2image"}
+    if tool_name in current_tools:
+        return True
+    media_intents = {"audio", "image", "video_clips"}
+    for future in todos[active_index + 1 :]:
+        if not isinstance(future, dict) or future.get("status") == "done":
+            continue
+        future_intent = _todo_intent(str(future.get("text") or ""))
+        if future_intent in media_intents and tool_name in allowed[future_intent] - support_tools:
+            return False
+    return tool_name not in future_hint_tokens
 
 
 async def _reject_out_of_order_tool(
@@ -835,6 +859,7 @@ def _summarize_execution(
         "verified_paths": sorted(proof.verified_paths),
         "failed_tool_calls": proof.failed_tool_calls,
         "recovered_failures": proof.recovered_failures,
+        "pending_task_failures": dict(proof.pending_task_failures),
         "scheduler_rejections": proof.scheduler_rejections,
         "unrecovered_failures": _unrecovered_failure_count(proof),
         "failure_notes": list(proof.failure_notes[-8:]),
@@ -866,6 +891,9 @@ def _proof_from_execution_summary(summary: dict[str, Any] | None) -> _ExecutionP
             p.verified_paths.add(path.strip())
     p.failed_tool_calls = int(summary.get("failed_tool_calls") or 0)
     p.recovered_failures = int(summary.get("recovered_failures") or 0)
+    p.pending_task_failures = {
+        str(key): max(0, int(value)) for key, value in (summary.get("pending_task_failures") or {}).items()
+    }
     for note in summary.get("failure_notes") or []:
         if isinstance(note, str) and note.strip():
             p.failure_notes.append(note.strip()[:160])
@@ -1305,6 +1333,11 @@ async def execute_node(state: SessionState) -> SessionState:
                     total_execution_tokens=total_execution_tokens,
                     turn_text=turn_text,
                 )
+            if turn_proof.scheduler_rejections:
+                # Hand control to Reflect before more rejected calls consume
+                # the execution budget. Preserve the complete tool transcript.
+                final_text = turn_text
+                break
         else:
             log.warning("graph.execute.max_turns", session_id=str(session_id), turns=tool_turns)
             final_text = "（已达到本轮全局执行预算上限，未能完成任务。请尝试拆小或直接提问。）"
@@ -1603,14 +1636,44 @@ async def _run_tool_calls(
             operation_prefix=f"{operation_scope}:{call_index}",
         )
         call_proof = _merge_proof(call_proof, extra)
-        proof = _merge_proof(proof, call_proof)
+        previous_plan = current_plan
         current_plan = await advance_with_proof(
             current_plan,
             session_id=session_id,
             run_id=run_id,
             proof=call_proof,
         )
+        _track_task_recovery(call_proof, previous_plan, current_plan)
+        proof = _merge_proof(proof, call_proof)
     return proof, current_plan
+
+
+def _track_task_recovery(
+    proof: _ExecutionProof,
+    previous_plan: dict[str, Any] | None,
+    current_plan: dict[str, Any] | None,
+) -> None:
+    """Resolve failures only when tool evidence completes their own step.
+
+    A changed command or alternative tool may recover the same task; unrelated
+    successful calls cannot erase its failures. Text keys survive ID changes
+    during replanning without attributing failures to a different new step.
+    """
+    before = (previous_plan or {}).get("todos") or []
+    after = (current_plan or {}).get("todos") or []
+    active = next((t for t in before if t.get("status") == "in_progress"), None)
+    if active is None:
+        return
+    key = re.sub(r"\s+", " ", str(active.get("text") or "")).strip()
+    if not key:
+        return
+    failed = _unrecovered_failure_count(proof)
+    if failed:
+        proof.pending_task_failures[key] = failed
+    elif proof.successful_tool_calls and any(
+        t.get("id") == active.get("id") and t.get("status") == "done" for t in after
+    ):
+        proof.resolved_tasks.add(key)
 
 
 def _render_tool_content(result) -> str:
