@@ -14,6 +14,37 @@ from app.graph.nodes import plan as plan_mod
 from app.tools.client import ToolManifest
 
 
+@pytest.mark.asyncio
+async def test_wordcloud_validation_advances_only_current_step():
+    plan = {"todos": [
+        {"id": "1", "text": "运行词云脚本并验证生成的词云图片", "status": "in_progress",
+         "expected_outputs": ["jobs.png", "gates.png"]},
+        {"id": "2", "text": "制作 PPT", "status": "pending"},
+    ]}
+    def evidence(valid):
+        return SimpleNamespace(successful_tool_calls=1, tool_names=["filesystem"],
+                               written_paths=set(), verified_paths=set(valid),
+                               validated_image_paths=set(valid))
+    with patch.object(plan_mod, "emit", AsyncMock()):
+        first = await plan_mod.advance_with_proof(plan, session_id=uuid4(), run_id="r", proof=evidence(["jobs.png"]))
+        assert first["todos"][0]["status"] == "in_progress"
+        assert first["todos"][1]["status"] == "pending"
+        second = await plan_mod.advance_with_proof(first, session_id=uuid4(), run_id="r", proof=evidence(["gates.png"]))
+        assert second["todos"][0]["status"] == "done"
+        assert second["todos"][1]["status"] == "in_progress"
+
+
+@pytest.mark.asyncio
+async def test_legacy_image_paths_do_not_count_as_validated():
+    todo = {"id": "1", "text": "生成 2 张图片", "status": "in_progress",
+            "evidence_paths": ["old.png"]}
+    proof = SimpleNamespace(successful_tool_calls=1, tool_names=["shell"], written_paths={"new.png"},
+                            validated_image_paths={"new.png"}, verified_paths=set())
+    with patch.object(plan_mod, "emit", AsyncMock()):
+        out = await plan_mod.advance_with_proof({"todos": [todo]}, session_id=uuid4(), run_id="r", proof=proof)
+    assert out["todos"][0]["status"] == "in_progress"
+
+
 def _mk_completion(content: str):
     return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
 
@@ -508,12 +539,14 @@ async def test_advance_with_proof_image_generation_needs_requested_count():
     first = SimpleNamespace(
         successful_tool_calls=1,
         written_paths={"artifacts/wan_t2i_first.png"},
+        validated_image_paths={"artifacts/wan_t2i_first.png"},
         verified_paths=set(),
         tool_names=["wan_text2image"],
     )
     second = SimpleNamespace(
         successful_tool_calls=1,
         written_paths={"artifacts/wan_t2i_second.png"},
+        validated_image_paths={"artifacts/wan_t2i_second.png"},
         verified_paths=set(),
         tool_names=["wan_text2image"],
     )

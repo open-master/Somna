@@ -45,6 +45,7 @@ from app.config import get_settings
 from app.events.emitter import emit
 from app.graph.autonomy_policy import delivery_validation_policy, effective_autonomy_level
 from app.graph.compact import maybe_compact
+from app.graph.execution_budget import budget_reason
 from app.graph.model_policy import pick_executor_turn_model
 from app.graph.nodes.plan import (
     _todo_intent,
@@ -154,6 +155,7 @@ class _ExecutionProof:
     mock_search_calls: int = 0
     written_paths: set[str] = field(default_factory=set)
     verified_paths: set[str] = field(default_factory=set)
+    validated_image_paths: set[str] = field(default_factory=set)
     failed_tool_calls: int = 0
     recovered_failures: int = 0
     scheduler_rejections: int = 0
@@ -201,6 +203,7 @@ def _merge_proof(base: _ExecutionProof, delta: _ExecutionProof) -> _ExecutionPro
     base.mock_search_calls += delta.mock_search_calls
     base.written_paths.update(delta.written_paths)
     base.verified_paths.update(delta.verified_paths)
+    base.validated_image_paths.update(delta.validated_image_paths)
     base.failed_tool_calls += delta.failed_tool_calls
     base.recovered_failures += delta.recovered_failures
     base.scheduler_rejections += delta.scheduler_rejections
@@ -1230,6 +1233,8 @@ async def execute_node(state: SessionState) -> SessionState:
                 response_text=turn_text,
             )
             if text_advanced_plan is not plan:
+                if _plan_progress_key(text_advanced_plan) != _plan_progress_key(plan):
+                    finish_validation_failures = 0
                 plan = text_advanced_plan
                 await sync_plan_artifact(state, plan)
                 _replace_active_todo_instruction(working_messages, plan)
@@ -1294,6 +1299,7 @@ async def execute_node(state: SessionState) -> SessionState:
                 )
                 break
 
+            progress_before = _plan_progress_key(plan)
             tool_turns += 1
             turn_proof, plan = await _run_tool_calls(
                 pending_calls,
@@ -1308,7 +1314,10 @@ async def execute_node(state: SessionState) -> SessionState:
                 operation_scope=f"{int(state.get('reflection_count') or 0)}:{tool_turns}",
             )
             proof = _merge_proof(proof, turn_proof)
-            finish_validation_failures = 0
+            # A tool call is not progress: repeated ls/stat or failed commands
+            # must not defeat the stop-validation recovery threshold.
+            if _plan_progress_key(plan) != progress_before:
+                finish_validation_failures = 0
             forced_tool_name = None
             await sync_plan_artifact(state, plan)
             _replace_active_todo_instruction(working_messages, plan)
@@ -1340,13 +1349,17 @@ async def execute_node(state: SessionState) -> SessionState:
                 break
         else:
             log.warning("graph.execute.max_turns", session_id=str(session_id), turns=tool_turns)
-            final_text = "（已达到本轮全局执行预算上限，未能完成任务。请尝试拆小或直接提问。）"
+            reason = budget_reason(
+                tool_turns=tool_turns, total_turns=total_agent_turns, tokens=total_execution_tokens,
+                max_tools=max_turns, max_turns=max_total_turns, max_tokens=max_total_tokens,
+            ) or "执行预算已耗尽"
+            final_text = f"（{reason}，未能完成任务。）"
             plan = await mark_progress(
                 plan,
                 session_id=session_id,
                 run_id=run_id,
                 fail_current=True,
-                failure_reason="已达到本轮执行预算上限",
+                failure_reason=reason,
             )
             await sync_plan_artifact(state, plan)
             await _append_executor_progress(
@@ -1923,12 +1936,69 @@ async def _invoke_tool_with_events(
         )
         proof.written_paths.update(extra_paths)
 
+    if result.ok:
+        candidates = proof.written_paths | proof.verified_paths
+        # Listing the session directory must not adopt unrelated historical
+        # images as the active step's output. Require an explicit file operation.
+        if tool_name == "filesystem" and eff_args.get("action") == "list":
+            candidates = set()
+        proof.validated_image_paths = await _validate_image_paths(
+            mcp=mcp, sandbox_id=sandbox_id, paths=candidates,
+        )
+        image_candidates = {
+            rel for raw in candidates if (rel := _stat_rel_path(raw))
+            and Path(rel).suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+        }
+        if image_candidates:
+            working_messages.append(SystemMessage(content=(
+                "系统图片格式检查（不代表内容符合用户要求）："
+                f"可解码={sorted(proof.validated_image_paths)}；"
+                f"未通过检查={sorted(image_candidates - proof.validated_image_paths)}。"
+                "未通过时请检查文件或工具错误，不要重复声明完成；内容与用户目标仍需核对。"
+            )))
+
     await _emit_artifact_events(
         session_id=session_id,
         run_id=run_id,
         proof=proof,
     )
     return result, proof
+
+
+def _plan_progress_key(plan: dict[str, Any] | None) -> str:
+    """Ignore counters and repeated calls; only step/evidence changes count."""
+    return json.dumps([
+        (todo.get("id"), todo.get("status"), sorted(set(todo.get("evidence_paths") or [])))
+        for todo in (plan or {}).get("todos", [])
+    ], sort_keys=True, ensure_ascii=False)
+
+
+async def _validate_image_paths(*, mcp, sandbox_id: str, paths: set[str]) -> set[str]:
+    """Decode candidate raster images inside the sandbox, never trust a suffix.
+
+    The filesystem tool performs bounded decoding; no generated code is run.
+    """
+    candidates = sorted({
+        rel for raw in paths
+        if (rel := _stat_rel_path(raw))
+        and Path(rel).suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+    })[:24]
+    if not candidates:
+        return set()
+    valid: set[str] = set()
+    for path in candidates:
+        try:
+            result = await mcp.invoke("filesystem", sandbox_id=sandbox_id, args={
+                "action": "inspect_image", "path": path,
+            })
+            output = result.output if isinstance(result.output, dict) else {}
+            if result.ok and output.get("image_valid") is True:
+                valid.add(path)
+            else:
+                log.warning("graph.execute.image_validation_failed", path=path, error=result.error)
+        except Exception:
+            log.warning("graph.execute.image_validation_failed", path=path)
+    return valid
 
 
 def _tool_operation_key(
@@ -2440,7 +2510,7 @@ def _proof_from_tool_result(
             path = output.get("path")
             if isinstance(path, str) and path:
                 proof.written_paths.add(path)
-        elif action == "stat":
+        elif action in {"stat", "inspect_image"}:
             path_arg = args.get("path")
             path_out = output.get("path") if isinstance(output, dict) else None
             for raw in (path_arg, path_out):

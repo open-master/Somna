@@ -12,6 +12,7 @@ from somna_events import SessionPhase, StatusEvent
 from app.config import get_settings
 from app.events.emitter import emit
 from app.graph.autonomy_policy import effective_autonomy_level
+from app.graph.execution_budget import budget_reason
 from app.graph.nodes.plan import mark_progress
 from app.graph.nodes.task_frame import (
     deliverable_type_implies_artifact,
@@ -330,23 +331,27 @@ async def reflect_node(state: SessionState) -> SessionState:
     if state.get("error"):
         return {"next_node": "finalize"}
     settings = get_settings()
-    if (
-        int(state.get("tool_turns") or 0) >= max(1, int(settings.agent_max_turns))
-        or int(state.get("total_agent_turns") or 0) >= max(1, int(settings.agent_max_total_turns))
-        or int(state.get("total_execution_tokens") or 0) >= max(1, int(settings.agent_max_total_tokens))
-    ):
+    exhausted_reason = budget_reason(
+        tool_turns=int(state.get("tool_turns") or 0),
+        total_turns=int(state.get("total_agent_turns") or 0),
+        tokens=int(state.get("total_execution_tokens") or 0),
+        max_tools=max(1, int(settings.agent_max_turns)),
+        max_turns=max(1, int(settings.agent_max_total_turns)),
+        max_tokens=max(1, int(settings.agent_max_total_tokens)),
+    )
+    if exhausted_reason:
         plan = await mark_progress(
             state.get("plan"),
             session_id=session_id,
             run_id=run_id,
             close_unfinished=True,
-            failure_reason="已达到本轮全局执行预算上限",
+            failure_reason=exhausted_reason,
         )
         return {
             "plan": plan,
             "reflection": {
                 "decision": "finalize",
-                "reason": "已达到本轮全局执行预算上限",
+                "reason": exhausted_reason,
                 "focus": "",
                 "raw": "",
             },

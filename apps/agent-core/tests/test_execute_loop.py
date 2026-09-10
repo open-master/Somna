@@ -25,6 +25,35 @@ class _SettingsStub:
     agent_default_skill = "agent-skill"
 
 
+@pytest.mark.asyncio
+async def test_repeated_stop_with_unproductive_tool_reaches_recovery():
+    stream = _StreamStub([
+        ("完成", [], (1, 1)),
+        ("", [_pending("check", "shell", '{"cmd":"ls"}')], (1, 1)),
+        ("完成", [], (1, 1)),
+    ])
+    mcp = AsyncMock()
+    mcp.invoke.return_value = ToolResult(ok=True, output={"stdout": "", "cmd": "ls"})
+    with (
+        patch.object(exe, "_stream_one_turn", stream),
+        patch.object(exe, "_stop_blocked_reason", AsyncMock(return_value="当前步骤尚未验证")),
+        patch.object(exe, "maybe_compact", AsyncMock(side_effect=lambda messages, **_: (messages, False, None))),
+        patch.object(exe, "emit", AsyncMock()),
+        patch.object(exe, "get_async_openai", return_value=object()),
+        patch.object(exe, "tool_manifest_cache", return_value=_shell_manifest_cache()),
+        patch.object(exe, "build_system_prompt", return_value="sys"),
+        patch.object(exe, "get_client", return_value=mcp),
+        patch.object(exe, "get_settings", return_value=_SettingsStub()),
+    ):
+        state = await exe.execute_node({
+            "session_id": uuid4(), "run_id": "retry-test", "sandbox_id": "test",
+            "user_message": "检查任务", "messages": [], "tool_turns": 0,
+        })
+    assert stream.calls == 3
+    assert state["tool_turns"] == 1
+    assert state["execution_summary"]["delivery_missing_reason"] == "当前步骤尚未验证"
+
+
 @pytest.fixture(autouse=True)
 def _isolate_execute_unit_side_effects():
     """Loop tests must not require a live DB or MCP artifact store."""
@@ -683,7 +712,7 @@ async def test_max_turns_short_circuits():
         )
 
     assert state["finished"] is True
-    assert "全局执行预算" in state["assistant_text"]
+    assert "工具执行轮数上限（2/2）" in state["assistant_text"]
     assert state["tool_turns"] == 2
 
 

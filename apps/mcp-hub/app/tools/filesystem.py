@@ -5,6 +5,7 @@ A single tool with a dispatched `action` keeps the LLM surface small.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import os
 import time
@@ -24,7 +25,8 @@ from .registry import register
 class FilesystemTool(BaseTool):
     name = "filesystem"
     description = (
-        "Read, write, append, list, stat or delete files inside the session sandbox. "
+        "Read, write, append, list, stat, inspect_image or delete files inside the session sandbox. "
+        "inspect_image validates raster image decoding and dimensions, not semantic content. "
         "All paths are relative to the sandbox root; absolute paths and `..` segments "
         "are rejected."
     )
@@ -36,7 +38,7 @@ class FilesystemTool(BaseTool):
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["read", "write", "append", "list", "stat", "delete"],
+                "enum": ["read", "write", "append", "list", "stat", "inspect_image", "delete"],
             },
             "path": {
                 "type": "string",
@@ -88,6 +90,8 @@ class FilesystemTool(BaseTool):
                 result = _action_list(target, args, settings)
             elif action == "stat":
                 result = _action_stat(target)
+            elif action == "inspect_image":
+                result = await asyncio.to_thread(_action_inspect_image, target, settings)
             elif action == "delete":
                 result = _action_delete(target)
             else:
@@ -104,6 +108,25 @@ class FilesystemTool(BaseTool):
 
 
 # ---------- per-action helpers ----------
+
+
+def _action_inspect_image(target: Path, settings) -> ToolResult:
+    """Bounded format/decode validation, not a claim of semantic correctness."""
+    from PIL import Image
+
+    if not target.is_file() or not 0 < target.stat().st_size <= settings.fs_max_file_bytes:
+        return ToolResult(ok=False, error="image missing, empty or exceeds file size limit")
+    try:
+        with Image.open(target) as image:
+            if image.width * image.height > 25_000_000:
+                return ToolResult(ok=False, error="image exceeds 25 megapixel validation limit")
+            image.load()
+            return ToolResult(ok=True, output={
+                "path": str(target), "image_valid": True,
+                "width": image.width, "height": image.height, "format": image.format,
+            }, preview=f"图片可解码：{image.width}×{image.height}，{image.format}")
+    except (OSError, ValueError, Image.DecompressionBombError) as exc:
+        return ToolResult(ok=False, error=f"image decode failed: {exc}")
 
 
 async def _action_read(target: Path, args: dict[str, Any], settings) -> ToolResult:

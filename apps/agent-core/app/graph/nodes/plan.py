@@ -835,13 +835,15 @@ def _proof_satisfies_todo(todo: dict[str, Any], proof: Any) -> bool:
             )
         return bool(commands or verified_paths)
 
-    if inspect_only and intent not in {"setup", "verify"}:
+    if inspect_only and intent not in {"setup", "verify", "image"}:
         return False
 
     if intent == "research":
         return "search" in tools or any(_path_ext(p) in {".md", ".txt", ".json"} for p in new_paths)
 
     if intent == "text_content":
+        if any(tool in _MEDIA_GEN_TOOLS for tool in tools):
+            return False
         if "search" in tools and not new_paths:
             return False
         return bool(new_paths or (set(tools) - {"shell", "search"} - set(_MEDIA_GEN_TOOLS)))
@@ -850,9 +852,12 @@ def _proof_satisfies_todo(todo: dict[str, Any], proof: Any) -> bool:
         return any(_is_audio_path(p) for p in all_paths)
 
     if intent == "image":
-        images = [p for p in all_paths if _is_image_path(p)]
+        images = set(todo.get("validated_image_paths") or []) | set(
+            getattr(proof, "validated_image_paths", set()) or set()
+        )
+        images = {p for p in images if _is_image_path(p)}
         need = _expected_count(str(todo.get("text") or "")) or 1
-        return len(images) >= need
+        return len(images) >= need and _expected_file_outputs_satisfied(todo, images)
 
     if intent == "video_clips":
         videos = [p for p in all_paths if _is_video_path(p)]
@@ -907,7 +912,7 @@ def _proof_is_relevant_to_todo(todo: dict[str, Any], proof: Any) -> bool:
     if intent == "audio":
         return any(_is_audio_path(path) for path in paths)
     if intent == "image":
-        return any(_is_image_path(path) for path in paths) and "wan_text2image" in tools
+        return bool(getattr(proof, "validated_image_paths", set()))
     if intent == "video_clips":
         return any(_is_video_path(path) for path in paths) and any(tool in _MEDIA_GEN_TOOLS for tool in tools)
     if intent == "mux":
@@ -917,6 +922,8 @@ def _proof_is_relevant_to_todo(todo: dict[str, Any], proof: Any) -> bool:
     if intent == "research":
         return "search" in tools or any(_path_ext(path) in {".md", ".txt", ".json"} for path in paths)
     if intent == "text_content":
+        if any(tool in _MEDIA_GEN_TOOLS for tool in tools):
+            return False
         return bool(paths or (set(tools) - {"shell", "search"} - set(_MEDIA_GEN_TOOLS)))
     if intent == "setup":
         return bool(_shell_commands(proof) or getattr(proof, "verified_paths", set()))
@@ -933,7 +940,14 @@ def _record_todo_evidence(todo: dict[str, Any], proof: Any) -> bool:
     changed = False
     existing_paths = [str(p) for p in (todo.get("evidence_paths") or []) if isinstance(p, str)]
     seen = set(existing_paths)
-    for path in list(getattr(proof, "written_paths", set()) or set()):
+    paths = getattr(proof, "written_paths", set()) or set()
+    if _todo_intent(str(todo.get("text") or "")) == "image":
+        paths = getattr(proof, "validated_image_paths", set()) or set()
+        validated = set(todo.get("validated_image_paths") or []) | set(paths)
+        if validated != set(todo.get("validated_image_paths") or []):
+            todo["validated_image_paths"] = sorted(validated)
+            changed = True
+    for path in paths:
         if not isinstance(path, str) or not path or path in seen:
             continue
         existing_paths.append(path)
@@ -995,6 +1009,14 @@ async def advance_with_proof(
         current["failure_reason"] = None
         changed = True
         _start_next_pending(todos)
+    else:
+        log.info(
+            "graph.plan.evidence_pending", session_id=str(session_id), run_id=run_id,
+            todo_id=current.get("id"), intent=_todo_intent(str(current.get("text") or "")),
+            relevant=relevant, tools=_turn_tool_names(proof),
+            written_paths=sorted(_written_paths(proof)),
+            validated_image_paths=sorted(getattr(proof, "validated_image_paths", set()) or set()),
+        )
 
     if not changed:
         return plan
